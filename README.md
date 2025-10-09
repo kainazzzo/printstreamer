@@ -24,3 +24,25 @@ Notes and next steps:
 Security: keep your stream key secret. Consider reading it from a file or environment variable instead of passing on the command line.
 
 If you'd like, I can extend this to: capture audio, add overlays, rotate/rescale the feed, attempt reconnection on failure, or provide a service/daemon wrapper.
+
+Docker
+------
+You can build a container image for the app. The image does NOT include an `appsettings.json` file by design — pass configuration via environment variables at runtime. Example:
+
+Build the image:
+
+```bash
+docker build -t printstreamer:latest .
+```
+
+Run the container and pass your OctoPrint stream URL (note the double-underscore `__` to set hierarchical config keys):
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e Stream__Source="http://192.168.1.117/webcam/?action=stream&octoAppPortOverride=80&cacheBust=1759967901624" \
+  -e Mode=serve \
+  printstreamer:latest
+```
+
+If you want to pass the YouTube key as an environment variable instead of CLI, use `-e YouTube__Key=yourkey` or set `YOUTUBE_STREAM_KEY`.
+

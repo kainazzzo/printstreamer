@@ -1,12 +1,4 @@
-﻿using System;
-using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Hosting;
+﻿using System.Diagnostics;
 
 // Simple CLI to either read an MJPEG stream (OctoPrint/webcam) directly in C# or stream a video source to YouTube using ffmpeg.
 // Usage:
@@ -20,29 +12,39 @@ using Microsoft.Extensions.Hosting;
 // TODO: add YouTube programmatic management (create/manage liveBroadcast resources) using
 // the Google.Apis.YouTube.v3 NuGet package. For ffmpeg orchestration consider Xabe.FFmpeg or CliWrap.
 
-if (args.Length == 0 || argsContains(args, "-h") || argsContains(args, "--help"))
+// Use the default WebApplication builder so standard configuration (appsettings.json, env, args) is loaded
+var webBuilder = WebApplication.CreateBuilder(args);
+var config = webBuilder.Configuration;
+
+// If user passed -h/--help, show help and exit (preserve manual help flag behavior)
+if (Array.IndexOf(args, "-h") >= 0 || Array.IndexOf(args, "--help") >= 0)
 {
 	PrintHelp();
 	return;
 }
 
-string? source = null;
-string? key = null;
+// Read configuration values (appsettings.json, environment, command-line)
+string? source = config.GetValue<string>("Stream:Source");
+string? key = config.GetValue<string>("YouTube:Key") ?? Environment.GetEnvironmentVariable("YOUTUBE_STREAM_KEY");
+
+// Mode selection: support a string Mode ("read"/"serve"/"stream") or boolean flags Read/Serve
+var mode = config.GetValue<string>("Mode")?.ToLowerInvariant();
 var readOnly = false;
 var serve = false;
-
-for (int i = 0; i < args.Length; i++)
+if (!string.IsNullOrEmpty(mode))
 {
-	var a = args[i];
-	if ((a == "--source" || a == "-s") && i + 1 < args.Length) source = args[++i];
-	else if ((a == "--key" || a == "-k") && i + 1 < args.Length) key = args[++i];
-	else if (a == "--read" || a == "-r") readOnly = true;
-	else if (a == "--serve") serve = true;
+	if (mode == "read") readOnly = true;
+	else if (mode == "serve") serve = true;
+}
+else
+{
+	readOnly = config.GetValue<bool>("Read");
+	serve = config.GetValue<bool>("Serve");
 }
 
 if (string.IsNullOrWhiteSpace(source))
 {
-	Console.WriteLine("Error: --source is required.\n");
+	Console.WriteLine("Error: Stream:Source is required (set in appsettings.json, environment, or command-line).\n");
 	PrintHelp();
 	return;
 }
@@ -78,9 +80,8 @@ if (serve)
 		return;
 	}
 
-	var builder = WebApplication.CreateBuilder();
-	builder.WebHost.ConfigureKestrel(options => { options.ListenAnyIP(8080); });
-	var app = builder.Build();
+	webBuilder.WebHost.ConfigureKestrel(options => { options.ListenAnyIP(8080); });
+	var app = webBuilder.Build();
 
 	var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
@@ -155,8 +156,6 @@ if (serve)
 
 var streamer = new FfmpegStreamer(source!, key!);
 await streamer.StartAsync();
-
-static bool argsContains(string[] a, string v) => Array.IndexOf(a, v) >= 0;
 
 static void PrintHelp()
 {
