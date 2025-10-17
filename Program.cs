@@ -1,55 +1,48 @@
-﻿// Simple CLI to either read an MJPEG stream (OctoPrint/webcam) directly in C# or stream a video source to YouTube using ffmpeg.
-// Usage:
-//   Read-only (inspect MJPEG frames):
-//     dotnet run -- --read --source <mjpeg-url>
-//   Stream to YouTube (ffmpeg):
-//     dotnet run -- --source <input> --key <youtube-stream-key>
-// Example read-only (your OctoPrint stream):
-//   dotnet run -- --read --source "http://192.168.1.117/webcam/?action=stream&octoAppPortOverride=80&cacheBust=1759967901624"
+﻿// PrintStreamer - Stream 3D printer webcam to YouTube Live
+// Configuration is loaded from appsettings.json, environment variables, and command-line arguments.
 //
-// TODO: add YouTube programmatic management (create/manage liveBroadcast resources) using
-// the Google.Apis.YouTube.v3 NuGet package. For ffmpeg orchestration consider Xabe.FFmpeg or CliWrap.
+// Usage examples:
+//   dotnet run -- --Mode serve
+//   dotnet run -- --Mode stream --Stream:Source "http://printer.local/webcam/?action=stream"
+//   dotnet run -- --Mode read --Stream:Source "http://printer.local/webcam/?action=stream"
+//
+// Environment variables:
+//   export Stream__Source="http://printer.local/webcam/?action=stream"
+//   export Mode=serve
+//   dotnet run
+//
+// See README.md for full documentation.
 
 // Use the default WebApplication builder so standard configuration (appsettings.json, env, args) is loaded
 var webBuilder = WebApplication.CreateBuilder(args);
 var config = webBuilder.Configuration;
 
-// If user passed -h/--help, show help and exit (preserve manual help flag behavior)
-if (Array.IndexOf(args, "-h") >= 0 || Array.IndexOf(args, "--help") >= 0)
-{
-	PrintHelp();
-	return;
-}
-
-// Read configuration values (appsettings.json, environment, command-line)
+// Read configuration values
 string? source = config.GetValue<string>("Stream:Source");
 string? key = config.GetValue<string>("YouTube:Key") ?? Environment.GetEnvironmentVariable("YOUTUBE_STREAM_KEY");
+string? oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
+string? oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
 
-// Mode selection: support a string Mode ("read"/"serve"/"stream") or boolean flags Read/Serve
-var mode = config.GetValue<string>("Mode")?.ToLowerInvariant();
-var readOnly = false;
-var serve = false;
-if (!string.IsNullOrEmpty(mode))
-{
-	if (mode == "read") readOnly = true;
-	else if (mode == "serve") serve = true;
-}
-else
-{
-	readOnly = config.GetValue<bool>("Read");
-	serve = config.GetValue<bool>("Serve");
-}
+// Mode selection: support a string Mode ("read"/"serve"/"stream")
+var mode = config.GetValue<string>("Mode")?.ToLowerInvariant() ?? "serve"; // Default to serve mode
+var readOnly = mode == "read";
+var serve = mode == "serve";
+
+// Determine if we should use OAuth-based broadcast creation or manual stream key
+bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
 
 if (string.IsNullOrWhiteSpace(source))
 {
-	Console.WriteLine("Error: Stream:Source is required (set in appsettings.json, environment, or command-line).\n");
+	Console.WriteLine("Error: Stream:Source is required.");
+	Console.WriteLine();
 	PrintHelp();
 	return;
 }
 
-if (!readOnly && !serve && string.IsNullOrWhiteSpace(key))
+if (!readOnly && !serve && !useOAuth && string.IsNullOrWhiteSpace(key))
 {
-	Console.WriteLine("Error: --key is required when not running in --read or --serve mode.\n");
+	Console.WriteLine("Error: Either YouTube:Key or YouTube:OAuth credentials are required for streaming.");
+	Console.WriteLine();
 	PrintHelp();
 	return;
 }
@@ -82,6 +75,25 @@ if (serve)
 	var app = webBuilder.Build();
 
 	var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+
+	// If OAuth or stream key is provided, start YouTube streaming in the background
+	Task? streamTask = null;
+	CancellationTokenSource? streamCts = null;
+	if (useOAuth || !string.IsNullOrWhiteSpace(key))
+	{
+		streamCts = new CancellationTokenSource();
+		streamTask = Task.Run(async () =>
+		{
+			try
+			{
+				await StartYouTubeStreamAsync(config, source!, key, streamCts.Token);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"YouTube streaming error: {ex.Message}");
+			}
+		}, streamCts.Token);
+	}
 
 	app.MapGet("/stream", async (HttpContext ctx) =>
 	{
@@ -148,24 +160,182 @@ if (serve)
 		});
 
 	Console.WriteLine("Starting proxy server on http://0.0.0.0:8080/stream");
+	
+	// Handle graceful shutdown
+	var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+	lifetime.ApplicationStopping.Register(() =>
+	{
+		Console.WriteLine("Shutting down...");
+		streamCts?.Cancel();
+	});
+
 	await app.RunAsync();
+	
+	// Wait for streaming task to complete
+	if (streamTask != null)
+	{
+		await streamTask;
+	}
+	
 	return;
 }
 
-var streamer = new FfmpegStreamer(source!, key!);
-await streamer.StartAsync();
+// Default mode: stream to YouTube
+await StartYouTubeStreamAsync(config, source!, key, CancellationToken.None);
+
+static async Task StartYouTubeStreamAsync(IConfiguration config, string source, string? manualKey, CancellationToken cancellationToken)
+{
+	string? rtmpUrl = null;
+	string? streamKey = null;
+	string? broadcastId = null;
+	YouTubeBroadcastService? ytService = null;
+
+	try
+	{
+		var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
+		var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
+		bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
+
+		if (useOAuth)
+		{
+			Console.WriteLine("Using YouTube OAuth to create broadcast...");
+			ytService = new YouTubeBroadcastService(config);
+
+			// Authenticate
+			if (!await ytService.AuthenticateAsync(cancellationToken))
+			{
+				Console.WriteLine("Failed to authenticate with YouTube. Exiting.");
+				return;
+			}
+
+			// Create broadcast and stream
+			var result = await ytService.CreateLiveBroadcastAsync(cancellationToken);
+			if (result.rtmpUrl == null || result.streamKey == null)
+			{
+				Console.WriteLine("Failed to create YouTube broadcast. Exiting.");
+				return;
+			}
+
+			rtmpUrl = result.rtmpUrl;
+			streamKey = result.streamKey;
+			broadcastId = result.broadcastId;
+
+			Console.WriteLine($"YouTube broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
+		}
+		else if (!string.IsNullOrWhiteSpace(manualKey))
+		{
+			Console.WriteLine("Using manual YouTube stream key...");
+			rtmpUrl = "rtmp://a.rtmp.youtube.com/live2";
+			streamKey = manualKey;
+		}
+		else
+		{
+			Console.WriteLine("Error: No YouTube credentials or stream key provided.");
+			return;
+		}
+
+		// Start streaming with chosen implementation
+		var fullRtmpUrl = $"{rtmpUrl}/{streamKey}";
+		var useNativeStreamer = config.GetValue<bool>("Stream:UseNativeStreamer");
+		
+		IStreamer streamer;
+		if (useNativeStreamer)
+		{
+			Console.WriteLine($"Starting native .NET streamer to {rtmpUrl}/***");
+			streamer = new MjpegToRtmpStreamer(source, fullRtmpUrl);
+		}
+		else
+		{
+			Console.WriteLine($"Starting ffmpeg streamer to {rtmpUrl}/***");
+			streamer = new FfmpegStreamer(source, fullRtmpUrl);
+		}
+		
+		await streamer.StartAsync(cancellationToken);
+
+		// If we created a broadcast, transition it to live
+		if (ytService != null && broadcastId != null)
+		{
+			Console.WriteLine("Stream started, waiting a few seconds before transitioning to live...");
+			await Task.Delay(10000, cancellationToken); // Give ffmpeg time to connect
+			await ytService.TransitionBroadcastToLiveAsync(broadcastId, cancellationToken);
+		}
+
+		// Wait for the stream to end
+		await streamer.ExitTask;
+	}
+	catch (OperationCanceledException)
+	{
+		Console.WriteLine("Stream canceled.");
+	}
+	catch (Exception ex)
+	{
+		Console.WriteLine($"Stream error: {ex.Message}");
+	}
+	finally
+	{
+		// Clean up YouTube broadcast if created
+		if (ytService != null && broadcastId != null)
+		{
+			Console.WriteLine("Ending YouTube broadcast...");
+			try
+			{
+				await ytService.EndBroadcastAsync(broadcastId, CancellationToken.None);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Failed to end broadcast: {ex.Message}");
+			}
+		}
+
+		ytService?.Dispose();
+	}
+}
 
 static void PrintHelp()
 {
-	Console.WriteLine("printstreamer - simple ffmpeg-based streamer / MJPEG inspector");
+	Console.WriteLine("PrintStreamer - Stream 3D printer webcam to YouTube Live");
 	Console.WriteLine();
-	Console.WriteLine("Options:");
-	Console.WriteLine("  -s, --source <input>   Video input. HTTP MJPEG URL (http://...) or local device (/dev/video0) or file path.");
-	Console.WriteLine("  -k, --key <streamkey>  YouTube stream key (the part after rtmp URL).");
-	Console.WriteLine("  -r, --read             Read MJPEG stream locally and print frame info (no YouTube / ffmpeg use).\n");
+	Console.WriteLine("Configuration Methods:");
+	Console.WriteLine("  1. appsettings.json (base configuration)");
+	Console.WriteLine("  2. Environment variables (use __ for nested keys, e.g., Stream__Source)");
+	Console.WriteLine("  3. Command-line arguments (use --Key value or --Key=value)");
 	Console.WriteLine();
-	Console.WriteLine("Example:");
-	Console.WriteLine("  dotnet run -- --read --source \"http://192.168.1.117/webcam/?action=stream&octoAppPortOverride=80&cacheBust=1759967901624\"\n");
+	Console.WriteLine("Configuration Keys:");
+	Console.WriteLine("  Mode                              - serve (default), stream, or read");
+	Console.WriteLine("  Stream:Source                     - MJPEG URL (required)");
+	Console.WriteLine("  Stream:UseNativeStreamer          - true/false (default: false)");
+	Console.WriteLine("  YouTube:Key                       - Manual stream key (optional)");
+	Console.WriteLine("  YouTube:OAuth:ClientId            - OAuth client ID (optional)");
+	Console.WriteLine("  YouTube:OAuth:ClientSecret        - OAuth client secret (optional)");
+	Console.WriteLine();
+	Console.WriteLine("Modes:");
+	Console.WriteLine("  serve   - MJPEG proxy server on :8080 + YouTube streaming (if configured)");
+	Console.WriteLine("  stream  - Direct YouTube streaming only");
+	Console.WriteLine("  read    - Diagnostic mode (prints frame info, no streaming)");
+	Console.WriteLine();
+	Console.WriteLine("Examples:");
+	Console.WriteLine();
+	Console.WriteLine("  # Run with defaults from appsettings.json");
+	Console.WriteLine("  dotnet run");
+	Console.WriteLine();
+	Console.WriteLine("  # Override mode via command-line");
+	Console.WriteLine("  dotnet run -- --Mode stream");
+	Console.WriteLine();
+	Console.WriteLine("  # Set multiple options on command-line");
+	Console.WriteLine("  dotnet run -- --Mode stream --Stream:Source \"http://printer/webcam/?action=stream\"");
+	Console.WriteLine();
+	Console.WriteLine("  # Use environment variables");
+	Console.WriteLine("  export Stream__Source=\"http://printer/webcam/?action=stream\"");
+	Console.WriteLine("  export Mode=stream");
+	Console.WriteLine("  export Stream__UseNativeStreamer=true");
+	Console.WriteLine("  dotnet run");
+	Console.WriteLine();
+	Console.WriteLine("  # Mix config file, env vars, and command-line");
+	Console.WriteLine("  # (Command-line > Env vars > appsettings.json)");
+	Console.WriteLine("  dotnet run -- --Mode serve --YouTube:Key \"your-key\"");
+	Console.WriteLine();
+	Console.WriteLine("See README.md for complete documentation.");
+	Console.WriteLine();
 }
 
 internal class MjpegReader

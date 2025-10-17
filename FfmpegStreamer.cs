@@ -1,23 +1,25 @@
 using System.Diagnostics;
 
-class FfmpegStreamer
+class FfmpegStreamer : IStreamer
 {
 	private readonly string _source;
-	private readonly string _key;
+	private readonly string _rtmpUrl;
 	private Process? _proc;
+	private TaskCompletionSource<object?>? _exitTcs;
 
-	public FfmpegStreamer(string source, string key)
+	public Task ExitTask => _exitTcs?.Task ?? Task.CompletedTask;
+
+	public FfmpegStreamer(string source, string rtmpUrl)
 	{
 		_source = source;
-		_key = key;
+		_rtmpUrl = rtmpUrl;
 	}
 
-	public Task StartAsync()
+	public Task StartAsync(CancellationToken cancellationToken = default)
 	{
-		var tcs = new TaskCompletionSource<object?>();
+		_exitTcs = new TaskCompletionSource<object?>();
 
-		var rtmpUrl = BuildYouTubeRtmpUrl(_key);
-		var ffmpegArgs = BuildFfmpegArgs(_source, rtmpUrl);
+		var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl);
 
 		Console.WriteLine($"Starting ffmpeg with args: {ffmpegArgs}");
 
@@ -37,7 +39,7 @@ class FfmpegStreamer
 			_proc.Exited += (s, e) =>
 			{
 				Console.WriteLine($"ffmpeg exited with code {_proc?.ExitCode}");
-				tcs.TrySetResult(null);
+				_exitTcs.TrySetResult(null);
 			};
 
 			_proc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
@@ -46,22 +48,28 @@ class FfmpegStreamer
 			if (!_proc.Start())
 			{
 				Console.WriteLine("Failed to start ffmpeg process.");
-				tcs.TrySetResult(null);
-				return tcs.Task;
+				_exitTcs.TrySetResult(null);
+				return _exitTcs.Task;
 			}
 
 			_proc.BeginOutputReadLine();
 			_proc.BeginErrorReadLine();
 
 			Console.WriteLine("Streaming... press Ctrl+C to stop.");
+			
+			// Handle cancellation
+			cancellationToken.Register(() =>
+			{
+				Stop();
+			});
 		}
 		catch (Exception ex)
 		{
 			Console.WriteLine($"Error starting ffmpeg: {ex.Message}");
-			tcs.TrySetResult(null);
+			_exitTcs.TrySetResult(null);
 		}
 
-		return tcs.Task;
+		return _exitTcs.Task;
 	}
 
 	public void Stop()
@@ -79,12 +87,6 @@ class FfmpegStreamer
 		{
 			Console.WriteLine($"Error stopping ffmpeg: {ex.Message}");
 		}
-	}
-
-	private static string BuildYouTubeRtmpUrl(string key)
-	{
-		// default primary ingestion point
-		return $"rtmp://a.rtmp.youtube.com/live2/{key}";
 	}
 
 	private static string BuildFfmpegArgs(string source, string rtmpUrl)
@@ -112,5 +114,11 @@ class FfmpegStreamer
 		var outArgs = $"-f flv {rtmpUrl}";
 
 		return $"-re {inputFormat}-i \"{srcArg}\" {encArgs} {audioArgs} {outArgs}";
+	}
+
+	public void Dispose()
+	{
+		Stop();
+		_proc?.Dispose();
 	}
 }
