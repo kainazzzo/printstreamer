@@ -13,6 +13,13 @@
 //
 // See README.md for full documentation.
 
+// Check for help request before loading full configuration
+if (args.Any(a => a == "--help" || a == "-h" || a == "/?" || a.Equals("help", StringComparison.OrdinalIgnoreCase)))
+{
+	PrintHelp();
+	return;
+}
+
 // Use the default WebApplication builder so standard configuration (appsettings.json, env, args) is loaded
 var webBuilder = WebApplication.CreateBuilder(args);
 var config = webBuilder.Configuration;

@@ -50,14 +50,46 @@ internal class YouTubeBroadcastService : IDisposable
 			// Request YouTube data API scopes
 			var scopes = new[] { Google.Apis.YouTube.v3.YouTubeService.Scope.Youtube };
 
-			// Use FileDataStore to save/load refresh token
-			_credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
-				secrets,
-				scopes,
-				"user",
-				cancellationToken,
-				new FileDataStore(_tokenPath, fullPath: true)
-			);
+			// Try the normal automatic browser flow first
+			try
+			{
+				_credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
+					secrets,
+					scopes,
+					"user",
+					cancellationToken,
+					new FileDataStore(_tokenPath, fullPath: true)
+				);
+			}
+			catch (Exception exAuto)
+			{
+				Console.WriteLine($"Automatic browser launch failed: {exAuto.Message}");
+				Console.WriteLine("Falling back to manual authorization. Please open the URL below in a browser and paste the code here.");
+				// Manual flow: create the authorization URL and prompt user for code
+				var flow = new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow(
+					new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow.Initializer
+					{
+						ClientSecrets = secrets,
+						Scopes = scopes,
+						DataStore = new FileDataStore(_tokenPath, fullPath: true)
+					}
+				);
+
+				// Use out-of-band redirect (copy-paste) so user can paste the code
+				var codeRequest = flow.CreateAuthorizationCodeRequest("urn:ietf:wg:oauth:2.0:oob");
+				var url = codeRequest.Build().ToString();
+				Console.WriteLine(url);
+				Console.Write("Enter authorization code: ");
+				var code = Console.ReadLine();
+				if (string.IsNullOrWhiteSpace(code))
+				{
+					Console.WriteLine("No code entered; authentication canceled.");
+					return false;
+				}
+
+				var token = await flow.ExchangeCodeForTokenAsync("user", code.Trim(), "urn:ietf:wg:oauth:2.0:oob", cancellationToken);
+				_credential = new UserCredential(flow, "user", token);
+			}
 
 			Console.WriteLine("Authentication successful!");
 
