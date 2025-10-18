@@ -1,7 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
-
 /// <summary>
 /// Common interface for video streaming implementations.
 /// </summary>

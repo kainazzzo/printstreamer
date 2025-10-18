@@ -1,16 +1,12 @@
-using System;
 using System.Buffers;
 using System.Collections.Concurrent;
-using System.IO;
-using System.Net.Http;
-using System.Threading;
 using System.Threading.Channels;
-using System.Threading.Tasks;
 
 /// <summary>
 /// Native .NET MJPEG to RTMP streamer that processes frames without external ffmpeg dependency.
 /// Reads MJPEG stream, extracts JPEG frames, and streams to RTMP destination.
 /// </summary>
+[Obsolete("EXPERIMENTAL/BROKEN: Native .NET MJPEG-to-RTMP streamer. Not production-ready. See NATIVE_STREAMER.md for details.")]
 internal class MjpegToRtmpStreamer : IStreamer
 {
 	private readonly string _sourceUrl;
@@ -226,6 +222,7 @@ internal class MjpegToRtmpStreamer : IStreamer
 /// <summary>
 /// Extracts JPEG frames from an MJPEG stream using boundary detection or JPEG markers.
 /// </summary>
+[System.Obsolete("EXPERIMENTAL: MJPEG frame extraction for native streamer. Used only in experimental pipeline.")]
 internal class MjpegFrameExtractor
 {
 	private readonly string? _boundary;
@@ -387,6 +384,7 @@ internal class MjpegFrameExtractor
 /// - SIPSorcery (has RTMP support)
 /// - Or shell out to ffmpeg for encoding only
 /// </summary>
+[System.Obsolete("EXPERIMENTAL: RTMP connection for native streamer. Used only in experimental pipeline.")]
 internal class RtmpConnection : IDisposable
 {
 	private readonly string _rtmpUrl;
