@@ -21,6 +21,47 @@ static async Task<byte[]?> FetchSingleJpegFrameAsync(string mjpegUrl, int timeou
 	}
 	return null;
 }
+
+// Utility: Sanitize filename for use as folder name
+static string SanitizeFilename(string filename)
+{
+	if (string.IsNullOrWhiteSpace(filename))
+		return "unknown";
+	
+	// Remove file extension
+	var nameWithoutExtension = Path.GetFileNameWithoutExtension(filename);
+	
+	// Define characters to remove or replace
+	var invalidChars = Path.GetInvalidFileNameChars()
+		.Concat(Path.GetInvalidPathChars())
+		.Concat(new[] { ' ', '-', '(', ')', '[', ']', '{', '}', ':', ';', ',', '.', '#' })
+		.Distinct()
+		.ToArray();
+	
+	var result = nameWithoutExtension;
+	
+	// Replace invalid characters
+	foreach (var c in invalidChars)
+	{
+		result = result.Replace(c, '_');
+	}
+	
+	// Special replacements
+	result = result.Replace("&", "and");
+	
+	// Clean up multiple underscores
+	while (result.Contains("__"))
+	{
+		result = result.Replace("__", "_");
+	}
+	
+	// Trim underscores from start and end
+	result = result.Trim('_');
+	
+	// Ensure we have a valid result
+	return string.IsNullOrWhiteSpace(result) ? "unknown" : result;
+}
+
 // PrintStreamer - Stream 3D printer webcam to YouTube Live
 // Configuration is loaded from appsettings.json, environment variables, and command-line arguments.
 //
@@ -288,19 +329,21 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 	CancellationTokenSource? timelapseCts = null;
 	Task? timelapseTask = null;
 
-	while (!cancellationToken.IsCancellationRequested)
+	try
 	{
-		try
+		while (!cancellationToken.IsCancellationRequested)
 		{
-		// Query Moonraker job queue
-		var baseUri = new Uri(moonrakerBase);
-		var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
-		var currentJob = info?.Filename;
-		var jobQueueId = info?.JobQueueId;
-		
-		Console.WriteLine($"[Watcher] Poll result - Filename: '{currentJob}', JobQueueId: '{jobQueueId}'");
+			try
+			{
+			// Query Moonraker job queue
+			var baseUri = new Uri(moonrakerBase);
+			var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+			var currentJob = info?.Filename;
+			var jobQueueId = info?.JobQueueId;
+			
+			Console.WriteLine($"[Watcher] Poll result - Filename: '{currentJob}', JobQueueId: '{jobQueueId}'");
 
-		if (!string.IsNullOrWhiteSpace(currentJob) && currentJob != lastJobFilename)
+			if (!string.IsNullOrWhiteSpace(currentJob) && currentJob != lastJobFilename)
 			{
 				// New job detected, start stream and timelapse
 				Console.WriteLine($"[Watcher] New print job detected: {currentJob}");
@@ -323,17 +366,37 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 					}
 				}, streamCts.Token);
 
-			// Start timelapse service only if we have both filename and job queue id
-			if (!string.IsNullOrWhiteSpace(jobQueueId) && !string.IsNullOrWhiteSpace(currentJob))
+			// Start timelapse service if we have a filename
+			if (!string.IsNullOrWhiteSpace(currentJob))
 			{
 				var mainTlDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
-				var jobNameSafe = Path.GetFileNameWithoutExtension(currentJob).Replace(" ", "_");
-				var tlSubfolder = $"{jobQueueId}_{jobNameSafe}";
+				var jobNameSafe = SanitizeFilename(currentJob);
+				var tlSubfolder = jobNameSafe;
 				Console.WriteLine($"[Watcher] Timelapse folder will be: {tlSubfolder}");
-				Console.WriteLine($"[Watcher]   - jobQueueId: '{jobQueueId}'");
 				Console.WriteLine($"[Watcher]   - currentJob: '{currentJob}'");
 				Console.WriteLine($"[Watcher]   - jobNameSafe: '{jobNameSafe}'");
 				timelapse = new TimelapseService(mainTlDir, tlSubfolder);
+				
+				// Capture immediate first frame for timelapse
+				Console.WriteLine($"[Watcher] Capturing initial frame...");
+				try
+				{
+					var initialFrame = await FetchSingleJpegFrameAsync(config.GetValue<string>("Stream:Source")!, 10, cancellationToken);
+					if (initialFrame != null)
+					{
+						await timelapse.SaveFrameAsync(initialFrame, cancellationToken);
+						Console.WriteLine($"[Watcher] Initial frame captured successfully");
+					}
+					else
+					{
+						Console.WriteLine($"[Watcher] Warning: Failed to capture initial frame");
+					}
+				}
+				catch (Exception ex)
+				{
+					Console.WriteLine($"[Watcher] Error capturing initial frame: {ex.Message}");
+				}
+				
 					timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 					var periodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
 					timelapseTask = Task.Run(async () =>
@@ -359,7 +422,7 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 				}
 				else
 				{
-					Console.WriteLine($"[Watcher] Skipping timelapse - jobQueueId: '{jobQueueId}', currentJob: '{currentJob}'");
+					Console.WriteLine($"[Watcher] Skipping timelapse - no filename available");
 				}
 			}
 			else if (string.IsNullOrWhiteSpace(currentJob) && lastJobFilename != null)
@@ -377,14 +440,26 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 				if (timelapseCts != null)
 				{
 					try { timelapseCts.Cancel(); } catch { }
-					if (timelapseTask != null) await timelapseTask;
+					if (timelapseTask != null)
+					{
+						try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
+					}
 					timelapseCts = null;
 					timelapseTask = null;
 				}
 				if (timelapse != null)
 				{
-					var videoPath = Path.Combine(Path.GetDirectoryName(timelapse.OutputDir)!, "timelapse.mp4");
-					await timelapse.CreateVideoAsync(videoPath, 30, cancellationToken);
+					Console.WriteLine($"[Timelapse] Creating video from {timelapse.OutputDir}...");
+					var folderName = Path.GetFileName(timelapse.OutputDir);
+					var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
+					try
+					{
+						await timelapse.CreateVideoAsync(videoPath, 30, CancellationToken.None);
+					}
+					catch (Exception ex)
+					{
+						Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
+					}
 					timelapse.Dispose();
 					timelapse = null;
 				}
@@ -395,14 +470,53 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 			Console.WriteLine($"[Watcher] Error: {ex.Message}");
 		}
 
-		await Task.Delay(pollInterval, cancellationToken);
+			await Task.Delay(pollInterval, cancellationToken);
+		}
 	}
-
-	// Cleanup on exit
-	if (streamCts != null)
+	catch (OperationCanceledException)
 	{
-		try { streamCts.Cancel(); } catch { }
-		if (streamTask != null) await streamTask;
+		Console.WriteLine("[Watcher] Polling cancelled by user.");
+	}
+	catch (Exception ex)
+	{
+		Console.WriteLine($"[Watcher] Unexpected error: {ex.Message}");
+	}
+	finally
+	{
+		// Cleanup on exit
+		Console.WriteLine("[Watcher] Shutting down...");
+		if (streamCts != null)
+		{
+			try { streamCts.Cancel(); } catch { }
+			if (streamTask != null)
+			{
+				try { await streamTask; } catch { }
+			}
+		}
+		if (timelapseCts != null)
+		{
+			try { timelapseCts.Cancel(); } catch { }
+			if (timelapseTask != null)
+			{
+				try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
+			}
+		}
+		if (timelapse != null)
+		{
+			Console.WriteLine($"[Timelapse] Creating video from {timelapse.OutputDir}...");
+			var folderName = Path.GetFileName(timelapse.OutputDir);
+			var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
+			try
+			{
+				await timelapse.CreateVideoAsync(videoPath, 30, CancellationToken.None);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
+			}
+			timelapse.Dispose();
+		}
+		Console.WriteLine("[Watcher] Cleanup complete.");
 	}
 }
 
@@ -489,9 +603,9 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 			string streamId;
 			if (!string.IsNullOrWhiteSpace(moonrakerFilename))
 			{
-				var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-				var filenameSafe = Path.GetFileNameWithoutExtension(moonrakerFilename).Replace(" ", "_");
-				streamId = $"{timestamp}_{filenameSafe}";
+				// Use just the filename for consistency with poll mode
+				var filenameSafe = SanitizeFilename(moonrakerFilename);
+				streamId = filenameSafe;
 				Console.WriteLine($"[Timelapse] Using filename from Moonraker: {moonrakerFilename}");
 			}
 			else
@@ -500,6 +614,27 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 				Console.WriteLine($"[Timelapse] No filename from Moonraker, using timestamp only");
 			}
 			timelapse = new TimelapseService(mainTlDir, streamId);
+			
+			// Capture immediate first frame for timelapse
+			Console.WriteLine($"[Timelapse] Capturing initial frame...");
+			try
+			{
+				var initialFrame = await FetchSingleJpegFrameAsync(source, 10, cancellationToken);
+				if (initialFrame != null)
+				{
+					await timelapse.SaveFrameAsync(initialFrame, cancellationToken);
+					Console.WriteLine($"[Timelapse] Initial frame captured successfully");
+				}
+				else
+				{
+					Console.WriteLine($"[Timelapse] Warning: Failed to capture initial frame");
+				}
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"[Timelapse] Error capturing initial frame: {ex.Message}");
+			}
+			
 			timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 var timelapsePeriodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
 			timelapseTask = Task.Run(async () =>
@@ -599,14 +734,27 @@ var timelapsePeriodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?
 		if (timelapseCts != null)
 		{
 			try { timelapseCts.Cancel(); } catch { }
-			if (timelapseTask != null) await timelapseTask;
+			if (timelapseTask != null)
+			{
+				try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
+			}
 			timelapseCts = null;
 			timelapseTask = null;
 		}
 		if (timelapse != null)
 		{
-			var videoPath = Path.Combine(Path.GetDirectoryName(timelapse.OutputDir)!, "timelapse.mp4");
-			await timelapse.CreateVideoAsync(videoPath, 30, cancellationToken);
+			Console.WriteLine($"[Timelapse] Creating video from {timelapse.OutputDir}...");
+			var folderName = Path.GetFileName(timelapse.OutputDir);
+			var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
+			// Use a new cancellation token for video creation (don't use the cancelled one)
+			try
+			{
+				await timelapse.CreateVideoAsync(videoPath, 30, CancellationToken.None);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
+			}
 			timelapse.Dispose();
 			timelapse = null;
 		}
