@@ -25,13 +25,13 @@ internal class MjpegToRtmpStreamer : IStreamer
 
 	public Task ExitTask => _exitTcs.Task;
 
-	public MjpegToRtmpStreamer(string sourceUrl, string rtmpUrl, int targetFps = 6, int bitrateKbps = 800, int maxQueue = 8)
+	public MjpegToRtmpStreamer(string sourceUrl, string rtmpUrl, int targetFps = 30, int bitrateKbps = 800, int maxQueue = 8)
 	{
 		_sourceUrl = sourceUrl;
 		_rtmpUrl = rtmpUrl;
 		_httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 		_exitTcs = new TaskCompletionSource<object?>();
-		_targetFps = targetFps <= 0 ? 6 : targetFps;
+		_targetFps = targetFps <= 0 ? 30 : targetFps;
 		_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 		var options = new BoundedChannelOptions(maxQueue > 0 ? maxQueue : 8)
 		{
@@ -270,7 +270,16 @@ internal class MjpegFrameExtractor
 		var frameLength = eoiIndex - soiIndex;
 		var frame = new byte[frameLength];
 		Array.Copy(_buffer.GetBuffer(), soiIndex, frame, 0, frameLength);
-		frameData = frame;
+		// Strip APPn segments (EXIF/APP markers) which some cameras include and ffmpeg warns about
+		try
+		{
+			frameData = StripJpegAppSegments(frame);
+		}
+		catch
+		{
+			// If stripping fails for any reason, fall back to raw frame
+			frameData = frame;
+		}
 
 		// Remove consumed data from buffer
 		var remaining = (int)_buffer.Position - eoiIndex;
@@ -301,6 +310,70 @@ internal class MjpegFrameExtractor
 			}
 		}
 		return -1;
+	}
+
+	/// <summary>
+	/// Remove APP0..APP15 segments from a JPEG byte array. Returns a new byte[] without those segments.
+	/// This helps avoid ffmpeg warnings for non-standard APP markers.
+	/// </summary>
+	private static ReadOnlyMemory<byte> StripJpegAppSegments(byte[] jpeg)
+	{
+		// Basic JPEG parsing: markers start with 0xFF followed by a marker byte.
+		// APPn markers are 0xE0..0xEF and have a 2-byte length (big-endian) following the marker.
+		int i = 0;
+		using var ms = new MemoryStream();
+		// copy SOI (0xFFD8) if present
+		if (jpeg.Length >= 2 && jpeg[0] == 0xFF && jpeg[1] == 0xD8)
+		{
+			ms.WriteByte(0xFF);
+			ms.WriteByte(0xD8);
+			i = 2;
+		}
+
+		while (i + 1 < jpeg.Length)
+		{
+			if (jpeg[i] != 0xFF)
+			{
+				// copy remaining data and break
+				ms.Write(jpeg, i, jpeg.Length - i);
+				break;
+			}
+			byte marker = jpeg[i + 1];
+			// EOI (0xD9) - copy and break
+			if (marker == 0xD9)
+			{
+				ms.WriteByte(0xFF);
+				ms.WriteByte(0xD9);
+				break;
+			}
+			// Standalone markers (no length): 0x01 and 0xD0-0xD7
+			if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7))
+			{
+				ms.WriteByte(0xFF);
+				ms.WriteByte(marker);
+				i += 2;
+				continue;
+			}
+
+			// Otherwise marker has a 2-byte length
+			if (i + 4 > jpeg.Length) break; // malformed
+			int length = (jpeg[i + 2] << 8) | jpeg[i + 3];
+			if (length < 2 || i + 2 + length > jpeg.Length) break; // malformed
+			// APPn markers are 0xE0..0xEF
+			if (marker >= 0xE0 && marker <= 0xEF)
+			{
+				// skip APPn segment
+				i += 2 + length;
+				continue;
+			}
+			// copy marker and its payload
+			ms.WriteByte(0xFF);
+			ms.WriteByte(marker);
+			ms.Write(jpeg, i + 2, length);
+			i += 2 + length;
+		}
+
+		return ms.ToArray();
 	}
 }
 

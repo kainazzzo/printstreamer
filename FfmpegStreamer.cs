@@ -12,11 +12,11 @@ class FfmpegStreamer : IStreamer
 
 	public Task ExitTask => _exitTcs?.Task ?? Task.CompletedTask;
 
-	public FfmpegStreamer(string source, string rtmpUrl, int targetFps = 6, int bitrateKbps = 800)
+	public FfmpegStreamer(string source, string rtmpUrl, int targetFps = 30, int bitrateKbps = 800)
 	{
 		_source = source;
 		_rtmpUrl = rtmpUrl;
-		_targetFps = targetFps <= 0 ? 6 : targetFps;
+		_targetFps = targetFps <= 0 ? 30 : targetFps;
 		_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 	}
 
@@ -111,18 +111,49 @@ class FfmpegStreamer : IStreamer
 
 	// Build encoding args tuned for target fps/bitrate
 	var gop = Math.Max(2, fps * 2);
-	var encArgs = $"-c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
+	// Use keyint equal to GOP, set pix_fmt and genpts to help timestamping for variable sources
+	var videoEncArgs = $"-c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
 
-		// Disable audio
-		var audioArgs = "-an";
+	// For MJPEG/http sources that have no audio, include a silent audio track so YouTube sees audio present.
+	// We'll add a lavfi anullsrc input and map it as the audio input.
+	var isHttpSource = srcArg.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+	var addSilentAudio = isHttpSource || srcArg.StartsWith("/dev/") == false;
 
-		// Final output to rtmp flv
-		var outArgs = $"-f flv {rtmpUrl}";
+	string inputArgs;
+	string mapArgs;
+	string audioEncArgs = "";
 
-		// Add input frame rate hint for better behavior on low-frame-rate sources
-		var fpsArg = $"-r {fps}";
+	if (addSilentAudio)
+	{
+		// Two inputs: video (0) and synthetic silent audio (1)
+		// Use reconnect options and input hints identical to youtube_stream.sh for MJPEG HTTP inputs.
+		var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
+		inputArgs = $"-hide_banner -loglevel error -nostdin -err_detect ignore_err {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
+		// Map video from input 0 and audio from input 1
+		mapArgs = "-map 0:v:0 -map 1:a:0";
+		audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
+	}
+	else
+	{
+		inputArgs = $"-re {inputFormat}-i \"{srcArg}\"";
+		mapArgs = "";
+		audioEncArgs = "-an";
+	}
 
-		return $"-re {inputFormat}-i \"{srcArg}\" {fpsArg} {encArgs} {audioArgs} {outArgs}";
+	// Add input frame rate hint for better behavior on low-frame-rate sources
+	// (we set -r on the output later; no separate fpsArg needed)
+
+	// Final output to rtmp flv, use genpts and flvflags similar to the shell script
+	var vf = "format=yuv420p,scale=640:480";
+	var colorRange = "-color_range tv";
+	var profile = "-profile:v baseline";
+	var flvFlags = "-flvflags no_duration_filesize";
+
+	// Use the same ordering and flags as the shell script
+	var outArgs = $"-vf \"{vf}\" {colorRange} -c:v libx264 -preset veryfast -tune zerolatency {profile} -pix_fmt yuv420p -r {fps} -g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k {audioEncArgs} {flvFlags} -f flv {rtmpUrl}";
+
+	// Prepend input args (which include -re for MJPEG input), include mapping, and return
+	return $"{inputArgs} {mapArgs} {outArgs}";
 	}
 
 	public void Dispose()

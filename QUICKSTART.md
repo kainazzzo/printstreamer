@@ -191,7 +191,7 @@ After setup, verify:
 ```
 Program.cs          → Start here, main flow
 FfmpegStreamer.cs   → How ffmpeg is called
-YouTubeBroadcastService.cs → YouTube integration
+YouTubeControlService.cs → YouTube integration
 MjpegToRtmpStreamer.cs → Native streamer (advanced)
 ```
 

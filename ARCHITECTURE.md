@@ -24,7 +24,7 @@ Check Mode
   └─→ stream: YouTube streaming only
 ```
 
-### 2. YouTubeBroadcastService.cs
+### 2. YouTubeControlService.cs
 **Responsibilities:**
 - OAuth2 authentication with Google
 - Refresh token storage (`youtube_tokens/` directory)

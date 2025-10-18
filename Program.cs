@@ -26,7 +26,9 @@ var config = webBuilder.Configuration;
 
 // Read configuration values
 string? source = config.GetValue<string>("Stream:Source");
-string? key = config.GetValue<string>("YouTube:Key") ?? Environment.GetEnvironmentVariable("YOUTUBE_STREAM_KEY");
+string? key = config.GetValue<string>("YouTube:Key");
+// Note: explicit support for a local service-account key file has been removed.
+// Only `youtube_token.json` (user OAuth tokens) or configured OAuth credentials are supported.
 string? oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
 string? oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
 
@@ -36,33 +38,20 @@ var readOnly = mode == "read";
 var serve = mode == "serve";
 
 // Determine if we should use OAuth-based broadcast creation or manual stream key
+// We detect OAuth usage by presence of OAuth client credentials in config.
 bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
-
-if (string.IsNullOrWhiteSpace(source))
-{
-	Console.WriteLine("Error: Stream:Source is required.");
-	Console.WriteLine();
-	PrintHelp();
-	return;
-}
-
-if (!readOnly && !serve && !useOAuth && string.IsNullOrWhiteSpace(key))
-{
-	Console.WriteLine("Error: Either YouTube:Key or YouTube:OAuth credentials are required for streaming.");
-	Console.WriteLine();
-	PrintHelp();
-	return;
-}
+// Service account support removed — only user OAuth via youtube_token.json is supported.
 
 // Top-level cancellation token for graceful shutdown (propagated to streamers)
 var appCts = new CancellationTokenSource();
 Console.CancelKeyPress += (s, e) =>
 {
 	Console.WriteLine("Stopping (Ctrl+C)...");
-	// request cancellation for all linked operations
 	try { appCts.Cancel(); } catch { }
-	e.Cancel = true; // prevent abrupt process exit so we can clean up
+	e.Cancel = true;
 };
+
+// Removed proactive token acquisition. Authentication now happens on-demand in the streaming path
 
 if (readOnly)
 {
@@ -96,16 +85,18 @@ if (serve)
 	// If OAuth or stream key is provided, start YouTube streaming in the background
 	Task? streamTask = null;
 	CancellationTokenSource? streamCts = null;
-	if (useOAuth || !string.IsNullOrWhiteSpace(key))
+	// In serve mode, don't auto-start YouTube streaming unless explicitly enabled in config
+	var startYoutubeInServe = config.GetValue<bool?>("YouTube:StartInServe") ?? false;
+	if ((useOAuth || !string.IsNullOrWhiteSpace(key)) && (!serve || startYoutubeInServe))
 	{
 		// Link the stream cancellation to the top-level app cancellation token
 		streamCts = CancellationTokenSource.CreateLinkedTokenSource(appCts.Token);
 		streamTask = Task.Run(async () =>
 		{
-			try
-			{
-				await StartYouTubeStreamAsync(config, source!, key, streamCts.Token);
-			}
+				try
+				{
+					await StartYouTubeStreamAsync(config, source!, key, streamCts.Token);
+				}
 			catch (Exception ex)
 			{
 				Console.WriteLine($"YouTube streaming error: {ex.Message}");
@@ -206,7 +197,7 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 	string? rtmpUrl = null;
 	string? streamKey = null;
 	string? broadcastId = null;
-	YouTubeBroadcastService? ytService = null;
+	YouTubeControlService? ytService = null;
 
 	try
 	{
@@ -217,7 +208,7 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 		if (useOAuth)
 		{
 			Console.WriteLine("Using YouTube OAuth to create broadcast...");
-			ytService = new YouTubeBroadcastService(config);
+			ytService = new YouTubeControlService(config);
 
 			// Authenticate
 			if (!await ytService.AuthenticateAsync(cancellationToken))
@@ -284,7 +275,7 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 		var streamerStartTask = streamer.StartAsync(cancellationToken);
 
 		// If we created a broadcast, transition it to live
-		if (ytService != null && broadcastId != null)
+			if (ytService != null && broadcastId != null)
 		{
 			Console.WriteLine("Stream started, waiting for YouTube ingestion to become active before transitioning to live...");
 			// Wait up to 90s for ingestion to be detected by YouTube
@@ -344,7 +335,7 @@ static async Task StartTestPushAsync(IConfiguration config, CancellationToken ca
 		return;
 	}
 
-	var yt = new YouTubeBroadcastService(config);
+	var yt = new YouTubeControlService(config);
 	if (!await yt.AuthenticateAsync(cancellationToken))
 	{
 		Console.WriteLine("Failed to authenticate for testsrc.");

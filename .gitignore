@@ -6,3 +6,4 @@ obj/
 *.userosscache
 *.sln.docstates
 node_modules/
+youtube_token.json

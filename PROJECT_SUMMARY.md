@@ -15,7 +15,7 @@ A complete .NET 8.0 application for streaming 3D printer webcams to YouTube Live
 ```
 printstreamer/
 ├── Program.cs                    # Main entry point, mode orchestration
-├── YouTubeBroadcastService.cs    # OAuth2 + YouTube API integration
+├── YouTubeControlService.cs    # OAuth2 + YouTube API integration (control-plane)
 ├── FfmpegStreamer.cs            # FFmpeg-based streamer (default)
 ├── MjpegToRtmpStreamer.cs       # Native .NET streamer (advanced)
 ├── MjpegReader.cs               # Diagnostic MJPEG inspector
