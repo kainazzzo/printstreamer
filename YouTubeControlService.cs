@@ -29,6 +29,42 @@ internal class YouTubeControlService : IDisposable
     }
 
     /// <summary>
+    /// Sets the thumbnail for a YouTube broadcast using a JPEG image.
+    /// </summary>
+    public async Task<bool> SetBroadcastThumbnailAsync(string broadcastId, byte[] imageBytes, CancellationToken cancellationToken = default)
+    {
+        if (_youtubeService == null)
+        {
+            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(broadcastId))
+        {
+            Console.WriteLine("Invalid broadcastId for thumbnail update.");
+            return false;
+        }
+        try
+        {
+            using var ms = new MemoryStream(imageBytes);
+            var thumbnailSetRequest = _youtubeService.Thumbnails.Set(broadcastId, ms, "image/jpeg");
+            var response = await thumbnailSetRequest.UploadAsync(cancellationToken);
+            if (response.Status == Google.Apis.Upload.UploadStatus.Completed)
+            {
+                Console.WriteLine($"Thumbnail updated for broadcast {broadcastId}.");
+                return true;
+            }
+            else
+            {
+                Console.WriteLine($"Thumbnail upload failed: {response.Status}");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating thumbnail: {ex.Message}");
+            return false;
+        }
+    }
     /// Try to extract a base printer URI (scheme + host) from the configured Stream:Source URL.
     /// Returns a Uri pointing at the printer host with port 7125 (Moonraker default) when possible.
     /// </summary>

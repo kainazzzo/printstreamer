@@ -1,4 +1,27 @@
-﻿// PrintStreamer - Stream 3D printer webcam to YouTube Live
+﻿// Utility: Extract a single JPEG frame from MJPEG stream URL
+static async Task<byte[]?> FetchSingleJpegFrameAsync(string mjpegUrl, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
+{
+	using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+	using var resp = await client.GetAsync(mjpegUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+	resp.EnsureSuccessStatusCode();
+	using var stream = await resp.Content.ReadAsStreamAsync(cancellationToken);
+	var buffer = new byte[64 * 1024];
+	using var ms = new MemoryStream();
+	int bytesRead;
+	// Read until we find a JPEG frame
+	while (!cancellationToken.IsCancellationRequested)
+	{
+		bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+		if (bytesRead == 0) break;
+		ms.Write(buffer, 0, bytesRead);
+		if (MjpegReader.TryExtractJpeg(ms, out var jpegBytes) && jpegBytes != null)
+		{
+			return jpegBytes;
+		}
+	}
+	return null;
+}
+// PrintStreamer - Stream 3D printer webcam to YouTube Live
 // Configuration is loaded from appsettings.json, environment variables, and command-line arguments.
 //
 // Usage examples:
@@ -279,6 +302,8 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 	string? streamKey = null;
 	string? broadcastId = null;
 	YouTubeControlService? ytService = null;
+	CancellationTokenSource? thumbnailCts = null;
+	Task? thumbnailTask = null;
 
 	try
 	{
@@ -311,15 +336,39 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 			broadcastId = result.broadcastId;
 
 			Console.WriteLine($"YouTube broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
-					// Dump the LiveBroadcast and LiveStream resources for debugging
+			// Dump the LiveBroadcast and LiveStream resources for debugging
+			try
+			{
+				await ytService.LogBroadcastAndStreamResourcesAsync(broadcastId, null, cancellationToken);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
+			}
+
+			// Start thumbnail update task
+			thumbnailCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			thumbnailTask = Task.Run(async () =>
+			{
+				while (!thumbnailCts.Token.IsCancellationRequested)
+				{
 					try
 					{
-						await ytService.LogBroadcastAndStreamResourcesAsync(broadcastId, null, cancellationToken);
+						var frame = await FetchSingleJpegFrameAsync(source, 10, thumbnailCts.Token);
+						if (frame != null && !string.IsNullOrWhiteSpace(broadcastId))
+						{
+							var ok = await ytService.SetBroadcastThumbnailAsync(broadcastId, frame, thumbnailCts.Token);
+							if (ok)
+								Console.WriteLine($"Thumbnail updated at {DateTime.UtcNow:O}");
+						}
 					}
 					catch (Exception ex)
 					{
-						Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
+						Console.WriteLine($"Thumbnail update error: {ex.Message}");
 					}
+					await Task.Delay(TimeSpan.FromMinutes(1), thumbnailCts.Token);
+				}
+			}, thumbnailCts.Token);
 		}
 		else if (!string.IsNullOrWhiteSpace(manualKey))
 		{
@@ -388,6 +437,12 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 	}
 	finally
 	{
+		// Stop thumbnail update task
+		if (thumbnailCts != null)
+		{
+			try { thumbnailCts.Cancel(); } catch { }
+			if (thumbnailTask != null) await thumbnailTask;
+		}
 		// Clean up YouTube broadcast if created
 		if (ytService != null && broadcastId != null)
 		{
@@ -605,7 +660,7 @@ internal class MjpegReader
 
 	// Looks for the first JPEG (0xFFD8 ... 0xFFD9) in the memory stream.
 	// If found, returns true and sets jpegBytes (and removes data up to end of JPEG from the stream).
-	private static bool TryExtractJpeg(MemoryStream ms, out byte[]? jpegBytes)
+	public static bool TryExtractJpeg(MemoryStream ms, out byte[]? jpegBytes)
 	{
 		jpegBytes = null;
 		var buf = ms.ToArray();
