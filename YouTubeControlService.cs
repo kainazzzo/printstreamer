@@ -609,12 +609,12 @@ internal class YouTubeControlService : IDisposable
     /// <summary>
     /// Create a YouTube live broadcast and stream, bind them together, and return the RTMP ingestion URL.
     /// </summary>
-    public async Task<(string? rtmpUrl, string? streamKey, string? broadcastId)> CreateLiveBroadcastAsync(CancellationToken cancellationToken = default)
+    public async Task<(string? rtmpUrl, string? streamKey, string? broadcastId, string? filename)> CreateLiveBroadcastAsync(CancellationToken cancellationToken = default)
     {
         if (_youtubeService == null)
         {
             Console.WriteLine("Error: Not authenticated. Call AuthenticateAsync first.");
-            return (null, null, null);
+            return (null, null, null, null);
         }
 
         try
@@ -804,7 +804,7 @@ internal class YouTubeControlService : IDisposable
             // Return streamId in tuple via broadcastId position isn't ideal; for now we return broadcastId and maintain streamId in the created stream object.
             // Caller can fetch streamId via createdStream.Id if needed. We'll also store last created stream id in a field if debugging required.
             _lastCreatedStreamId = streamId;
-            return (rtmpUrl, streamKey, createdBroadcast.Id);
+            return (rtmpUrl, streamKey, createdBroadcast.Id, moonrakerFilename);
         }
         catch (Google.GoogleApiException gae)
         {
@@ -826,13 +826,13 @@ internal class YouTubeControlService : IDisposable
             {
                 Console.WriteLine(gae.ToString());
             }
-            return (null, null, null);
+            return (null, null, null, null);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Failed to create live broadcast: {ex.Message}");
             Console.WriteLine(ex.ToString());
-            return (null, null, null);
+            return (null, null, null, null);
         }
     }
 

@@ -71,24 +71,53 @@ bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhi
 var appCts = new CancellationTokenSource();
 Console.CancelKeyPress += (s, e) =>
 {
-	Console.WriteLine("Stopping (Ctrl+C)...");
-	try { appCts.Cancel(); } catch { }
-	e.Cancel = true;
+	Console.WriteLine("\nStopping (Ctrl+C)...");
+	e.Cancel = true; // Prevent immediate termination
+	try 
+	{ 
+		appCts.Cancel(); 
+	} 
+	catch (Exception ex) 
+	{ 
+		Console.WriteLine($"Error during cancellation: {ex.Message}"); 
+	}
 };
 
 // Removed proactive token acquisition. Authentication now happens on-demand in the streaming path
 
 if (readOnly)
 {
-	var reader = new MjpegReader(source!);
-	await reader.StartAsync(CancellationToken.None);
+	try
+	{
+		var reader = new MjpegReader(source!);
+		await reader.StartAsync(appCts.Token);
+	}
+	catch (OperationCanceledException)
+	{
+		Console.WriteLine("Read mode cancelled.");
+	}
+	catch (Exception ex)
+	{
+		Console.WriteLine($"Read mode error: {ex.Message}");
+	}
 	return;
 }
 
 if (mode == "testsrc")
 {
 	// Special diagnostic mode: create a YouTube broadcast+stream and push a test pattern (RTMPS) while polling ingestion.
-	await StartTestPushAsync(config, appCts.Token);
+	try
+	{
+		await StartTestPushAsync(config, appCts.Token);
+	}
+	catch (OperationCanceledException)
+	{
+		Console.WriteLine("Test mode cancelled.");
+	}
+	catch (Exception ex)
+	{
+		Console.WriteLine($"Test mode error: {ex.Message}");
+	}
 	return;
 }
 
@@ -217,12 +246,34 @@ if (serve)
 
 if (isPollingMode)
 {
-	await PollAndStreamJobsAsync(config, appCts.Token);
+	try
+	{
+		await PollAndStreamJobsAsync(config, appCts.Token);
+	}
+	catch (OperationCanceledException)
+	{
+		Console.WriteLine("Polling mode cancelled.");
+	}
+	catch (Exception ex)
+	{
+		Console.WriteLine($"Polling mode error: {ex.Message}");
+	}
 	return;
 }
 
 // Default mode: stream to YouTube
-await StartYouTubeStreamAsync(config, source!, key, appCts.Token);
+try
+{
+	await StartYouTubeStreamAsync(config, source!, key, appCts.Token);
+}
+catch (OperationCanceledException)
+{
+	Console.WriteLine("Streaming cancelled.");
+}
+catch (Exception ex)
+{
+	Console.WriteLine($"Streaming error: {ex.Message}");
+}
 
 static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToken cancellationToken)
 {
@@ -233,19 +284,25 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 	string? lastJobFilename = null;
 	CancellationTokenSource? streamCts = null;
 	Task? streamTask = null;
+	TimelapseService? timelapse = null;
+	CancellationTokenSource? timelapseCts = null;
+	Task? timelapseTask = null;
 
 	while (!cancellationToken.IsCancellationRequested)
 	{
 		try
 		{
-			// Query Moonraker job queue
-			var baseUri = new Uri(moonrakerBase);
-			var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
-			var currentJob = info?.Filename;
+		// Query Moonraker job queue
+		var baseUri = new Uri(moonrakerBase);
+		var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+		var currentJob = info?.Filename;
+		var jobQueueId = info?.JobQueueId;
+		
+		Console.WriteLine($"[Watcher] Poll result - Filename: '{currentJob}', JobQueueId: '{jobQueueId}'");
 
-			if (!string.IsNullOrWhiteSpace(currentJob) && currentJob != lastJobFilename)
+		if (!string.IsNullOrWhiteSpace(currentJob) && currentJob != lastJobFilename)
 			{
-				// New job detected, start stream
+				// New job detected, start stream and timelapse
 				Console.WriteLine($"[Watcher] New print job detected: {currentJob}");
 				lastJobFilename = currentJob;
 				if (streamCts != null)
@@ -265,10 +322,49 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 						Console.WriteLine($"[Watcher] Stream error: {ex.Message}");
 					}
 				}, streamCts.Token);
+
+			// Start timelapse service only if we have both filename and job queue id
+			if (!string.IsNullOrWhiteSpace(jobQueueId) && !string.IsNullOrWhiteSpace(currentJob))
+			{
+				var mainTlDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
+				var jobNameSafe = Path.GetFileNameWithoutExtension(currentJob).Replace(" ", "_");
+				var tlSubfolder = $"{jobQueueId}_{jobNameSafe}";
+				Console.WriteLine($"[Watcher] Timelapse folder will be: {tlSubfolder}");
+				Console.WriteLine($"[Watcher]   - jobQueueId: '{jobQueueId}'");
+				Console.WriteLine($"[Watcher]   - currentJob: '{currentJob}'");
+				Console.WriteLine($"[Watcher]   - jobNameSafe: '{jobNameSafe}'");
+				timelapse = new TimelapseService(mainTlDir, tlSubfolder);
+					timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+					var periodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
+					timelapseTask = Task.Run(async () =>
+					{
+						while (!timelapseCts.Token.IsCancellationRequested)
+						{
+							try
+							{
+								var frame = await FetchSingleJpegFrameAsync(config.GetValue<string>("Stream:Source")!, 10, timelapseCts.Token);
+								if (frame != null)
+								{
+									await timelapse.SaveFrameAsync(frame, timelapseCts.Token);
+								}
+							}
+							catch (Exception ex)
+							{
+								Console.WriteLine($"Timelapse frame error: {ex.Message}");
+							}
+							await Task.Delay(TimeSpan.FromSeconds(periodSec), timelapseCts.Token);
+						}
+					}, timelapseCts.Token);
+					Console.WriteLine($"[Watcher] Timelapse started: {tlSubfolder}");
+				}
+				else
+				{
+					Console.WriteLine($"[Watcher] Skipping timelapse - jobQueueId: '{jobQueueId}', currentJob: '{currentJob}'");
+				}
 			}
 			else if (string.IsNullOrWhiteSpace(currentJob) && lastJobFilename != null)
 			{
-				// Job finished, end stream
+				// Job finished, end stream and finalize timelapse
 				Console.WriteLine($"[Watcher] Print job finished: {lastJobFilename}");
 				lastJobFilename = null;
 				if (streamCts != null)
@@ -277,6 +373,20 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 					if (streamTask != null) await streamTask;
 					streamCts = null;
 					streamTask = null;
+				}
+				if (timelapseCts != null)
+				{
+					try { timelapseCts.Cancel(); } catch { }
+					if (timelapseTask != null) await timelapseTask;
+					timelapseCts = null;
+					timelapseTask = null;
+				}
+				if (timelapse != null)
+				{
+					var videoPath = Path.Combine(Path.GetDirectoryName(timelapse.OutputDir)!, "timelapse.mp4");
+					await timelapse.CreateVideoAsync(videoPath, 30, cancellationToken);
+					timelapse.Dispose();
+					timelapse = null;
 				}
 			}
 		}
@@ -304,6 +414,9 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 	YouTubeControlService? ytService = null;
 	CancellationTokenSource? thumbnailCts = null;
 	Task? thumbnailTask = null;
+	TimelapseService? timelapse = null;
+	CancellationTokenSource? timelapseCts = null;
+	Task? timelapseTask = null;
 
 	try
 	{
@@ -334,6 +447,7 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 			rtmpUrl = result.rtmpUrl;
 			streamKey = result.streamKey;
 			broadcastId = result.broadcastId;
+			var moonrakerFilename = result.filename;
 
 			Console.WriteLine($"YouTube broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
 			// Dump the LiveBroadcast and LiveStream resources for debugging
@@ -346,29 +460,67 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 				Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
 			}
 
-			// Start thumbnail update task
-			thumbnailCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-			thumbnailTask = Task.Run(async () =>
+		// Start thumbnail update task
+		thumbnailCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		var thumbnailPeriodSec = config.GetValue<int?>("YouTube:ThumbnailUpdatePeriodSeconds") ?? 60;
+		thumbnailTask = Task.Run(async () =>
+		{
+			while (!thumbnailCts.Token.IsCancellationRequested)
 			{
-				while (!thumbnailCts.Token.IsCancellationRequested)
+				try
+				{
+					var frame = await FetchSingleJpegFrameAsync(source, 10, thumbnailCts.Token);
+					if (frame != null && !string.IsNullOrWhiteSpace(broadcastId))
+					{
+						var ok = await ytService.SetBroadcastThumbnailAsync(broadcastId, frame, thumbnailCts.Token);
+						if (ok)
+							Console.WriteLine($"Thumbnail updated at {DateTime.UtcNow:O}");
+					}
+				}
+				catch (Exception ex)
+				{
+					Console.WriteLine($"Thumbnail update error: {ex.Message}");
+				}
+				await Task.Delay(TimeSpan.FromSeconds(thumbnailPeriodSec), thumbnailCts.Token);
+			}
+		}, thumbnailCts.Token);			// Start timelapse service for stream mode
+			var mainTlDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
+			// Use filename from Moonraker if available, otherwise use timestamp
+			string streamId;
+			if (!string.IsNullOrWhiteSpace(moonrakerFilename))
+			{
+				var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+				var filenameSafe = Path.GetFileNameWithoutExtension(moonrakerFilename).Replace(" ", "_");
+				streamId = $"{timestamp}_{filenameSafe}";
+				Console.WriteLine($"[Timelapse] Using filename from Moonraker: {moonrakerFilename}");
+			}
+			else
+			{
+				streamId = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+				Console.WriteLine($"[Timelapse] No filename from Moonraker, using timestamp only");
+			}
+			timelapse = new TimelapseService(mainTlDir, streamId);
+			timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+var timelapsePeriodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
+			timelapseTask = Task.Run(async () =>
+			{
+				while (!timelapseCts.Token.IsCancellationRequested)
 				{
 					try
 					{
-						var frame = await FetchSingleJpegFrameAsync(source, 10, thumbnailCts.Token);
-						if (frame != null && !string.IsNullOrWhiteSpace(broadcastId))
+						var frame = await FetchSingleJpegFrameAsync(source, 10, timelapseCts.Token);
+						if (frame != null)
 						{
-							var ok = await ytService.SetBroadcastThumbnailAsync(broadcastId, frame, thumbnailCts.Token);
-							if (ok)
-								Console.WriteLine($"Thumbnail updated at {DateTime.UtcNow:O}");
+							await timelapse.SaveFrameAsync(frame, timelapseCts.Token);
 						}
 					}
 					catch (Exception ex)
 					{
-						Console.WriteLine($"Thumbnail update error: {ex.Message}");
+						Console.WriteLine($"Timelapse frame error: {ex.Message}");
 					}
-					await Task.Delay(TimeSpan.FromMinutes(1), thumbnailCts.Token);
+					await Task.Delay(TimeSpan.FromSeconds(timelapsePeriodSec), timelapseCts.Token);
 				}
-			}, thumbnailCts.Token);
+			}, timelapseCts.Token);
 		}
 		else if (!string.IsNullOrWhiteSpace(manualKey))
 		{
@@ -442,6 +594,21 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 		{
 			try { thumbnailCts.Cancel(); } catch { }
 			if (thumbnailTask != null) await thumbnailTask;
+		}
+		// Stop timelapse task and create video
+		if (timelapseCts != null)
+		{
+			try { timelapseCts.Cancel(); } catch { }
+			if (timelapseTask != null) await timelapseTask;
+			timelapseCts = null;
+			timelapseTask = null;
+		}
+		if (timelapse != null)
+		{
+			var videoPath = Path.Combine(Path.GetDirectoryName(timelapse.OutputDir)!, "timelapse.mp4");
+			await timelapse.CreateVideoAsync(videoPath, 30, cancellationToken);
+			timelapse.Dispose();
+			timelapse = null;
 		}
 		// Clean up YouTube broadcast if created
 		if (ytService != null && broadcastId != null)

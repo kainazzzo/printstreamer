@@ -1,3 +1,4 @@
+// Removed duplicate ExtractJobIdFromJobQueue and ExtractFilenameFromJobQueue methods from top of file
 using System.Text.Json.Nodes;
 
 internal static class MoonrakerClient
@@ -47,7 +48,8 @@ internal static class MoonrakerClient
         double? BedTempTarget,
         (double? Actual, double? Target)? Tool0Temp,
         List<SensorInfo>? Sensors,
-        JsonNode? RawJson
+        JsonNode? RawJson,
+        string? JobQueueId
     );
 
     /// <summary>
@@ -263,16 +265,20 @@ internal static class MoonrakerClient
 
         Console.WriteLine($"[Moonraker] Data available - Job: {hasJobData}, Stats: {hasStatsData}, Display: {hasDisplayData}, Temp: {hasTempData}");
 
-        // Try to extract filename from multiple sources in order of preference:
-        
-        // 1. Job queue (current/queued jobs)
+        // Try to extract filename and job id from job queue
+        string? jobQueueId = null;
         if (queueNode != null)
         {
             var queueFilename = ExtractFilenameFromJobQueue(queueNode);
+            jobQueueId = ExtractJobIdFromJobQueue(queueNode);
             if (!string.IsNullOrWhiteSpace(queueFilename))
             {
                 filename = queueFilename;
                 Console.WriteLine($"[Moonraker] Extracted from job queue - Filename: {filename}");
+            }
+            if (!string.IsNullOrWhiteSpace(jobQueueId))
+            {
+                Console.WriteLine($"[Moonraker] Extracted from job queue - JobQueueId: {jobQueueId}");
             }
         }
 
@@ -358,7 +364,7 @@ internal static class MoonrakerClient
         if (dispNode != null) raw["display_status"] = dispNode;
         if (infoNode != null) raw["info"] = infoNode;
 
-        return new MoonrakerPrintInfo(filename, state, progress, elapsed, remaining, bedActual, bedTarget, tool0, sensors, raw);
+    return new MoonrakerPrintInfo(filename, state, progress, elapsed, remaining, bedActual, bedTarget, tool0, sensors, raw, jobQueueId);
     }
 
     private static bool IsNullResponse(JsonNode? node, string selectKey)
@@ -391,6 +397,29 @@ internal static class MoonrakerClient
                         firstJob.TryGetPropertyValue("filename", out var fn) && fn != null)
                     {
                         return fn.ToString();
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    // Extract job queue id from Moonraker job queue response
+    private static string? ExtractJobIdFromJobQueue(JsonNode? queueNode)
+    {
+        try
+        {
+            // Expected structure: {"result":{"queued_jobs":[{"id":"jobid123", ...}]}}
+            if (queueNode is JsonObject root &&
+                root.TryGetPropertyValue("result", out var result) && result is JsonObject resObj)
+            {
+                if (resObj.TryGetPropertyValue("queued_jobs", out var jobs) && jobs is JsonArray jobsArray && jobsArray.Count > 0)
+                {
+                    if (jobsArray[0] is JsonObject firstJob &&
+                        firstJob.TryGetPropertyValue("id", out var idVal) && idVal != null)
+                    {
+                        return idVal.ToString();
                     }
                 }
             }
