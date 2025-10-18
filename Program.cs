@@ -801,8 +801,6 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 	string? broadcastId = null;
 	string? moonrakerFilename = null;
 	YouTubeControlService? ytService = null;
-	CancellationTokenSource? thumbnailCts = null;
-	Task? thumbnailTask = null;
 	TimelapseService? timelapse = null;
 	CancellationTokenSource? timelapseCts = null;
 	Task? timelapseTask = null;
