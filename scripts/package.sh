@@ -10,14 +10,14 @@ dotnet publish -c Release -o $BUILD_DIR
 echo "Packaging source, Dockerfile, and release.sh..."
 tar --exclude="$ARTIFACT" -czvf $ARTIFACT \
     Dockerfile \
-    release.sh \
+    scripts/release.sh \
     appsettings.json \
     *.csproj \
     *.sln \
     *.md \
     *.yaml \
     *.json \
-    scripts/ \
+    scripts/package.sh \
     bin/Release/publish \
     src/ || true
 
