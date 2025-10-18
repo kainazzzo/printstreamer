@@ -18,6 +18,8 @@ using Google.Apis.Auth.OAuth2.Requests;
 using System.Net;
 using System.Net.Sockets;
 using System.Diagnostics;
+using System.Net.Http;
+using System.Text.Json.Nodes;
 
 internal class YouTubeControlService : IDisposable
 {
@@ -33,6 +35,144 @@ internal class YouTubeControlService : IDisposable
     {
         _config = config;
         _tokenPath = Path.Combine(Directory.GetCurrentDirectory(), "youtube_tokens");
+    }
+
+    /// <summary>
+    /// Try to extract a base printer URI (scheme + host) from the configured Stream:Source URL.
+    /// Returns a Uri pointing at the printer host with port 7125 (Moonraker default) when possible.
+    /// </summary>
+    private static Uri? GetPrinterBaseUriFromStreamSource(string source)
+    {
+        try
+        {
+            // If source is a full URL, parse it and replace the port with 7125
+            if (Uri.TryCreate(source, UriKind.Absolute, out var srcUri))
+            {
+                var builder = new UriBuilder(srcUri)
+                {
+                    Port = 7125,
+                    Path = string.Empty,
+                    Query = string.Empty
+                };
+                return builder.Uri;
+            }
+
+            // Fallback: try to interpret as host or host:port
+            if (!source.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                var host = source.Split('/')[0];
+                if (!host.Contains(":")) host = host + ":7125";
+                if (Uri.TryCreate("http://" + host, UriKind.Absolute, out var u)) return u;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>
+    /// Best-effort fetch of the current print filename from a Moonraker instance at the given baseUri.
+    /// Tries a few common endpoints and JSON paths, returns null if not found or on error.
+    /// </summary>
+    private static async Task<string?> GetMoonrakerFilenameAsync(Uri baseUri, CancellationToken cancellationToken = default)
+    {
+        // Use a shared HttpClient per call (short-lived is acceptable here since calls are infrequent)
+        using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(5) };
+
+        // Candidate endpoints and JSON selectors
+        var candidates = new[]
+        {
+            "/printer/objects/query?select=job",
+            "/printer/objects/query?select=print_stats",
+            "/printer/printerinfo",
+            "/printer/objects/query?select=display_status",
+            "/server/objects"
+        };
+
+        foreach (var ep in candidates)
+        {
+            try
+            {
+                var resp = await http.GetAsync(ep, cancellationToken);
+                if (!resp.IsSuccessStatusCode) continue;
+                var text = await resp.Content.ReadAsStringAsync(cancellationToken);
+                if (string.IsNullOrWhiteSpace(text)) continue;
+                try
+                {
+                    var node = JsonNode.Parse(text);
+                    if (node == null) continue;
+
+                    // Common Moonraker response shapes: { "result": { "job": { "file": { "name": "foo.gcode" }}}}
+                    // or { "result": { "status": { "filename": "foo.gcode" }}}
+                    // Search recursively for likely fields
+                    var name = FindFilenameInJson(node);
+                    if (!string.IsNullOrWhiteSpace(name)) return name;
+                }
+                catch { continue; }
+            }
+            catch { continue; }
+        }
+
+        return null;
+    }
+
+    private static string? FindFilenameInJson(JsonNode? node)
+    {
+        if (node == null) return null;
+        // If node is an object, check properties
+        if (node is JsonObject obj)
+        {
+            foreach (var kv in obj)
+            {
+                var key = kv.Key?.ToLowerInvariant() ?? string.Empty;
+                if (key.Contains("file") || key.Contains("filename") || key.Contains("job"))
+                {
+                    // Try to find a nested name or path
+                    var maybe = ExtractNameFromNode(kv.Value);
+                    if (!string.IsNullOrWhiteSpace(maybe)) return maybe;
+                }
+
+                // Recurse
+                var rec = FindFilenameInJson(kv.Value);
+                if (!string.IsNullOrWhiteSpace(rec)) return rec;
+            }
+        }
+        else if (node is JsonArray arr)
+        {
+            foreach (var it in arr)
+            {
+                var rec = FindFilenameInJson(it);
+                if (!string.IsNullOrWhiteSpace(rec)) return rec;
+            }
+        }
+        else
+        {
+            // Primitive
+            var s = node.ToString();
+            if (!string.IsNullOrWhiteSpace(s) && (s.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase) || s.IndexOf('.') > 0 && s.Length < 200))
+            {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    private static string? ExtractNameFromNode(JsonNode? node)
+    {
+        if (node == null) return null;
+        if (node is JsonObject o)
+        {
+            // Common property names
+            if (o.TryGetPropertyValue("name", out var n) && n != null) return n.ToString();
+            if (o.TryGetPropertyValue("filename", out var f) && f != null) return f.ToString();
+            if (o.TryGetPropertyValue("path", out var p) && p != null) return p.ToString();
+            if (o.TryGetPropertyValue("display_name", out var d) && d != null) return d.ToString();
+        }
+        else if (node is JsonValue v)
+        {
+            var s = v.ToString();
+            if (!string.IsNullOrWhiteSpace(s)) return s;
+        }
+        return null;
     }
 
     /// <summary>
@@ -460,6 +600,110 @@ internal class YouTubeControlService : IDisposable
 
             var streamTitle = _config["YouTube:LiveStream:Title"] ?? "Print Stream";
             var streamDescription = _config["YouTube:LiveStream:Description"] ?? "3D printer camera feed";
+
+            // Try to get Moonraker info to augment title and description
+            string? moonrakerFilename = null;
+            MoonrakerClient.MoonrakerPrintInfo? moonrakerInfo = null;
+
+            // Try to augment the title and description with the currently printing file name from Moonraker (port 7125)
+            try
+            {
+                // Allow explicit Moonraker base URL in config (e.g. http://192.168.1.117:7125/)
+                var moonBase = _config["Moonraker:BaseUrl"];
+                Uri? baseUri = null;
+                if (!string.IsNullOrWhiteSpace(moonBase) && Uri.TryCreate(moonBase, UriKind.Absolute, out var cfgUri))
+                {
+                    baseUri = cfgUri;
+                }
+                else
+                {
+                    // Derive printer base host from Stream:Source if possible (expecting http://<ip>/...)
+                    var src = _config["Stream:Source"];
+                    if (!string.IsNullOrWhiteSpace(src)) baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(src);
+                }
+
+                if (baseUri != null)
+                {
+                    var apiKey = _config["Moonraker:ApiKey"];
+                    var authHeader = _config["Moonraker:AuthHeader"]; // e.g. X-Api-Key or Authorization
+                    var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+                    moonrakerInfo = info;
+                    
+                    if (info != null)
+                    {
+                        // Store filename to use in title
+                        if (!string.IsNullOrWhiteSpace(info.Filename))
+                        {
+                            moonrakerFilename = info.Filename;
+                            // Clean up the filename for the title (remove path and extension)
+                            var cleanFilename = System.IO.Path.GetFileNameWithoutExtension(info.Filename);
+                            if (!string.IsNullOrWhiteSpace(cleanFilename))
+                            {
+                                title = $"{title} - {cleanFilename}";
+                            }
+                        }
+
+                        // Build a multi-line Moonraker summary
+                        string FormatTimeSpan(TimeSpan? ts) => ts.HasValue ? string.Format("{0:D2}:{1:D2}:{2:D2}", ts.Value.Hours, ts.Value.Minutes, ts.Value.Seconds) : "n/a";
+                        var lines = new System.Collections.Generic.List<string>();
+                        if (!string.IsNullOrWhiteSpace(info.Filename)) lines.Add($"File: {info.Filename}");
+                        if (!string.IsNullOrWhiteSpace(info.State)) lines.Add($"State: {info.State}");
+                        if (info.ProgressPercent.HasValue) lines.Add($"Progress: {info.ProgressPercent.Value:F1}%");
+                        if (info.Elapsed.HasValue) lines.Add($"Elapsed: {FormatTimeSpan(info.Elapsed)}");
+                        if (info.Remaining.HasValue) lines.Add($"Remaining: {FormatTimeSpan(info.Remaining)}");
+                        
+                        // Only show temperatures if we have actual values (not just null/null)
+                        if (info.BedTempActual.HasValue && info.BedTempActual.Value > 0)
+                            lines.Add($"Bed: {info.BedTempActual.Value:F1}°C / {info.BedTempTarget?.ToString("F1") ?? "n/a"}°C");
+                        else if (info.BedTempTarget.HasValue && info.BedTempTarget.Value > 0)
+                            lines.Add($"Bed: {info.BedTempActual?.ToString("F1") ?? "n/a"}°C / {info.BedTempTarget.Value:F1}°C");
+                        
+                        if (info.Tool0Temp.HasValue)
+                        {
+                            var hasActual = info.Tool0Temp.Value.Actual.HasValue && info.Tool0Temp.Value.Actual.Value > 0;
+                            var hasTarget = info.Tool0Temp.Value.Target.HasValue && info.Tool0Temp.Value.Target.Value > 0;
+                            if (hasActual || hasTarget)
+                            {
+                                lines.Add($"Tool0: {info.Tool0Temp.Value.Actual?.ToString("F1") ?? "n/a"}°C / {info.Tool0Temp.Value.Target?.ToString("F1") ?? "n/a"}°C");
+                            }
+                        }
+                        
+                        // Add sensor information
+                        if (info.Sensors != null && info.Sensors.Count > 0)
+                        {
+                            lines.Add(""); // blank line
+                            lines.Add("Sensors:");
+                            foreach (var sensor in info.Sensors)
+                            {
+                                var sensorName = sensor.FriendlyName ?? sensor.Name;
+                                var measurements = new System.Collections.Generic.List<string>();
+                                foreach (var kv in sensor.Measurements)
+                                {
+                                    var valueStr = kv.Value is double d ? d.ToString("F1") : kv.Value.ToString();
+                                    measurements.Add($"{kv.Key}: {valueStr}");
+                                }
+                                if (measurements.Count > 0)
+                                {
+                                    lines.Add($"  {sensorName}: {string.Join(", ", measurements)}");
+                                }
+                            }
+                        }
+
+                        var summary = string.Join("\n", lines);
+                        if (!string.IsNullOrWhiteSpace(summary))
+                        {
+                            description += "\n\n" + summary;
+                            // For the stream description keep a compact single-line summary
+                            var compact = info.Filename ?? (info.ProgressPercent.HasValue ? $"{info.ProgressPercent.Value:F0}%" : null);
+                            if (!string.IsNullOrWhiteSpace(compact)) streamDescription += $" — {compact}";
+                        }
+                    }
+                }
+            }
+            catch (Exception mx)
+            {
+                Console.WriteLine($"Warning: failed to query Moonraker for print filename: {mx.Message}");
+            }
 
             Console.WriteLine($"Creating YouTube live broadcast: {title}");
 
