@@ -16,14 +16,9 @@ ffmpeg -version
 ```
 
 ### Step 2: Configure Source (1 minute)
-Edit `appsettings.json`:
-```json
-{
-  "Stream": {
-    "Source": "http://YOUR_PRINTER_IP/webcam/?action=stream"
-  },
-  "Mode": "serve"
-}
+Set your printer stream source at runtime using command-line switches:
+```bash
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode serve
 ```
 
 ### Step 3: Test Locally (1 minute)
@@ -37,31 +32,28 @@ open http://localhost:8080
 
 You should see your printer's camera feed! 🎉
 
-### Step 4: Setup YouTube (2 minutes)
+### Step 4: Setup YouTube (OAuth Only)
 
-#### Option A: Use Manual Stream Key (Easier)
-1. Go to [YouTube Studio](https://studio.youtube.com) → "Go Live"
-2. Copy your stream key
-3. Add to `appsettings.json`:
-```json
-{
-  "YouTube": {
-    "Key": "YOUR_STREAM_KEY_HERE"
-  },
-  "Mode": "stream"
-}
+PrintStreamer now requires Google OAuth for YouTube streaming. Manual stream key mode is no longer supported.
+
+Set your OAuth credentials at runtime using command-line switches:
+```bash
+dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Mode stream
 ```
+**Warning:** Never pass your client secret on the command line in production! Use Docker secrets or a secrets manager for secure deployments. See `DOCKER_RELEASE.md` for secure setup.
 
-#### Option B: Use OAuth (Automated Broadcasts)
-See full guide in [README.md](README.md#youtube-api-setup)
+On first run, a browser window will open for Google authentication. Approve access to your YouTube account.
 
 ### Step 5: Start Streaming! (30 seconds)
 ```bash
 # Stream to YouTube
-dotnet run -- --Mode stream
+dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode stream
 
 # Or run proxy + streaming together
-dotnet run -- --Mode serve
+dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode serve
+
+# Or use poll mode for automated streaming (requires Moonraker API)
+dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" --Mode poll
 ```
 
 ---
@@ -71,58 +63,46 @@ dotnet run -- --Mode serve
 ### Use Case 1: Just Testing?
 ```bash
 # Run proxy server only (no YouTube)
-dotnet run
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode serve
 # View at http://localhost:8080
 ```
 
-### Use Case 2: Stream to Existing YouTube Broadcast?
-```json
-{
-  "YouTube": {
-    "Key": "your-stream-key-from-youtube-studio"
-  },
-  "Mode": "stream"
-}
+### Use Case 2: Stream to YouTube (OAuth)
+```bash
+dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode stream
 ```
+On first run, authorize in your browser. The app will print the YouTube URL.
 
-### Use Case 3: Want Automated Broadcasts?
-1. Get OAuth credentials (see [README.md](README.md#youtube-api-setup))
-2. Add to config:
-```json
-{
-  "YouTube": {
-    "OAuth": {
-      "ClientId": "xxx.apps.googleusercontent.com",
-      "ClientSecret": "GOCSPX-xxx"
-    }
-  },
-  "Mode": "stream"
-}
+### Use Case 3: Poll Mode (Automated Streaming)
+```bash
+dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" --Mode poll
 ```
-3. Run `dotnet run -- --Mode stream`
-4. Authorize in browser (first time only)
-5. Get YouTube URL from console output
+The app will automatically start/stop YouTube streams based on print jobs.
 
 ### Use Case 4: Run in Docker?
 ```bash
 # Build
 docker build -t printstreamer .
 
-# Run
+# Run (example, not secure for secrets)
 docker run -p 8080:8080 \
-  -e Stream__Source="http://YOUR_PRINTER_IP/webcam/?action=stream" \
-  -e Mode=serve \
-  printstreamer
+  printstreamer \
+  --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" \
+  --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" \
+  --Mode poll
 ```
+**Warning:** Never pass your client secret directly in production! Use Docker secrets or a secrets manager. See `DOCKER_RELEASE.md` for secure deployment.
 
 ---
 
 ## 🆘 Quick Troubleshooting
 
 ### Problem: "Error: Stream:Source is required"
-**Fix**: Add source to `appsettings.json` or use environment variable:
+**Fix**: Pass the source as a runtime switch:
 ```bash
-export Stream__Source="http://printer.local/webcam/?action=stream"
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --Mode serve
 ```
 
 ### Problem: "ffmpeg: command not found"

@@ -1,8 +1,14 @@
-# Native .NET Streamer Implementation
+
+# Native .NET Streamer Implementation (Experimental/Broken)
+
+> ⚠️ **Experimental Feature:**
+>
+> The native .NET streamer (`MjpegToRtmpStreamer`) is currently experimental and not production-ready. It is known to be broken and may not function as expected. Use the default `FfmpegStreamer` for all production and real-world streaming.
+
 
 ## Overview
 
-The `MjpegToRtmpStreamer` provides a pure .NET implementation for streaming MJPEG video sources to RTMP destinations. Unlike `FfmpegStreamer` which shells out to ffmpeg entirely, this implementation reads and processes the MJPEG stream directly in .NET code.
+`MjpegToRtmpStreamer` is a pure .NET implementation for streaming MJPEG video sources to RTMP destinations. It is intended for advanced scenarios (frame access, overlays, etc.), but is currently incomplete and broken. For reliable streaming, use `FfmpegStreamer`.
 
 ## Architecture
 

@@ -4,51 +4,30 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 ## 📚 Documentation Structure
 
-### Getting Started
-1. **[QUICKSTART.md](QUICKSTART.md)** - Get up and running in 5 minutes
-   - Installation
-   - Basic configuration
-   - First stream
-   - Common troubleshooting
 
-2. **[README.md](README.md)** - Complete user guide
-   - All features overview
-   - Detailed setup instructions
-   - YouTube OAuth setup
-   - Docker deployment
-   - Configuration reference
+### Getting Started
+1. **[QUICKSTART.md](QUICKSTART.md)** — 5-minute setup, runtime configuration, troubleshooting
+2. **[README.md](README.md)** — High-level guide, navigation, and links to all docs
+3. **[DOCKER_RELEASE.md](DOCKER_RELEASE.md)** — Secure Docker build, secrets, and deployment best practices
+
 
 ### Understanding the System
-3. **[ARCHITECTURE.md](ARCHITECTURE.md)** - Technical deep-dive
-   - Component overview
-   - Data flow diagrams
-   - Class structure
-   - Configuration schema
-   - Error handling
-   - Security considerations
+4. **[ARCHITECTURE.md](ARCHITECTURE.md)** — Technical deep-dive, data flow, configuration, security
+5. **[PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)** — Features, technologies, workflow, roadmap
 
-4. **[PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)** - High-level overview
-   - What we built
-   - Technologies used
-   - Key features
-   - Development workflow
-   - Future roadmap
 
 ### Advanced Topics
-5. **[NATIVE_STREAMER.md](NATIVE_STREAMER.md)** - Native .NET streamer guide
-   - Implementation details
-   - Frame extraction algorithm
-   - Performance characteristics
-   - Use cases
-   - Future enhancements
-   - Image processing libraries
+6. **[NATIVE_STREAMER.md](NATIVE_STREAMER.md)** — Experimental native streamer, architecture, frame extraction, overlays
+7. **[STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)** — Usage patterns, real-world scenarios, code examples
+### Full Documentation List
 
-6. **[STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)** - Usage examples
-   - FFmpeg vs Native comparison
-   - Real-world scenarios
-   - Code examples
-   - Performance benchmarks
-   - Decision matrix
+- [README.md](README.md)
+- [QUICKSTART.md](QUICKSTART.md)
+- [DOCKER_RELEASE.md](DOCKER_RELEASE.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)
+- [NATIVE_STREAMER.md](NATIVE_STREAMER.md)
+- [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
 
 ## 🎯 Quick Navigation
 
@@ -67,7 +46,7 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 → Browse [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
 
 #### Deploy to Production
-→ Follow [README.md#docker](README.md#docker)
+→ See [DOCKER_RELEASE.md](DOCKER_RELEASE.md) for secure Docker and deployment
 
 #### Troubleshoot Issues
 → See [QUICKSTART.md#troubleshooting](QUICKSTART.md#troubleshooting)
@@ -104,12 +83,13 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 ### For Developers
 1. [ARCHITECTURE.md](ARCHITECTURE.md) - System design
-2. [NATIVE_STREAMER.md](NATIVE_STREAMER.md) - Implementation details
+2. [NATIVE_STREAMER.md](NATIVE_STREAMER.md) - Experimental native streamer
 3. [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) - Development workflow
+4. [DOCKER_RELEASE.md](DOCKER_RELEASE.md) - Docker and secrets
 
 ### For DevOps
-1. [README.md#docker](README.md#docker) - Container deployment
-2. [ARCHITECTURE.md#security](ARCHITECTURE.md#security-considerations) - Security setup
+1. [DOCKER_RELEASE.md](DOCKER_RELEASE.md) - Secure Docker deployment
+2. [ARCHITECTURE.md#security](ARCHITECTURE.md#security) - Security setup
 3. [PROJECT_SUMMARY.md#troubleshooting](PROJECT_SUMMARY.md#troubleshooting) - Common issues
 
 ## 🔍 By Topic
@@ -131,8 +111,8 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 ### Docker
 - Quick Start: [QUICKSTART.md#use-case-4](QUICKSTART.md#use-case-4-run-in-docker)
-- Full Guide: [README.md#docker](README.md#docker)
-- Build Process: [ARCHITECTURE.md#docker](ARCHITECTURE.md#docker)
+- Full Guide: [DOCKER_RELEASE.md](DOCKER_RELEASE.md)
+- Build Process: [ARCHITECTURE.md#deployment](ARCHITECTURE.md#deployment)
 
 ### Troubleshooting
 - Common Issues: [QUICKSTART.md#troubleshooting](QUICKSTART.md#troubleshooting)

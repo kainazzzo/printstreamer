@@ -240,11 +240,6 @@ dotnet publish -c Release
 # Build image
 docker build -t printstreamer:local .
 
-# Run with script (auto-builds)
-./scripts/run_printstreamer.sh
-
-# Run with script (skip build)
-SKIP_BUILD=1 ./scripts/run_printstreamer.sh
 ```
 
 ### Testing
@@ -269,8 +264,6 @@ sudo lsof -i :8080
 # Kill process
 sudo kill -9 <PID>
 
-# Or use run script (auto-kills)
-./scripts/run_printstreamer.sh
 ```
 
 ### OAuth Browser Won't Open
@@ -300,10 +293,14 @@ ffmpeg -version
 
 | Document | Purpose |
 |----------|---------|
-| [README.md](README.md) | User guide, setup instructions |
+| [README.md](README.md) | High-level guide, navigation, and links to all docs |
+| [QUICKSTART.md](QUICKSTART.md) | 5-minute setup, runtime configuration, troubleshooting |
+| [DOCKER_RELEASE.md](DOCKER_RELEASE.md) | Secure Docker build, secrets, and deployment best practices |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Technical deep-dive, component details |
-| [NATIVE_STREAMER.md](NATIVE_STREAMER.md) | Native streamer implementation guide |
-| [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md) | Usage examples, comparison |
+| [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | Features, technologies, workflow, roadmap |
+| [NATIVE_STREAMER.md](NATIVE_STREAMER.md) | Experimental native streamer, architecture, frame extraction, overlays |
+| [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md) | Usage patterns, real-world scenarios, code examples |
+| [DOCS_INDEX.md](DOCS_INDEX.md) | Documentation index and navigation |
 
 ## 🎯 Future Roadmap
 
