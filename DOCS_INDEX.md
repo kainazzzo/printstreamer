@@ -72,7 +72,8 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 ### Scripts
 | File | Purpose |
 |------|---------|
-| `scripts/run_printstreamer.sh` | Development helper |
+| `scripts/package.sh` | Build and package the app |
+| `scripts/release.sh` | Build and release artifact |
 
 ## 📖 Reading Guide by Role
 

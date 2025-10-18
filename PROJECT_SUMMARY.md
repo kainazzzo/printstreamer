@@ -23,8 +23,7 @@ printstreamer/
 ├── appsettings.json             # Configuration
 ├── Dockerfile                   # Container build
 ├── printstreamer.csproj         # .NET project file
-├── scripts/
-│   └── run_printstreamer.sh    # Dev helper script
+├── scripts/                    # Helper and deployment scripts
 └── docs/
     ├── README.md               # User guide
     ├── ARCHITECTURE.md         # Technical architecture

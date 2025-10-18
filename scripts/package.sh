@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-ARTIFACT=printstreamer-artifact.tar.gz
+ARTIFACT=printstreamer.tar.gz
 BUILD_DIR=bin/Release/publish
 
 echo "Building .NET project..."
