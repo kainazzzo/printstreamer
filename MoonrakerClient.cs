@@ -96,7 +96,8 @@ internal static class MoonrakerClient
 
         try
         {
-            var endpoint = "/printer/objects/query?select=print_stats";
+            // Query print_stats directly without select to get all fields including state
+            var endpoint = "/printer/objects/query?print_stats";
             Console.WriteLine($"[Moonraker] Querying: {endpoint}");
             var statsResp = await http.GetAsync(endpoint, cancellationToken);
             Console.WriteLine($"[Moonraker] Response status: {statsResp.StatusCode}");
@@ -316,7 +317,14 @@ internal static class MoonrakerClient
             var times = ExtractTimesFromStats(statsNode);
             if (times.elapsed.HasValue) elapsed = times.elapsed;
             if (times.remaining.HasValue) remaining = times.remaining;
-            Console.WriteLine($"[Moonraker] Extracted from stats - Progress: {progress}, Elapsed: {elapsed}, Remaining: {remaining}");
+            // Try to extract state from print_stats (common location for Moonraker)
+            var extractedState = ExtractStateFromStats(statsNode);
+            if (!string.IsNullOrWhiteSpace(extractedState))
+            {
+                state = extractedState;
+                Console.WriteLine($"[Moonraker] Extracted state from print_stats: {state}");
+            }
+            Console.WriteLine($"[Moonraker] Extracted from stats - Progress: {progress}, Elapsed: {elapsed}, Remaining: {remaining}, State: {state}");
         }
         if (hasDisplayData)
         {
@@ -370,13 +378,23 @@ internal static class MoonrakerClient
     private static bool IsNullResponse(JsonNode? node, string selectKey)
     {
         // Check if the response has the pattern: {"result":{"status":{"select":{selectKey:null}}}}
+        // OR {"result":{"status":{selectKey:...}}} (for direct queries like ?print_stats)
         if (node is JsonObject obj &&
             obj.TryGetPropertyValue("result", out var result) && result is JsonObject resObj &&
-            resObj.TryGetPropertyValue("status", out var status) && status is JsonObject statObj &&
-            statObj.TryGetPropertyValue("select", out var select) && select is JsonObject selObj &&
-            selObj.TryGetPropertyValue(selectKey, out var value))
+            resObj.TryGetPropertyValue("status", out var status) && status is JsonObject statObj)
         {
-            return value == null || value.ToString() == "null";
+            // First check for select pattern: {"result":{"status":{"select":{selectKey:...}}}}
+            if (statObj.TryGetPropertyValue("select", out var select) && select is JsonObject selObj &&
+                selObj.TryGetPropertyValue(selectKey, out var value))
+            {
+                return value == null || value.ToString() == "null";
+            }
+            
+            // Also check for direct pattern: {"result":{"status":{selectKey:...}}}
+            if (statObj.TryGetPropertyValue(selectKey, out var directValue))
+            {
+                return directValue == null || directValue.ToString() == "null";
+            }
         }
         return true; // If the structure doesn't match, consider it null
     }
@@ -559,6 +577,41 @@ internal static class MoonrakerClient
         }
         catch { }
         return (null, null);
+    }
+
+    private static string? ExtractStateFromStats(JsonNode? statsNode)
+    {
+        try
+        {
+            // stats result -> status -> print_stats -> state
+            if (statsNode is JsonObject s && s.TryGetPropertyValue("result", out var res) && res is JsonObject r)
+            {
+                // Try direct print_stats access (result.print_stats.state)
+                if (r.TryGetPropertyValue("print_stats", out var ps) && ps is JsonObject psobj)
+                {
+                    if (psobj.TryGetPropertyValue("state", out var st) && st != null)
+                    {
+                        var stStr = st.ToString();
+                        if (!string.IsNullOrWhiteSpace(stStr)) return stStr;
+                    }
+                }
+                
+                // Try status -> print_stats access (result.status.print_stats.state - common Moonraker structure)
+                if (r.TryGetPropertyValue("status", out var status) && status is JsonObject statusObj)
+                {
+                    if (statusObj.TryGetPropertyValue("print_stats", out var ps2) && ps2 is JsonObject psobj2)
+                    {
+                        if (psobj2.TryGetPropertyValue("state", out var st2) && st2 != null)
+                        {
+                            var stStr2 = st2.ToString();
+                            if (!string.IsNullOrWhiteSpace(stStr2)) return stStr2;
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 
     private static (double? bedActual, double? bedTarget, double? tool0Actual, double? tool0Target) ExtractTempsFromDisplay(JsonNode? dispNode)

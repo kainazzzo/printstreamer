@@ -8,3 +8,4 @@ obj/
 node_modules/
 youtube_token.json
 appsettings.Local.json
+timelapse/

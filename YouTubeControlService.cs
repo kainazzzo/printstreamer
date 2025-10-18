@@ -43,6 +43,12 @@ internal class YouTubeControlService : IDisposable
             Console.WriteLine("Invalid broadcastId for thumbnail update.");
             return false;
         }
+        if (imageBytes == null || imageBytes.Length == 0)
+        {
+            Console.WriteLine("Invalid image data for thumbnail update (null or empty).");
+            return false;
+        }
+        Console.WriteLine($"Uploading thumbnail: broadcastId={broadcastId}, size={imageBytes.Length} bytes");
         try
         {
             using var ms = new MemoryStream(imageBytes);
@@ -56,15 +62,131 @@ internal class YouTubeControlService : IDisposable
             else
             {
                 Console.WriteLine($"Thumbnail upload failed: {response.Status}");
+                if (response.Exception != null)
+                {
+                    Console.WriteLine($"Upload exception: {response.Exception.Message}");
+                    if (response.Exception.InnerException != null)
+                    {
+                        Console.WriteLine($"Inner exception: {response.Exception.InnerException.Message}");
+                    }
+                }
                 return false;
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error updating thumbnail: {ex.Message}");
+            Console.WriteLine($"Exception details: {ex}");
             return false;
         }
     }
+
+    /// <summary>
+    /// Upload a timelapse video to YouTube as a regular video (not a live stream).
+    /// </summary>
+    public async Task<string?> UploadTimelapseVideoAsync(string videoFilePath, string? filename = null, CancellationToken cancellationToken = default)
+    {
+        if (_youtubeService == null)
+        {
+            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            return null;
+        }
+        if (!File.Exists(videoFilePath))
+        {
+            Console.WriteLine($"Video file not found: {videoFilePath}");
+            return null;
+        }
+
+        try
+        {
+            var fileInfo = new FileInfo(videoFilePath);
+            Console.WriteLine($"Uploading timelapse video: {videoFilePath} ({fileInfo.Length} bytes)");
+
+            // Build title and description from config and filename
+            var baseTitle = _config["YouTube:LiveBroadcast:Title"] ?? "Print Streamer";
+            var baseDescription = _config["YouTube:LiveBroadcast:Description"] ?? "3D print timelapse";
+            var privacy = _config["YouTube:TimelapseUpload:Privacy"] ?? _config["YouTube:LiveBroadcast:Privacy"] ?? "unlisted";
+            var categoryId = _config["YouTube:TimelapseUpload:CategoryId"] ?? _config["YouTube:LiveBroadcast:CategoryId"] ?? "28";
+
+            // Clean up filename for title
+            string cleanFilename = "Unknown Print";
+            if (!string.IsNullOrWhiteSpace(filename))
+            {
+                cleanFilename = Path.GetFileNameWithoutExtension(filename);
+            }
+
+            var title = $"{baseTitle} - {cleanFilename} - Timelapse";
+            var description = $"{baseDescription}\n\nTimelapse of {cleanFilename}";
+
+            var video = new Video
+            {
+                Snippet = new VideoSnippet
+                {
+                    Title = title,
+                    Description = description,
+                    CategoryId = categoryId
+                },
+                Status = new VideoStatus
+                {
+                    PrivacyStatus = privacy,
+                    SelfDeclaredMadeForKids = false
+                }
+            };
+
+            using var fileStream = new FileStream(videoFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var videosInsertRequest = _youtubeService.Videos.Insert(video, "snippet,status", fileStream, "video/*");
+            
+            // Track upload progress
+            videosInsertRequest.ProgressChanged += progress =>
+            {
+                switch (progress.Status)
+                {
+                    case Google.Apis.Upload.UploadStatus.Uploading:
+                        var percent = (progress.BytesSent * 100.0) / fileStream.Length;
+                        Console.WriteLine($"Upload progress: {percent:F1}% ({progress.BytesSent}/{fileStream.Length} bytes)");
+                        break;
+                    case Google.Apis.Upload.UploadStatus.Completed:
+                        Console.WriteLine("Upload completed successfully!");
+                        break;
+                    case Google.Apis.Upload.UploadStatus.Failed:
+                        Console.WriteLine($"Upload failed: {progress.Exception?.Message}");
+                        break;
+                }
+            };
+
+            videosInsertRequest.ResponseReceived += uploadedVideo =>
+            {
+                Console.WriteLine($"Video uploaded successfully! Video ID: {uploadedVideo.Id}");
+                Console.WriteLine($"Video URL: https://www.youtube.com/watch?v={uploadedVideo.Id}");
+            };
+
+            var uploadedVideoResponse = await videosInsertRequest.UploadAsync(cancellationToken);
+            
+            if (uploadedVideoResponse.Status == Google.Apis.Upload.UploadStatus.Completed)
+            {
+                var videoId = videosInsertRequest.ResponseBody?.Id;
+                Console.WriteLine($"Timelapse video uploaded successfully! ID: {videoId}");
+                return videoId;
+            }
+            else
+            {
+                Console.WriteLine($"Video upload failed with status: {uploadedVideoResponse.Status}");
+                if (uploadedVideoResponse.Exception != null)
+                {
+                    Console.WriteLine($"Exception: {uploadedVideoResponse.Exception.Message}");
+                    Console.WriteLine($"Details: {uploadedVideoResponse.Exception}");
+                }
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error uploading timelapse video: {ex.Message}");
+            Console.WriteLine($"Exception details: {ex}");
+            return null;
+        }
+    }
+
     /// Try to extract a base printer URI (scheme + host) from the configured Stream:Source URL.
     /// Returns a Uri pointing at the printer host with port 7125 (Moonraker default) when possible.
     /// </summary>
