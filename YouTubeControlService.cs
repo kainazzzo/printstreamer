@@ -739,7 +739,7 @@ internal class YouTubeControlService : IDisposable
     /// <summary>
     /// Wait for ingestion to be active and attempt to transition the broadcast to live with retries and diagnostics.
     /// </summary>
-    public async Task<bool> TransitionBroadcastToLiveWhenReadyAsync(string broadcastId, TimeSpan? maxWait = null, int maxAttempts = 3, CancellationToken cancellationToken = default)
+    public async Task<bool> TransitionBroadcastToLiveWhenReadyAsync(string broadcastId, TimeSpan? maxWait = null, int maxAttempts = 12, CancellationToken cancellationToken = default)
     {
         if (_youtubeService == null)
         {
@@ -747,7 +747,8 @@ internal class YouTubeControlService : IDisposable
             return false;
         }
 
-        maxWait ??= TimeSpan.FromSeconds(90);
+        // Give YouTube more time to detect ingestion for variable sources/networks
+        maxWait ??= TimeSpan.FromSeconds(180);
         var attempt = 0;
         var deadline = DateTime.UtcNow + maxWait.Value;
 
@@ -766,6 +767,21 @@ internal class YouTubeControlService : IDisposable
             try
             {
                 Console.WriteLine($"Attempt {attempt} to transition broadcast {broadcastId} to live...");
+                // Check current broadcast lifecycle status first to avoid redundant transitions
+                var listReq = _youtubeService.LiveBroadcasts.List("id,status");
+                listReq.Id = broadcastId;
+                var current = await listReq.ExecuteAsync(cancellationToken);
+                if (current.Items != null && current.Items.Count > 0)
+                {
+                    var life = current.Items[0].Status?.LifeCycleStatus;
+                    Console.WriteLine($"Current broadcast lifecycle: {life}");
+                    if (string.Equals(life, "live", StringComparison.OrdinalIgnoreCase) || string.Equals(life, "liveStarting", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine("Broadcast already live/liveStarting; skipping transition.");
+                        return true;
+                    }
+                }
+
                 var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
                     LiveBroadcastsResource.TransitionRequest.BroadcastStatusEnum.Live,
                     broadcastId,
@@ -776,27 +792,39 @@ internal class YouTubeControlService : IDisposable
                 Console.WriteLine($"Transition succeeded: {result.Status.LifeCycleStatus}");
                 return true;
             }
-            catch (Google.GoogleApiException gae)
-            {
-                Console.WriteLine($"Transition attempt {attempt} failed: {gae.Message}");
-                Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
-                if (gae.Error != null)
+                catch (Google.GoogleApiException gae)
                 {
-                    Console.WriteLine($"Google API error message: {gae.Error.Message}");
-                    if (gae.Error.Errors != null)
+                    Console.WriteLine($"Transition attempt {attempt} failed: {gae.Message}");
+                    Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+
+                    // Log API error details if present
+                    if (gae.Error != null)
                     {
-                        Console.WriteLine("Details:");
-                        foreach (var e in gae.Error.Errors)
+                        Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                        if (gae.Error.Errors != null)
                         {
-                            Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                            Console.WriteLine("Details:");
+                            foreach (var e in gae.Error.Errors)
+                            {
+                                Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                            }
+
+                            // If this error is a redundant or invalid transition, consider it success
+                            foreach (var e in gae.Error.Errors)
+                            {
+                                if (string.Equals(e.Reason, "redundantTransition", StringComparison.OrdinalIgnoreCase) || string.Equals(e.Reason, "invalidTransition", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    Console.WriteLine($"Received {e.Reason}; treating transition as success.");
+                                    return true;
+                                }
+                            }
                         }
                     }
-                }
 
-                // Dump diagnostics: LiveBroadcast and LiveStream
-                try { await LogBroadcastAndStreamResourcesAsync(broadcastId, null, cancellationToken); } catch { }
+                    // Dump diagnostics: LiveBroadcast and LiveStream
+                    try { await LogBroadcastAndStreamResourcesAsync(broadcastId, _lastCreatedStreamId, cancellationToken); } catch { }
 
-                if (attempt < maxAttempts)
+                    if (attempt < maxAttempts)
                 {
                     var backoff = TimeSpan.FromSeconds(2 * attempt);
                     Console.WriteLine($"Retrying in {backoff.TotalSeconds}s...");
@@ -804,7 +832,8 @@ internal class YouTubeControlService : IDisposable
                 }
                 else
                 {
-                    Console.WriteLine("Max transition attempts reached; giving up.");
+                    Console.WriteLine("Max transition attempts reached; giving up on transitioning the broadcast.");
+                    Console.WriteLine("Note: the ffmpeg media push will continue, and viewers may still see the stream depending on YouTube settings. You can manually 'Go Live' or transition the broadcast in YouTube Studio if needed.");
                 }
             }
             catch (Exception ex)
