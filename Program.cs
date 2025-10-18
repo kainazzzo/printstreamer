@@ -54,17 +54,27 @@ if (!readOnly && !serve && !useOAuth && string.IsNullOrWhiteSpace(key))
 	return;
 }
 
+// Top-level cancellation token for graceful shutdown (propagated to streamers)
+var appCts = new CancellationTokenSource();
 Console.CancelKeyPress += (s, e) =>
 {
 	Console.WriteLine("Stopping (Ctrl+C)...");
-	// allow process to exit; individual components handle cancellation/stop
-	e.Cancel = true;
+	// request cancellation for all linked operations
+	try { appCts.Cancel(); } catch { }
+	e.Cancel = true; // prevent abrupt process exit so we can clean up
 };
 
 if (readOnly)
 {
 	var reader = new MjpegReader(source!);
 	await reader.StartAsync(CancellationToken.None);
+	return;
+}
+
+if (mode == "testsrc")
+{
+	// Special diagnostic mode: create a YouTube broadcast+stream and push a test pattern (RTMPS) while polling ingestion.
+	await StartTestPushAsync(config, appCts.Token);
 	return;
 }
 
@@ -88,7 +98,8 @@ if (serve)
 	CancellationTokenSource? streamCts = null;
 	if (useOAuth || !string.IsNullOrWhiteSpace(key))
 	{
-		streamCts = new CancellationTokenSource();
+		// Link the stream cancellation to the top-level app cancellation token
+		streamCts = CancellationTokenSource.CreateLinkedTokenSource(appCts.Token);
 		streamTask = Task.Run(async () =>
 		{
 			try
@@ -188,7 +199,7 @@ if (serve)
 }
 
 // Default mode: stream to YouTube
-await StartYouTubeStreamAsync(config, source!, key, CancellationToken.None);
+await StartYouTubeStreamAsync(config, source!, key, appCts.Token);
 
 static async Task StartYouTubeStreamAsync(IConfiguration config, string source, string? manualKey, CancellationToken cancellationToken)
 {
@@ -228,6 +239,15 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 			broadcastId = result.broadcastId;
 
 			Console.WriteLine($"YouTube broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
+					// Dump the LiveBroadcast and LiveStream resources for debugging
+					try
+					{
+						await ytService.LogBroadcastAndStreamResourcesAsync(broadcastId, null, cancellationToken);
+					}
+					catch (Exception ex)
+					{
+						Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
+					}
 		}
 		else if (!string.IsNullOrWhiteSpace(manualKey))
 		{
@@ -246,28 +266,44 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 		var useNativeStreamer = config.GetValue<bool>("Stream:UseNativeStreamer");
 		
 		IStreamer streamer;
+		var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
+		var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
+
 		if (useNativeStreamer)
 		{
-			Console.WriteLine($"Starting native .NET streamer to {rtmpUrl}/***");
-			streamer = new MjpegToRtmpStreamer(source, fullRtmpUrl);
+			Console.WriteLine($"Starting native .NET streamer to {rtmpUrl}/*** (fps={targetFps}, kbps={bitrateKbps})");
+			streamer = new MjpegToRtmpStreamer(source, fullRtmpUrl, targetFps, bitrateKbps);
 		}
 		else
 		{
-			Console.WriteLine($"Starting ffmpeg streamer to {rtmpUrl}/***");
-			streamer = new FfmpegStreamer(source, fullRtmpUrl);
+			Console.WriteLine($"Starting ffmpeg streamer to {rtmpUrl}/*** (fps={targetFps}, kbps={bitrateKbps})");
+			streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps);
 		}
 		
-		await streamer.StartAsync(cancellationToken);
+		// Start streamer without awaiting so we can detect ingestion while it's running
+		var streamerStartTask = streamer.StartAsync(cancellationToken);
 
 		// If we created a broadcast, transition it to live
 		if (ytService != null && broadcastId != null)
 		{
-			Console.WriteLine("Stream started, waiting a few seconds before transitioning to live...");
-			await Task.Delay(10000, cancellationToken); // Give ffmpeg time to connect
-			await ytService.TransitionBroadcastToLiveAsync(broadcastId, cancellationToken);
+			Console.WriteLine("Stream started, waiting for YouTube ingestion to become active before transitioning to live...");
+			// Wait up to 90s for ingestion to be detected by YouTube
+			var ingestionOk = await ytService.WaitForIngestionAsync(null, TimeSpan.FromSeconds(90), cancellationToken);
+			if (!ingestionOk)
+			{
+				Console.WriteLine("Warning: ingestion not active. Attempting transition anyway (may fail)...");
+			}
+			if (!cancellationToken.IsCancellationRequested)
+			{
+				await ytService.TransitionBroadcastToLiveWhenReadyAsync(broadcastId, TimeSpan.FromSeconds(90), 3, cancellationToken);
+			}
+			else
+			{
+				Console.WriteLine("Cancellation requested before transition; skipping TransitionBroadcastToLive.");
+			}
 		}
 
-		// Wait for the stream to end
+		// Wait for the stream to end (started earlier)
 		await streamer.ExitTask;
 	}
 	catch (OperationCanceledException)
@@ -296,6 +332,98 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 
 		ytService?.Dispose();
 	}
+}
+
+static async Task StartTestPushAsync(IConfiguration config, CancellationToken cancellationToken)
+{
+	var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
+	var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
+	if (string.IsNullOrWhiteSpace(oauthClientId) || string.IsNullOrWhiteSpace(oauthClientSecret))
+	{
+		Console.WriteLine("You must provide YouTube OAuth credentials in config to run testsrc mode.");
+		return;
+	}
+
+	var yt = new YouTubeBroadcastService(config);
+	if (!await yt.AuthenticateAsync(cancellationToken))
+	{
+		Console.WriteLine("Failed to authenticate for testsrc.");
+		return;
+	}
+
+	var res = await yt.CreateLiveBroadcastAsync(cancellationToken);
+	if (res.rtmpUrl == null || res.streamKey == null)
+	{
+		Console.WriteLine("Failed to create broadcast for testsrc.");
+		return;
+	}
+
+	var rtmpsUrl = res.rtmpUrl.Replace("rtmp://", "rtmps://") + "/" + res.streamKey;
+	Console.WriteLine($"Pushing testsrc to: {rtmpsUrl}");
+
+	// Start ffmpeg pushing testsrc
+	var psi = new System.Diagnostics.ProcessStartInfo
+	{
+		FileName = "ffmpeg",
+		Arguments = $"-re -f lavfi -i testsrc=size=640x480:rate=6 -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -pix_fmt yuv420p -b:v 800k -maxrate 800k -bufsize 1600k -g 12 -f flv \"{rtmpsUrl}\"",
+		UseShellExecute = false,
+		RedirectStandardError = true,
+		RedirectStandardOutput = true,
+		CreateNoWindow = true
+	};
+
+	using var proc = System.Diagnostics.Process.Start(psi)!;
+	if (proc == null)
+	{
+		Console.WriteLine("Failed to start ffmpeg for test push.");
+		return;
+	}
+
+	// read stderr asynchronously to avoid blocking
+	_ = Task.Run(async () =>
+	{
+		var sr = proc.StandardError;
+		string? line;
+		while ((line = await sr.ReadLineAsync()) != null)
+		{
+			if (!string.IsNullOrWhiteSpace(line)) Console.WriteLine("[ffmpeg] " + line);
+		}
+	});
+
+	// Poll ingestion while ffmpeg runs (timeout 45s)
+	var pollTask = Task.Run(async () =>
+	{
+		var ok = await yt.WaitForIngestionAsync(null, TimeSpan.FromSeconds(45), cancellationToken);
+		Console.WriteLine($"Ingestion active: {ok}");
+		return ok;
+	});
+
+	// Wait for either proc exit or poll timeout
+	var finished = await Task.WhenAny(proc.WaitForExitAsync(cancellationToken), pollTask);
+	if (finished == pollTask)
+	{
+		Console.WriteLine("Poll completed. Killing ffmpeg push.");
+		try { proc.Kill(true); } catch { }
+	}
+	else
+	{
+		Console.WriteLine("ffmpeg exited before poll completed.");
+	}
+
+	// Attempt to transition if ingestion active
+	if (pollTask.IsCompleted && pollTask.Result)
+	{
+		Console.WriteLine("Attempting to transition broadcast to live after successful ingestion...");
+		await yt.TransitionBroadcastToLiveWhenReadyAsync(res.broadcastId ?? string.Empty, TimeSpan.FromSeconds(30), 3, cancellationToken);
+	}
+
+	// cleanup
+	Console.WriteLine("Ending test broadcast...");
+	if (!string.IsNullOrEmpty(res.broadcastId))
+	{
+		await yt.EndBroadcastAsync(res.broadcastId, CancellationToken.None);
+	}
+	yt.Dispose();
 }
 
 static void PrintHelp()

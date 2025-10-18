@@ -1,25 +1,30 @@
 using System.Diagnostics;
 
 class FfmpegStreamer : IStreamer
+
 {
 	private readonly string _source;
 	private readonly string _rtmpUrl;
+	private readonly int _targetFps;
+	private readonly int _bitrateKbps;
 	private Process? _proc;
 	private TaskCompletionSource<object?>? _exitTcs;
 
 	public Task ExitTask => _exitTcs?.Task ?? Task.CompletedTask;
 
-	public FfmpegStreamer(string source, string rtmpUrl)
+	public FfmpegStreamer(string source, string rtmpUrl, int targetFps = 6, int bitrateKbps = 800)
 	{
 		_source = source;
 		_rtmpUrl = rtmpUrl;
+		_targetFps = targetFps <= 0 ? 6 : targetFps;
+		_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 	}
 
 	public Task StartAsync(CancellationToken cancellationToken = default)
 	{
 		_exitTcs = new TaskCompletionSource<object?>();
 
-		var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl);
+	var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps);
 
 		Console.WriteLine($"Starting ffmpeg with args: {ffmpegArgs}");
 
@@ -89,7 +94,7 @@ class FfmpegStreamer : IStreamer
 		}
 	}
 
-	private static string BuildFfmpegArgs(string source, string rtmpUrl)
+	private static string BuildFfmpegArgs(string source, string rtmpUrl, int fps, int bitrateKbps)
 	{
 		// Basic ffmpeg args that should work for many MJPEG/http or v4l2 inputs.
 		// -re to read input at native frame rate
@@ -104,8 +109,9 @@ class FfmpegStreamer : IStreamer
 			inputFormat = "-f v4l2 ";
 		}
 
-		// Build encoding args
-		var encArgs = "-c:v libx264 -preset veryfast -pix_fmt yuv420p -g 50 -b:v 2500k -maxrate 2500k -bufsize 5000k";
+	// Build encoding args tuned for target fps/bitrate
+	var gop = Math.Max(2, fps * 2);
+	var encArgs = $"-c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
 
 		// Disable audio
 		var audioArgs = "-an";
@@ -113,7 +119,10 @@ class FfmpegStreamer : IStreamer
 		// Final output to rtmp flv
 		var outArgs = $"-f flv {rtmpUrl}";
 
-		return $"-re {inputFormat}-i \"{srcArg}\" {encArgs} {audioArgs} {outArgs}";
+		// Add input frame rate hint for better behavior on low-frame-rate sources
+		var fpsArg = $"-r {fps}";
+
+		return $"-re {inputFormat}-i \"{srcArg}\" {fpsArg} {encArgs} {audioArgs} {outArgs}";
 	}
 
 	public void Dispose()

@@ -1,8 +1,10 @@
 using System;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 /// <summary>
@@ -17,15 +19,27 @@ internal class MjpegToRtmpStreamer : IStreamer
 	private readonly TaskCompletionSource<object?> _exitTcs;
 	private CancellationTokenSource? _cts;
 	private Task? _streamTask;
+	private readonly Channel<byte[]> _frameChannel;
+	private readonly int _targetFps;
+	private readonly int _bitrateKbps;
 
 	public Task ExitTask => _exitTcs.Task;
 
-	public MjpegToRtmpStreamer(string sourceUrl, string rtmpUrl)
+	public MjpegToRtmpStreamer(string sourceUrl, string rtmpUrl, int targetFps = 6, int bitrateKbps = 800, int maxQueue = 8)
 	{
 		_sourceUrl = sourceUrl;
 		_rtmpUrl = rtmpUrl;
 		_httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 		_exitTcs = new TaskCompletionSource<object?>();
+		_targetFps = targetFps <= 0 ? 6 : targetFps;
+		_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
+		var options = new BoundedChannelOptions(maxQueue > 0 ? maxQueue : 8)
+		{
+			FullMode = BoundedChannelFullMode.DropOldest,
+			SingleReader = true,
+			SingleWriter = false
+		};
+		_frameChannel = Channel.CreateBounded<byte[]>(options);
 	}
 
 	/// <summary>
@@ -39,7 +53,11 @@ internal class MjpegToRtmpStreamer : IStreamer
 		{
 			try
 			{
-				await StreamLoopAsync(_cts.Token);
+				// Start producer and consumer
+				var producer = Task.Run(() => StreamProducerAsync(_cts.Token), _cts.Token);
+				var consumer = Task.Run(() => StreamConsumerAsync(_cts.Token), _cts.Token);
+
+				await Task.WhenAll(producer, consumer);
 			}
 			catch (OperationCanceledException)
 			{
@@ -66,7 +84,7 @@ internal class MjpegToRtmpStreamer : IStreamer
 		_cts?.Cancel();
 	}
 
-	private async Task StreamLoopAsync(CancellationToken cancellationToken)
+	private async Task StreamProducerAsync(CancellationToken cancellationToken)
 	{
 		Console.WriteLine($"Connecting to MJPEG source: {_sourceUrl}");
 
@@ -96,56 +114,105 @@ internal class MjpegToRtmpStreamer : IStreamer
 		Console.WriteLine($"MJPEG boundary: {boundary ?? "(auto-detect)"}");
 
 		using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-		
-		// Initialize RTMP connection
-		using var rtmpConnection = new RtmpConnection(_rtmpUrl);
-		await rtmpConnection.ConnectAsync(cancellationToken);
 
-		Console.WriteLine("Streaming started...");
+		Console.WriteLine("Producer connected to source, extracting frames...");
 
-		// Read and process frames
+		// Read and extract frames, pushing them into the bounded channel
 		var frameExtractor = new MjpegFrameExtractor(boundary);
-		var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
-		int frameCount = 0;
-		DateTime lastFrameTime = DateTime.UtcNow;
-		
+		var buffer = ArrayPool<byte>.Shared.Rent(32 * 1024);
 		try
 		{
 			while (!cancellationToken.IsCancellationRequested)
 			{
 				var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
-				if (bytesRead == 0)
-				{
-					Console.WriteLine("Source stream ended.");
-					break;
-				}
+				if (bytesRead == 0) break;
 
 				frameExtractor.AppendData(buffer.AsSpan(0, bytesRead));
 
-				// Extract and send all available frames
 				while (frameExtractor.TryExtractFrame(out var frameData))
 				{
-					frameCount++;
-					var now = DateTime.UtcNow;
-					var frameDelta = (now - lastFrameTime).TotalMilliseconds;
-					lastFrameTime = now;
-
-					if (frameCount % 30 == 0)
-					{
-						Console.WriteLine($"Frame {frameCount}: {frameData.Length} bytes, delta: {frameDelta:F1}ms");
-					}
-
-					// Send frame to RTMP
-					await rtmpConnection.SendFrameAsync(frameData, cancellationToken);
+					// Try to write to channel; if full, older frames are dropped by policy
+					await _frameChannel.Writer.WriteAsync(frameData.ToArray(), cancellationToken);
 				}
 			}
 		}
 		finally
 		{
 			ArrayPool<byte>.Shared.Return(buffer);
+			_frameChannel.Writer.Complete();
 		}
+	}
 
-		Console.WriteLine($"Stream ended. Total frames: {frameCount}");
+	private async Task StreamConsumerAsync(CancellationToken cancellationToken)
+	{
+		// Initialize RTMP connection and encoder (with simple reconnect logic)
+		RtmpConnection? rtmpConnection = null;
+		try
+		{
+			rtmpConnection = new RtmpConnection(_rtmpUrl, _targetFps, _bitrateKbps);
+			await rtmpConnection.ConnectAsync(cancellationToken);
+			Console.WriteLine($"Consumer started: targetFps={_targetFps}, bitrate={_bitrateKbps}kbps");
+
+			var minFrameInterval = TimeSpan.FromMilliseconds(1000.0 / _targetFps);
+			DateTime lastSent = DateTime.MinValue;
+			int sent = 0;
+
+			await foreach (var frame in _frameChannel.Reader.ReadAllAsync(cancellationToken))
+			{
+				var now = DateTime.UtcNow;
+				var since = now - lastSent;
+				if (since < minFrameInterval)
+				{
+					var wait = minFrameInterval - since;
+					await Task.Delay(wait, cancellationToken);
+				}
+
+				// Attempt to send with a small reconnect/retry loop for transient failures
+				const int maxSendAttempts = 3;
+				int attempt = 0;
+				bool sentOk = false;
+				while (attempt < maxSendAttempts && !sentOk && !cancellationToken.IsCancellationRequested)
+				{
+					attempt++;
+					try
+					{
+						if (rtmpConnection == null)
+						{
+							rtmpConnection = new RtmpConnection(_rtmpUrl, _targetFps, _bitrateKbps);
+							await rtmpConnection.ConnectAsync(cancellationToken);
+						}
+						await rtmpConnection.SendFrameAsync(frame, cancellationToken);
+						sentOk = true;
+						lastSent = DateTime.UtcNow;
+						sent++;
+						if (sent % 30 == 0) Console.WriteLine($"Sent frames: {sent}");
+					}
+					catch (OperationCanceledException) { throw; }
+					catch (Exception ex)
+					{
+						// Log full exception for diagnostics
+						Console.WriteLine($"Error sending frame (attempt {attempt}/{maxSendAttempts}): {ex}");
+						// Dispose and null out connection so we recreate it on next attempt
+						try { rtmpConnection?.Dispose(); } catch { }
+						rtmpConnection = null;
+						// brief backoff before retrying
+						await Task.Delay(1500, cancellationToken);
+					}
+				}
+
+				if (!sentOk)
+				{
+					Console.WriteLine("Failed to send frame after retries — aborting consumer.");
+					break; // exit the frame loop and stop the streamer
+				}
+			}
+
+			Console.WriteLine($"Consumer finished, total sent: {sent}");
+		}
+		finally
+		{
+			try { rtmpConnection?.Dispose(); } catch { }
+		}
 	}
 
 	public void Dispose()
@@ -250,12 +317,19 @@ internal class MjpegFrameExtractor
 internal class RtmpConnection : IDisposable
 {
 	private readonly string _rtmpUrl;
+	private readonly int _fps;
+	private readonly int _bitrateKbps;
 	private System.Diagnostics.Process? _ffmpegProcess;
 	private Stream? _ffmpegInputStream;
+	// Keep recent ffmpeg stderr lines in memory for diagnostics
+	private readonly ConcurrentQueue<string> _ffmpegStderr = new ConcurrentQueue<string>();
+	private const int _ffmpegStderrMax = 100;
 
-	public RtmpConnection(string rtmpUrl)
+	public RtmpConnection(string rtmpUrl, int fps = 30, int bitrateKbps = 800)
 	{
 		_rtmpUrl = rtmpUrl;
+		_fps = fps <= 0 ? 30 : fps;
+		_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 	}
 
 	public async Task ConnectAsync(CancellationToken cancellationToken)
@@ -282,12 +356,19 @@ internal class RtmpConnection : IDisposable
 		_ffmpegProcess = new System.Diagnostics.Process { StartInfo = psi };
 		_ffmpegProcess.ErrorDataReceived += (s, e) => 
 		{ 
-			if (e.Data != null && e.Data.Contains("frame="))
+			if (!string.IsNullOrEmpty(e.Data))
 			{
-				// Only log every ~100 frames to avoid spam
-				if (e.Data.Contains("frame= ") && int.TryParse(e.Data.Split("frame=")[1].Trim().Split(' ')[0], out var frameNum) && frameNum % 100 == 0)
+				// store recent stderr lines
+				_ffmpegStderr.Enqueue(e.Data);
+				while (_ffmpegStderr.Count > _ffmpegStderrMax && _ffmpegStderr.TryDequeue(out _)) { }
+
+				if (e.Data.Contains("frame="))
 				{
-					Console.WriteLine($"[ffmpeg] {e.Data.Trim()}");
+					// Only log every ~100 frames to avoid spam
+					if (e.Data.Contains("frame= ") && int.TryParse(e.Data.Split("frame=")[1].Trim().Split(' ')[0], out var frameNum) && frameNum % 100 == 0)
+					{
+						Console.WriteLine($"[ffmpeg] {e.Data.Trim()}");
+					}
 				}
 			}
 		};
@@ -311,29 +392,57 @@ internal class RtmpConnection : IDisposable
 			throw new InvalidOperationException("Not connected. Call ConnectAsync first.");
 		}
 
-		try
-		{
-			// Write JPEG frame directly to ffmpeg stdin
-			await _ffmpegInputStream.WriteAsync(jpegData, cancellationToken);
-			await _ffmpegInputStream.FlushAsync(cancellationToken);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Error sending frame to RTMP: {ex.Message}");
-			throw;
-		}
+			try
+			{
+				// Write JPEG frame directly to ffmpeg stdin
+				await _ffmpegInputStream.WriteAsync(jpegData, cancellationToken);
+				await _ffmpegInputStream.FlushAsync(cancellationToken);
+			}
+			catch (Exception ex)
+			{
+				// If ffmpeg has exited, include its exit code and recent stderr to help debug Broken pipe
+				var extra = string.Empty;
+				try
+				{
+					if (_ffmpegProcess != null && _ffmpegProcess.HasExited)
+					{
+						extra = $" (ffmpeg exited with code {_ffmpegProcess.ExitCode})";
+					}
+				}
+				catch { }
+
+				// collect recent stderr lines
+				try
+				{
+					if (_ffmpegStderr.Count > 0)
+					{
+						extra += "\nRecent ffmpeg stderr:";
+						foreach (var line in _ffmpegStderr)
+						{
+							extra += "\n  " + line;
+						}
+					}
+				}
+				catch { }
+
+				Console.WriteLine($"Error sending frame to RTMP: {ex.Message}{extra}");
+				throw;
+			}
 	}
 
-	private static string BuildFfmpegPipeArgs(string rtmpUrl)
+	private string BuildFfmpegPipeArgs(string rtmpUrl)
 	{
 		// Read MJPEG frames from stdin, re-encode to H.264, output to RTMP
 		// -f image2pipe tells ffmpeg to expect a stream of images
 		// -c:v mjpeg tells it the input codec
-		// -r 30 sets output framerate (adjust as needed)
-		return $"-f image2pipe -c:v mjpeg -r 30 -i pipe:0 " +
-		       $"-c:v libx264 -preset veryfast -pix_fmt yuv420p -g 50 " +
-		       $"-b:v 2500k -maxrate 2500k -bufsize 5000k " +
-		       $"-an -f flv \"{rtmpUrl}\"";
+		// -r sets output framerate
+		var fpsArg = $"-r {_fps}";
+		var bitrateArg = $"-b:v {_bitrateKbps}k -maxrate {_bitrateKbps}k -bufsize {_bitrateKbps * 2}k";
+		// Use tune and profile for low-latency small streams
+		return $"-f image2pipe -c:v mjpeg {fpsArg} -i pipe:0 " +
+			   $"-c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -pix_fmt yuv420p -g {_fps * 2} " +
+			   bitrateArg +
+			   $" -an -f flv \"{rtmpUrl}\"";
 	}
 
 	public void Dispose()
