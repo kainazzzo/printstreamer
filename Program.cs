@@ -32,10 +32,12 @@ string? key = config.GetValue<string>("YouTube:Key");
 string? oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
 string? oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
 
-// Mode selection: support a string Mode ("read"/"serve"/"stream")
+
+// Mode selection: support a string Mode ("read"/"serve"/"stream"/"poll")
 var mode = config.GetValue<string>("Mode")?.ToLowerInvariant() ?? "serve"; // Default to serve mode
 var readOnly = mode == "read";
 var serve = mode == "serve";
+var isPollingMode = mode == "poll";
 
 // Determine if we should use OAuth-based broadcast creation or manual stream key
 // We detect OAuth usage by presence of OAuth client credentials in config.
@@ -189,8 +191,87 @@ if (serve)
 	return;
 }
 
+
+if (isPollingMode)
+{
+	await PollAndStreamJobsAsync(config, appCts.Token);
+	return;
+}
+
 // Default mode: stream to YouTube
 await StartYouTubeStreamAsync(config, source!, key, appCts.Token);
+
+static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToken cancellationToken)
+{
+	var moonrakerBase = config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125/";
+	var apiKey = config.GetValue<string>("Moonraker:ApiKey");
+	var authHeader = config.GetValue<string>("Moonraker:AuthHeader");
+	var pollInterval = TimeSpan.FromSeconds(10); // configurable if desired
+	string? lastJobFilename = null;
+	CancellationTokenSource? streamCts = null;
+	Task? streamTask = null;
+
+	while (!cancellationToken.IsCancellationRequested)
+	{
+		try
+		{
+			// Query Moonraker job queue
+			var baseUri = new Uri(moonrakerBase);
+			var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+			var currentJob = info?.Filename;
+
+			if (!string.IsNullOrWhiteSpace(currentJob) && currentJob != lastJobFilename)
+			{
+				// New job detected, start stream
+				Console.WriteLine($"[Watcher] New print job detected: {currentJob}");
+				lastJobFilename = currentJob;
+				if (streamCts != null)
+				{
+					try { streamCts.Cancel(); } catch { }
+					if (streamTask != null) await streamTask;
+				}
+				streamCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+				streamTask = Task.Run(async () =>
+				{
+					try
+					{
+						await StartYouTubeStreamAsync(config, config.GetValue<string>("Stream:Source")!, null, streamCts.Token);
+					}
+					catch (Exception ex)
+					{
+						Console.WriteLine($"[Watcher] Stream error: {ex.Message}");
+					}
+				}, streamCts.Token);
+			}
+			else if (string.IsNullOrWhiteSpace(currentJob) && lastJobFilename != null)
+			{
+				// Job finished, end stream
+				Console.WriteLine($"[Watcher] Print job finished: {lastJobFilename}");
+				lastJobFilename = null;
+				if (streamCts != null)
+				{
+					try { streamCts.Cancel(); } catch { }
+					if (streamTask != null) await streamTask;
+					streamCts = null;
+					streamTask = null;
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"[Watcher] Error: {ex.Message}");
+		}
+
+		await Task.Delay(pollInterval, cancellationToken);
+	}
+
+	// Cleanup on exit
+	if (streamCts != null)
+	{
+		try { streamCts.Cancel(); } catch { }
+		if (streamTask != null) await streamTask;
+	}
+}
 
 static async Task StartYouTubeStreamAsync(IConfiguration config, string source, string? manualKey, CancellationToken cancellationToken)
 {
