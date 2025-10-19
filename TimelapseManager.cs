@@ -16,8 +16,8 @@ public class TimelapseManager : IDisposable
         Directory.CreateDirectory(_mainTimelapseDir);
 
         // Set up periodic capture timer (disabled by default, enabled when sessions are active)
-        var periodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
-        _captureTimer = new Timer(CaptureFramesAsync, null, Timeout.Infinite, periodSec * 1000);
+        var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
+        _captureTimer = new Timer(CaptureFramesAsync, null, Timeout.Infinite, (int)timelapsePeriod.TotalMilliseconds);
     }
 
     public string TimelapseDirectory => _mainTimelapseDir;
@@ -52,9 +52,9 @@ public class TimelapseManager : IDisposable
             // Start the timer if this is the first session
             if (_activeSessions.Count == 1)
             {
-                var periodSec = _config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
-                _captureTimer.Change(TimeSpan.FromSeconds(periodSec), TimeSpan.FromSeconds(periodSec));
-                Console.WriteLine($"[TimelapseManager] Started capture timer (period: {periodSec}s)");
+                var timelapsePeriod = _config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
+                _captureTimer.Change(timelapsePeriod, timelapsePeriod);
+                Console.WriteLine($"[TimelapseManager] Started capture timer (period: {timelapsePeriod})");
             }
             
             return sanitizedName;

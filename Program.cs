@@ -520,6 +520,7 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 	var authHeader = config.GetValue<string>("Moonraker:AuthHeader");
 	var pollInterval = TimeSpan.FromSeconds(10); // configurable if desired
 	string? lastJobFilename = null;
+	string? lastCompletedJobFilename = null; // used for final upload/title if app shuts down post-completion
 	CancellationTokenSource? streamCts = null;
 	Task? streamTask = null;
 	TimelapseService? timelapse = null;
@@ -582,7 +583,8 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 				{
 					try
 					{
-						await StartYouTubeStreamAsync(config, config.GetValue<string>("Stream:Source")!, null, streamCts.Token);
+						// In polling mode, disable internal timelapse in streaming path to avoid duplicate uploads
+						await StartYouTubeStreamAsync(config, config.GetValue<string>("Stream:Source")!, null, streamCts.Token, enableTimelapse: false);
 					}
 					catch (Exception ex)
 					{
@@ -620,7 +622,7 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 					}
 
 					timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-					var periodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
+					var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
 					timelapseTask = Task.Run(async () =>
 					{
 						while (!timelapseCts.Token.IsCancellationRequested)
@@ -637,7 +639,7 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 							{
 								Console.WriteLine($"Timelapse frame error: {ex.Message}");
 							}
-							await Task.Delay(TimeSpan.FromSeconds(periodSec), timelapseCts.Token);
+							await Task.Delay(timelapsePeriod, timelapseCts.Token);
 						}
 					}, timelapseCts.Token);
 					Console.WriteLine($"[Watcher] Timelapse started: {tlSubfolder}");
@@ -647,6 +649,9 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 			{
 				// Job finished, end stream and finalize timelapse
 				Console.WriteLine($"[Watcher] Print job finished: {lastJobFilename}");
+				// Preserve the filename we detected at job start for upload metadata
+				var finishedJobFilename = lastJobFilename;
+				lastCompletedJobFilename = finishedJobFilename;
 				lastJobFilename = null;
 				if (streamCts != null)
 				{
@@ -677,13 +682,14 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 						// Upload the timelapse video to YouTube if enabled and video was created successfully
 						if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
 						{
-							var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
+							var uploadTimelapse = config.GetValue<bool?>("Timelapse:Upload") ?? false;
 							if (uploadTimelapse && ytService != null)
 							{
 								Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
 								try
 								{
-									var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, lastJobFilename, CancellationToken.None);
+									// Use the timelapse folder name (sanitized) for nicer titles
+									var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, folderName, CancellationToken.None);
 									if (!string.IsNullOrWhiteSpace(videoId))
 									{
 										Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
@@ -696,7 +702,7 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 							}
 							else if (!uploadTimelapse)
 							{
-								Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
+								Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (Timelapse:Upload=false)");
 							}
 						}
 					}
@@ -757,13 +763,15 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 				// Upload the timelapse video to YouTube if enabled and video was created successfully
 				if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
 				{
-					var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
+					var uploadTimelapse = config.GetValue<bool?>("Timelapse:Upload") ?? false;
 					if (uploadTimelapse && ytService != null)
 					{
 						Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
 						try
 						{
-							var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, lastJobFilename, CancellationToken.None);
+							// Prefer the recently finished job's filename; fallback to timelapse folder name
+							var filenameForUpload = lastCompletedJobFilename ?? lastJobFilename ?? folderName;
+							var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, filenameForUpload, CancellationToken.None);
 							if (!string.IsNullOrWhiteSpace(videoId))
 							{
 								Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
@@ -776,7 +784,7 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 					}
 					else if (!uploadTimelapse)
 					{
-						Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
+						Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (Timelapse:Upload=false)");
 					}
 				}
 			}
@@ -794,7 +802,7 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 	}
 }
 
-static async Task StartYouTubeStreamAsync(IConfiguration config, string source, string? manualKey, CancellationToken cancellationToken)
+static async Task StartYouTubeStreamAsync(IConfiguration config, string source, string? manualKey, CancellationToken cancellationToken, bool enableTimelapse = true)
 {
 	string? rtmpUrl = null;
 	string? streamKey = null;
@@ -863,7 +871,11 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 		catch (Exception ex)
 		{
 			Console.WriteLine($"[Thumbnail] Failed to upload initial thumbnail: {ex.Message}");
-		}			// Start timelapse service for stream mode
+		}
+
+		// Start timelapse service for stream mode (only if enabled)
+		if (enableTimelapse)
+		{
 			var mainTlDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
 			// Use filename from Moonraker if available, otherwise use timestamp
 			string streamId;
@@ -880,7 +892,7 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 				Console.WriteLine($"[Timelapse] No filename from Moonraker, using timestamp only");
 			}
 			timelapse = new TimelapseService(mainTlDir, streamId);
-			
+
 			// Capture immediate first frame for timelapse
 			Console.WriteLine($"[Timelapse] Capturing initial frame...");
 			try
@@ -900,9 +912,9 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 			{
 				Console.WriteLine($"[Timelapse] Error capturing initial frame: {ex.Message}");
 			}
-			
+
 			timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-var timelapsePeriodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?? 60;
+			var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
 			timelapseTask = Task.Run(async () =>
 			{
 				while (!timelapseCts.Token.IsCancellationRequested)
@@ -919,9 +931,10 @@ var timelapsePeriodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?
 					{
 						Console.WriteLine($"Timelapse frame error: {ex.Message}");
 					}
-					await Task.Delay(TimeSpan.FromSeconds(timelapsePeriodSec), timelapseCts.Token);
+					await Task.Delay(timelapsePeriod, timelapseCts.Token);
 				}
 			}, timelapseCts.Token);
+		}
 		}
 		else if (!string.IsNullOrWhiteSpace(manualKey))
 		{
@@ -1023,61 +1036,64 @@ var timelapsePeriodSec = config.GetValue<int?>("Timelapse:FramePeriodSeconds") ?
 			}
 		}
 		
-		// Stop timelapse task and create video
-		if (timelapseCts != null)
+		// Stop timelapse task and create video (only if enabled)
+		if (enableTimelapse)
 		{
-			try { timelapseCts.Cancel(); } catch { }
-			if (timelapseTask != null)
+			if (timelapseCts != null)
 			{
-				try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
-			}
-			timelapseCts = null;
-			timelapseTask = null;
-		}
-		if (timelapse != null)
-		{
-			Console.WriteLine($"[Timelapse] Creating video from {timelapse.OutputDir}...");
-			var folderName = Path.GetFileName(timelapse.OutputDir);
-			var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
-			// Use a new cancellation token for video creation (don't use the cancelled one)
-			try
-			{
-				var createdVideoPath = await timelapse.CreateVideoAsync(videoPath, 30, CancellationToken.None);
-				
-				// Upload the timelapse video to YouTube if enabled and video was created successfully
-				if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
+				try { timelapseCts.Cancel(); } catch { }
+				if (timelapseTask != null)
 				{
-					var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-					if (uploadTimelapse && ytService != null)
+					try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
+				}
+				timelapseCts = null;
+				timelapseTask = null;
+			}
+			if (timelapse != null)
+			{
+				Console.WriteLine($"[Timelapse] Creating video from {timelapse.OutputDir}...");
+				var folderName = Path.GetFileName(timelapse.OutputDir);
+				var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
+				// Use a new cancellation token for video creation (don't use the cancelled one)
+				try
+				{
+					var createdVideoPath = await timelapse.CreateVideoAsync(videoPath, 30, CancellationToken.None);
+
+					// Upload the timelapse video to YouTube if enabled and video was created successfully
+					if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
 					{
-						Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
-						try
+						var uploadTimelapse = config.GetValue<bool?>("Timelapse:Upload") ?? false;
+						if (uploadTimelapse && ytService != null)
 						{
-							// Use moonrakerFilename if available (from CreateLiveBroadcastAsync), otherwise extract from timelapse folder name
-							var filenameForUpload = moonrakerFilename ?? Path.GetFileName(timelapse?.OutputDir);
-							var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, filenameForUpload, CancellationToken.None);
-							if (!string.IsNullOrWhiteSpace(videoId))
+							Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
+							try
 							{
-								Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+								// Use moonrakerFilename if available (from CreateLiveBroadcastAsync), otherwise extract from timelapse folder name
+								var filenameForUpload = moonrakerFilename ?? Path.GetFileName(timelapse?.OutputDir);
+								var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, filenameForUpload, CancellationToken.None);
+								if (!string.IsNullOrWhiteSpace(videoId))
+								{
+									Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+								}
+							}
+							catch (Exception ex)
+							{
+								Console.WriteLine($"[Timelapse] Failed to upload video to YouTube: {ex.Message}");
 							}
 						}
-						catch (Exception ex)
+						else if (!uploadTimelapse)
 						{
-							Console.WriteLine($"[Timelapse] Failed to upload video to YouTube: {ex.Message}");
+							Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (Timelapse:Upload=false)");
 						}
 					}
-					else if (!uploadTimelapse)
-					{
-						Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
-					}
 				}
+				catch (Exception ex)
+				{
+					Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
+				}
+				timelapse?.Dispose();
+				timelapse = null;
 			}
-			catch (Exception ex)
-			{
-				Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
-			}
-			timelapse?.Dispose();
-			timelapse = null;
 		}
 		// Ensure streamer is stopped (in case cancellation didn't trigger it for some reason)
 		try { streamer?.Stop(); } catch { }
