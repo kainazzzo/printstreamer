@@ -11,6 +11,7 @@ using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Auth.OAuth2.Requests;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using System.Linq;
 
 internal class YouTubeControlService : IDisposable
 {
@@ -184,6 +185,113 @@ internal class YouTubeControlService : IDisposable
             Console.WriteLine($"Error uploading timelapse video: {ex.Message}");
             Console.WriteLine($"Exception details: {ex}");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Ensure a playlist with the given name exists. Returns its ID.
+    /// If not found, creates it with the specified privacy status.
+    /// </summary>
+    public async Task<string?> EnsurePlaylistAsync(string name, string privacy = "unlisted", CancellationToken cancellationToken = default)
+    {
+        if (_youtubeService == null)
+        {
+            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            return null;
+        }
+
+        try
+        {
+            // Try to find existing playlist by name (first 50 owned playlists)
+            var list = _youtubeService.Playlists.List("snippet,status");
+            list.Mine = true;
+            list.MaxResults = 50;
+            var response = await list.ExecuteAsync(cancellationToken);
+            var existing = response.Items?.FirstOrDefault(p => string.Equals(p.Snippet?.Title, name, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
+            {
+                return existing.Id;
+            }
+
+            // Create new playlist
+            var playlist = new Google.Apis.YouTube.v3.Data.Playlist
+            {
+                Snippet = new Google.Apis.YouTube.v3.Data.PlaylistSnippet
+                {
+                    Title = name,
+                    Description = $"Auto-managed by PrintStreamer: {name}"
+                },
+                Status = new Google.Apis.YouTube.v3.Data.PlaylistStatus
+                {
+                    PrivacyStatus = privacy
+                }
+            };
+
+            var insert = _youtubeService.Playlists.Insert(playlist, "snippet,status");
+            var created = await insert.ExecuteAsync(cancellationToken);
+            Console.WriteLine($"[YouTube] Created playlist '{name}' (ID: {created.Id})");
+            return created.Id;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[YouTube] Failed to ensure playlist '{name}': {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Add a video to a playlist by ID. Returns true if added.
+    /// </summary>
+    public async Task<bool> AddVideoToPlaylistAsync(string playlistId, string videoId, CancellationToken cancellationToken = default)
+    {
+        if (_youtubeService == null)
+        {
+            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            return false;
+        }
+
+        try
+        {
+            // First, check if the video is already in the playlist to avoid duplicates
+            string? pageToken = null;
+            do
+            {
+                var listReq = _youtubeService.PlaylistItems.List("id,snippet,contentDetails");
+                listReq.PlaylistId = playlistId;
+                listReq.MaxResults = 50;
+                listReq.PageToken = pageToken;
+                var listResp = await listReq.ExecuteAsync(cancellationToken);
+                var exists = listResp.Items?.Any(i => i.Snippet?.ResourceId?.VideoId == videoId) == true;
+                if (exists)
+                {
+                    Console.WriteLine($"[YouTube] Video {videoId} already present in playlist {playlistId}; skipping add.");
+                    return true;
+                }
+                pageToken = listResp.NextPageToken;
+            } while (!string.IsNullOrEmpty(pageToken));
+
+            var item = new Google.Apis.YouTube.v3.Data.PlaylistItem
+            {
+                Snippet = new Google.Apis.YouTube.v3.Data.PlaylistItemSnippet
+                {
+                    PlaylistId = playlistId,
+                    ResourceId = new Google.Apis.YouTube.v3.Data.ResourceId
+                    {
+                        Kind = "youtube#video",
+                        VideoId = videoId
+                    }
+                }
+            };
+
+            var insert = _youtubeService.PlaylistItems.Insert(item, "snippet");
+            var created = await insert.ExecuteAsync(cancellationToken);
+            Console.WriteLine($"[YouTube] Added video {videoId} to playlist {playlistId}");
+            return !string.IsNullOrWhiteSpace(created.Id);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[YouTube] Failed to add video {videoId} to playlist {playlistId}: {ex.Message}");
+            return false;
         }
     }
 

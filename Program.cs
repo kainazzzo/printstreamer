@@ -693,6 +693,23 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 									if (!string.IsNullOrWhiteSpace(videoId))
 									{
 										Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+										try
+										{
+											var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
+											if (!string.IsNullOrWhiteSpace(playlistName))
+											{
+												var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
+												var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, CancellationToken.None);
+												if (!string.IsNullOrWhiteSpace(pid))
+												{
+													await ytService.AddVideoToPlaylistAsync(pid, videoId, CancellationToken.None);
+												}
+											}
+										}
+										catch (Exception ex)
+										{
+											Console.WriteLine($"[YouTube] Failed to add timelapse to playlist: {ex.Message}");
+										}
 									}
 								}
 								catch (Exception ex)
@@ -772,10 +789,28 @@ static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToke
 							// Prefer the recently finished job's filename; fallback to timelapse folder name
 							var filenameForUpload = lastCompletedJobFilename ?? lastJobFilename ?? folderName;
 							var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, filenameForUpload, CancellationToken.None);
-							if (!string.IsNullOrWhiteSpace(videoId))
-							{
-								Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
-							}
+								if (!string.IsNullOrWhiteSpace(videoId))
+								{
+									Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+									// Add to playlist if configured
+									try
+									{
+										var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
+										if (!string.IsNullOrWhiteSpace(playlistName))
+										{
+											var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
+											var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, CancellationToken.None);
+											if (!string.IsNullOrWhiteSpace(pid))
+											{
+												await ytService.AddVideoToPlaylistAsync(pid, videoId, CancellationToken.None);
+											}
+										}
+									}
+									catch (Exception ex)
+									{
+										Console.WriteLine($"[YouTube] Failed to add timelapse to playlist: {ex.Message}");
+									}
+								}
 						}
 						catch (Exception ex)
 						{
@@ -854,6 +889,25 @@ static async Task StartYouTubeStreamAsync(IConfiguration config, string source, 
 			catch (Exception ex)
 			{
 				Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
+			}
+
+			// Ensure and add broadcast to playlist if configured
+			try
+			{
+				var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
+				if (!string.IsNullOrWhiteSpace(playlistName))
+				{
+					var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
+					var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
+					if (!string.IsNullOrWhiteSpace(pid) && !string.IsNullOrWhiteSpace(broadcastId))
+					{
+						await ytService.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"[YouTube] Failed to add broadcast to playlist: {ex.Message}");
 			}
 
 		// Upload initial thumbnail for the broadcast
