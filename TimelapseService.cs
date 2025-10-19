@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 public class TimelapseService : IDisposable
 {
@@ -13,7 +14,49 @@ public class TimelapseService : IDisposable
     {
         // mainFolder: base timelapse directory (configurable)
         // streamId: unique per stream/job (timestamp, job name, etc)
-        OutputDir = Path.Combine(mainFolder, streamId);
+
+        // Ensure the main folder exists
+        Directory.CreateDirectory(mainFolder);
+
+        var baseName = streamId;
+        var candidate = Path.Combine(mainFolder, baseName);
+
+        if (!Directory.Exists(candidate))
+        {
+            OutputDir = candidate;
+            Directory.CreateDirectory(OutputDir);
+            return;
+        }
+
+        // Directory exists already. Find the highest numeric suffix for folders matching
+        // baseName, baseName_1, baseName_2, ... and pick next index.
+        // Match pattern: ^baseName(?:_(\d+))?$
+        var rx = new Regex($"^{Regex.Escape(baseName)}(?:_(\\d+))?$", RegexOptions.Compiled);
+        var max = -1;
+
+        foreach (var dir in Directory.GetDirectories(mainFolder))
+        {
+            var name = Path.GetFileName(dir);
+            if (name == null) continue;
+            var m = rx.Match(name);
+            if (!m.Success) continue;
+            if (m.Groups.Count > 1 && m.Groups[1].Success)
+            {
+                if (int.TryParse(m.Groups[1].Value, out var v))
+                {
+                    if (v > max) max = v;
+                }
+            }
+            else
+            {
+                // The base folder without suffix exists; treat it as index 0
+                if (0 > max) max = 0;
+            }
+        }
+
+        var next = (max >= 0) ? max + 1 : 1;
+        var newName = $"{baseName}_{next}";
+        OutputDir = Path.Combine(mainFolder, newName);
         Directory.CreateDirectory(OutputDir);
     }
 

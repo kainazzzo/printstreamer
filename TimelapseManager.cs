@@ -27,28 +27,27 @@ public class TimelapseManager : IDisposable
         if (string.IsNullOrWhiteSpace(sessionName))
             return null;
 
-        var sanitizedName = SanitizeFilename(moonrakerFilename ?? sessionName);
-        if (_activeSessions.ContainsKey(sanitizedName))
-        {
-            Console.WriteLine($"[TimelapseManager] Session '{sanitizedName}' already active");
-            return sanitizedName;
-        }
+        var sanitizedBase = SanitizeFilename(moonrakerFilename ?? sessionName);
+
+        // Create the service first so it can create an output folder and possibly append a suffix
+        var service = new TimelapseService(_mainTimelapseDir, sanitizedBase);
+        var actualFolderName = Path.GetFileName(service.OutputDir) ?? sanitizedBase;
 
         var session = new TimelapseSession
         {
-            Name = sanitizedName,
-            Service = new TimelapseService(_mainTimelapseDir, sanitizedName),
+            Name = actualFolderName,
+            Service = service,
             StartTime = DateTime.UtcNow,
             LastCaptureTime = null
         };
 
-        if (_activeSessions.TryAdd(sanitizedName, session))
+        if (_activeSessions.TryAdd(actualFolderName, session))
         {
-            Console.WriteLine($"[TimelapseManager] Started timelapse session: {sanitizedName}");
-            
+            Console.WriteLine($"[TimelapseManager] Started timelapse session: {actualFolderName}");
+
             // Capture initial frame
             await CaptureFrameForSessionAsync(session);
-            
+
             // Start the timer if this is the first session
             if (_activeSessions.Count == 1)
             {
@@ -56,11 +55,12 @@ public class TimelapseManager : IDisposable
                 _captureTimer.Change(timelapsePeriod, timelapsePeriod);
                 Console.WriteLine($"[TimelapseManager] Started capture timer (period: {timelapsePeriod})");
             }
-            
-            return sanitizedName;
+
+            return actualFolderName;
         }
 
-        session.Service?.Dispose();
+        // If we couldn't add the session for some reason, clean up
+        service?.Dispose();
         return null;
     }
 
