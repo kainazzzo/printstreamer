@@ -138,6 +138,29 @@ namespace PrintStreamer.Services
                     try { await streamer.StartAsync(cts.Token); } catch { }
                 }, cts.Token);
 
+                // After starting the ffmpeg streamer, attempt to transition the YouTube broadcast to live
+                // This runs in the background and will wait for ingestion to become active before transitioning.
+                if (!string.IsNullOrWhiteSpace(newBroadcastId))
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            Console.WriteLine("[YouTube] Waiting for ingestion and attempting to transition broadcast to live...");
+                            var ok = await yt.TransitionBroadcastToLiveWhenReadyAsync(newBroadcastId!, TimeSpan.FromSeconds(120), 5, CancellationToken.None);
+                            Console.WriteLine($"[YouTube] Transition to live {(ok ? "succeeded" : "failed")} for broadcast {newBroadcastId}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[YouTube] Error while transitioning broadcast to live: {ex.Message}");
+                        }
+                    }, CancellationToken.None);
+                }
+                else
+                {
+                    Console.WriteLine("[YouTube] No broadcastId available; skipping automatic transition to live.");
+                }
+
                 return (true, null);
             }
             catch (Exception ex)
