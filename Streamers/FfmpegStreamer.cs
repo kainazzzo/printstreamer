@@ -8,7 +8,8 @@ namespace PrintStreamer.Streamers
 
 	{
 	private readonly string _source;
-	private readonly string _rtmpUrl;
+	private readonly string? _rtmpUrl;
+	private readonly string? _hlsFolder;
 	private readonly int _targetFps;
 	private readonly int _bitrateKbps;
 	private readonly FfmpegOverlayOptions? _overlay;
@@ -17,13 +18,14 @@ namespace PrintStreamer.Streamers
 
 	public Task ExitTask => _exitTcs?.Task ?? Task.CompletedTask;
 
-	public FfmpegStreamer(string source, string rtmpUrl, int targetFps = 30, int bitrateKbps = 800, FfmpegOverlayOptions? overlay = null)
+	public FfmpegStreamer(string source, string? rtmpUrl, int targetFps = 30, int bitrateKbps = 800, FfmpegOverlayOptions? overlay = null, string? hlsFolder = null)
 	{
 		_source = source;
 		_rtmpUrl = rtmpUrl;
 		_targetFps = targetFps <= 0 ? 30 : targetFps;
 		_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 		_overlay = overlay;
+		_hlsFolder = hlsFolder;
 	}
 
 	public Task StartAsync(CancellationToken cancellationToken = default)
@@ -59,7 +61,7 @@ namespace PrintStreamer.Streamers
 		}
 	}
 
-	var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay);
+		var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _hlsFolder);
 
 		Console.WriteLine($"Starting ffmpeg with args: {ffmpegArgs}");
 
@@ -129,7 +131,7 @@ namespace PrintStreamer.Streamers
 		}
 	}
 
-	private static string BuildFfmpegArgs(string source, string rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay)
+	private static string BuildFfmpegArgs(string source, string? rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? hlsFolder)
 	{
 		// Basic ffmpeg args that should work for many MJPEG/http or v4l2 inputs.
 		// -re to read input at native frame rate
@@ -190,7 +192,7 @@ namespace PrintStreamer.Streamers
 	// Add input frame rate hint for better behavior on low-frame-rate sources
 	// (we set -r on the output later; no separate fpsArg needed)
 
-	// Final output to rtmp flv, use genpts and flvflags similar to the shell script
+		// Final output to rtmp flv (when rtmpUrl provided), use genpts and flvflags similar to the shell script
 	var vfFilters = new List<string>();
 	// Ensure pixel format for compatibility
 	vfFilters.Add("format=yuv420p");
@@ -246,10 +248,35 @@ namespace PrintStreamer.Streamers
 	var flvFlags = "-flvflags no_duration_filesize";
 
 	// Use the same ordering and flags as the shell script
-	var outArgs = $"-vf \"{vf}\" {colorRange} -c:v libx264 -preset veryfast -tune zerolatency {profile} -pix_fmt yuv420p -r {fps} -g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k {audioEncArgs} {flvFlags} -f flv {rtmpUrl}";
+		var outArgs = $"-vf \"{vf}\" {colorRange} -c:v libx264 -preset veryfast -tune zerolatency {profile} -pix_fmt yuv420p -r {fps} -g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k {audioEncArgs} {flvFlags}";
 
-	// Prepend input args (which include -re for MJPEG input), include mapping, and return
-	return $"{inputArgs} {mapArgs} {outArgs}";
+		// If HLS output requested, add HLS muxer parameters and also write to local folder
+		if (!string.IsNullOrWhiteSpace(hlsFolder))
+		{
+			// Ensure folder exists
+			try { Directory.CreateDirectory(hlsFolder); } catch { }
+			var hlsPath = Path.Combine(hlsFolder, "stream.m3u8");
+			// produce fragmented HLS segments (short), limit list size for low-latency
+			var hlsArgs = $"-f hls -hls_time 2 -hls_list_size 5 -hls_flags delete_segments+append_list -hls_segment_filename \"{Path.Combine(hlsFolder, "seg_%03d.ts")}\" \"{hlsPath}\"";
+
+			// If an RTMP target is provided, output both RTMP and HLS from the same ffmpeg process
+			if (!string.IsNullOrWhiteSpace(rtmpUrl))
+			{
+				return $"{inputArgs} {mapArgs} {outArgs} -f flv {rtmpUrl} {hlsArgs}";
+			}
+			// HLS-only output
+			return $"{inputArgs} {mapArgs} {outArgs} {hlsArgs}";
+		}
+		else
+		{
+			// No HLS requested; if RTMP target provided, stream to RTMP, otherwise output to null (no-op)
+			if (!string.IsNullOrWhiteSpace(rtmpUrl))
+			{
+				return $"{inputArgs} {mapArgs} {outArgs} -f flv {rtmpUrl}";
+			}
+			// Neither RTMP nor HLS specified: return args that decode input and drop output (use null sink)
+			return $"{inputArgs} {mapArgs} {outArgs} -f null -";
+		}
 	}
 
 	public void Dispose()

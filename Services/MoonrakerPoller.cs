@@ -17,6 +17,135 @@ namespace PrintStreamer.Services
 {
     internal static class MoonrakerPoller
     {
+        // Shared runtime state to allow promoting the currently-running encoder to a live broadcast
+        private static readonly object _streamLock = new object();
+        private static IStreamer? _currentStreamer;
+        private static CancellationTokenSource? _currentStreamerCts;
+        private static YouTubeControlService? _currentYouTubeService;
+        private static string? _currentBroadcastId;
+
+        public static bool IsBroadcastActive => !string.IsNullOrWhiteSpace(_currentBroadcastId);
+
+        /// <summary>
+        /// Promote the currently-running encoder (HLS-only) to a YouTube live broadcast by creating
+        /// the broadcast resources and restarting the ffmpeg process to include RTMP output.
+        /// Returns true on success.
+        /// </summary>
+        public static async Task<(bool ok, string? message)> StartBroadcastAsync(IConfiguration config, CancellationToken cancellationToken)
+        {
+            // Only supports OAuth flow for automatic broadcast creation
+            var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
+            var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
+            bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
+            if (!useOAuth)
+            {
+                return (false, "OAuth client credentials not configured");
+            }
+
+            lock (_streamLock)
+            {
+                if (_currentStreamer == null)
+                {
+                    return (false, "No running encoder to promote");
+                }
+            }
+
+            // Authenticate and create broadcast
+            var yt = new YouTubeControlService(config);
+            if (!await yt.AuthenticateAsync(cancellationToken))
+            {
+                yt.Dispose();
+                return (false, "YouTube authentication failed");
+            }
+
+            var res = await yt.CreateLiveBroadcastAsync(cancellationToken);
+            if (res.rtmpUrl == null || res.streamKey == null)
+            {
+                yt.Dispose();
+                return (false, "Failed to create YouTube broadcast");
+            }
+
+            var newRtmp = res.rtmpUrl;
+            var newKey = res.streamKey;
+            var newBroadcastId = res.broadcastId;
+
+            // Restart streamer: cancel current, then start a new one with RTMP+HLS
+            IStreamer? old; CancellationTokenSource? oldCts;
+            lock (_streamLock)
+            {
+                old = _currentStreamer;
+                oldCts = _currentStreamerCts;
+                _currentStreamer = null;
+                _currentStreamerCts = null;
+            }
+
+            try
+            {
+                // Stop the old streamer
+                try { oldCts?.Cancel(); } catch { }
+                try { await Task.WhenAny(old?.ExitTask ?? Task.CompletedTask, Task.Delay(5000, cancellationToken)); } catch { }
+                try { old?.Stop(); } catch { }
+            }
+            catch { }
+
+            // Start new ffmpeg streamer with RTMP and HLS
+            try
+            {
+                var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
+                var hlsFolder = config.GetValue<string>("Stream:Local:HlsFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "hls");
+                var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
+                var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
+
+                // Overlay options
+                FfmpegOverlayOptions? overlayOptions = null;
+                if (config.GetValue<bool?>("Overlay:Enabled") ?? false)
+                {
+                    var overlayService = new OverlayTextService(config, null);
+                    overlayService.Start();
+                    overlayOptions = new FfmpegOverlayOptions
+                    {
+                        TextFile = overlayService.TextFilePath,
+                        FontFile = config.GetValue<string>("Overlay:FontFile") ?? "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                        FontSize = config.GetValue<int?>("Overlay:FontSize") ?? 22,
+                        FontColor = config.GetValue<string>("Overlay:FontColor") ?? "white",
+                        Box = config.GetValue<bool?>("Overlay:Box") ?? true,
+                        BoxColor = config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
+                        BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
+                        X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
+                        Y = config.GetValue<string>("Overlay:Y") ?? "20"
+                    };
+                }
+
+                var source = config.GetValue<string>("Stream:Source");
+                if (string.IsNullOrWhiteSpace(source))
+                {
+                    yt.Dispose();
+                    return (false, "Stream:Source is not configured");
+                }
+                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null);
+                var cts = new CancellationTokenSource();
+
+                lock (_streamLock)
+                {
+                    _currentStreamer = streamer;
+                    _currentStreamerCts = cts;
+                    _currentYouTubeService = yt;
+                    _currentBroadcastId = newBroadcastId;
+                }
+
+                _ = Task.Run(async () =>
+                {
+                    try { await streamer.StartAsync(cts.Token); } catch { }
+                }, cts.Token);
+
+                return (true, null);
+            }
+            catch (Exception ex)
+            {
+                yt.Dispose();
+                return (false, ex.Message);
+            }
+        }
         // Entry point moved from Program.cs
     public static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToken cancellationToken)
         {
@@ -48,7 +177,8 @@ namespace PrintStreamer.Services
                 var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
                 var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
                 bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
-                if (useOAuth)
+                var liveBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
+                if (useOAuth && liveBroadcastEnabled)
                 {
                     ytService = new YouTubeControlService(config);
                     var authOk = await ytService.AuthenticateAsync(cancellationToken);
@@ -265,6 +395,25 @@ namespace PrintStreamer.Services
                                                 {
                                                     Console.WriteLine($"[YouTube] Failed to add timelapse to playlist: {ex.Message}");
                                                 }
+                                                    try
+                                                    {
+                                                        // Set thumbnail from last frame if available
+                                                        var frameFiles = Directory.GetFiles(Path.GetDirectoryName(createdVideoPath) ?? string.Empty, "frame_*.jpg").OrderBy(f => f).ToArray();
+                                                        if (frameFiles.Length > 0)
+                                                        {
+                                                            var lastFrame = frameFiles[^1];
+                                                            var bytes = await File.ReadAllBytesAsync(lastFrame, CancellationToken.None);
+                                                            var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
+                                                            if (okThumb)
+                                                            {
+                                                                Console.WriteLine("[Timelapse] Set video thumbnail from last frame.");
+                                                            }
+                                                        }
+                                                    }
+                                                    catch (Exception ex)
+                                                    {
+                                                        Console.WriteLine($"[Timelapse] Failed to set video thumbnail: {ex.Message}");
+                                                    }
                                             }
                                         }
                                         catch (Exception ex)
@@ -383,6 +532,24 @@ namespace PrintStreamer.Services
                                             {
                                                 Console.WriteLine($"[YouTube] Failed to add timelapse to playlist: {ex.Message}");
                                             }
+                                                try
+                                                {
+                                                    var frameFiles = Directory.GetFiles(Path.GetDirectoryName(createdVideoPath) ?? string.Empty, "frame_*.jpg").OrderBy(f => f).ToArray();
+                                                    if (frameFiles.Length > 0)
+                                                    {
+                                                        var lastFrame = frameFiles[^1];
+                                                        var bytes = await File.ReadAllBytesAsync(lastFrame, CancellationToken.None);
+                                                        var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
+                                                        if (okThumb)
+                                                        {
+                                                            Console.WriteLine("[Timelapse] Set video thumbnail from last frame.");
+                                                        }
+                                                    }
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    Console.WriteLine($"[Timelapse] Failed to set video thumbnail: {ex.Message}");
+                                                }
                                         }
                                 }
                                 catch (Exception ex)
@@ -435,6 +602,38 @@ namespace PrintStreamer.Services
                 var source = config.GetValue<string>("Stream:Source");
                 var manualKey = config.GetValue<string>("YouTube:Key");
 
+                // Respect new config flag: whether automatic LiveBroadcast creation is enabled
+                var liveBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
+
+                // Prepare overlay options early so native fallback can reuse them
+                FfmpegOverlayOptions? overlayOptions = null;
+                if (config.GetValue<bool?>("Overlay:Enabled") ?? false)
+                {
+                    try
+                    {
+                        overlayService = new OverlayTextService(config, timelapseProvider);
+                        overlayService.Start();
+                        overlayOptions = new FfmpegOverlayOptions
+                        {
+                            TextFile = overlayService.TextFilePath,
+                            FontFile = config.GetValue<string>("Overlay:FontFile") ?? "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                            FontSize = config.GetValue<int?>("Overlay:FontSize") ?? 22,
+                            FontColor = config.GetValue<string>("Overlay:FontColor") ?? "white",
+                            Box = config.GetValue<bool?>("Overlay:Box") ?? true,
+                            BoxColor = config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
+                            BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
+                            X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
+                            Y = config.GetValue<string>("Overlay:Y") ?? "20"
+                        };
+                        Console.WriteLine($"[Overlay] Enabled drawtext overlay from {overlayOptions.TextFile}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Overlay] Failed to start overlay service: {ex.Message}");
+                        overlayOptions = null;
+                    }
+                }
+
                 // Validate source (can't stream without an MJPEG source URL)
                 if (string.IsNullOrWhiteSpace(source))
                 {
@@ -442,7 +641,7 @@ namespace PrintStreamer.Services
                     return;
                 }
 
-                if (useOAuth)
+                if (useOAuth && liveBroadcastEnabled)
                 {
                     Console.WriteLine("Using YouTube OAuth to create broadcast...");
                     ytService = new YouTubeControlService(config);
@@ -585,57 +784,35 @@ namespace PrintStreamer.Services
                 }
                 else
                 {
-                    Console.WriteLine("Error: No YouTube credentials or stream key provided.");
-                    return;
+                    // If live broadcasts are disabled and no manual key is provided, proceed with HLS-only preview
+                    if (!liveBroadcastEnabled)
+                    {
+                        Console.WriteLine("YouTube live broadcast creation disabled via config (YouTube:LiveBroadcast:Enabled=false). Starting local HLS preview only.");
+                        rtmpUrl = null;
+                        streamKey = null;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Error: No YouTube credentials or stream key provided.");
+                        return;
+                    }
                 }
 
                 // Start streaming with chosen implementation
-                var fullRtmpUrl = $"{rtmpUrl}/{streamKey}";
-                var useNativeStreamer = config.GetValue<bool>("Stream:UseNativeStreamer");
-                
+                string? fullRtmpUrl = null;
+                if (!string.IsNullOrWhiteSpace(rtmpUrl) && !string.IsNullOrWhiteSpace(streamKey))
+                {
+                    fullRtmpUrl = $"{rtmpUrl}/{streamKey}";
+                }
+                var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
+                var hlsFolder = config.GetValue<string>("Stream:Local:HlsFolder");
+
                 var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
                 var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
 
-                if (useNativeStreamer)
-                {
-                    Console.WriteLine($"Starting native .NET streamer to {rtmpUrl}/*** (fps={targetFps}, kbps={bitrateKbps})");
-                    #pragma warning disable CS0618 // Suppress obsolete warning for experimental native streamer
-                    streamer = new MjpegToRtmpStreamer(source, fullRtmpUrl, targetFps, bitrateKbps);
-                    #pragma warning restore CS0618
-                }
-                else
-                {
-                    Console.WriteLine($"Starting ffmpeg streamer to {rtmpUrl}/*** (fps={targetFps}, kbps={bitrateKbps})");
-                    // Setup optional overlay
-                    FfmpegOverlayOptions? overlayOptions = null;
-                            if (config.GetValue<bool?>("Overlay:Enabled") ?? false)
-                    {
-                        try
-                        {
-                                    overlayService = new OverlayTextService(config, timelapseProvider);
-                            overlayService.Start();
-                            overlayOptions = new FfmpegOverlayOptions
-                            {
-                                TextFile = overlayService.TextFilePath,
-                                FontFile = config.GetValue<string>("Overlay:FontFile") ?? "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-                                FontSize = config.GetValue<int?>("Overlay:FontSize") ?? 22,
-                                FontColor = config.GetValue<string>("Overlay:FontColor") ?? "white",
-                                Box = config.GetValue<bool?>("Overlay:Box") ?? true,
-                                BoxColor = config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
-                                BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
-                                X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
-                                Y = config.GetValue<string>("Overlay:Y") ?? "20"
-                            };
-                            Console.WriteLine($"[Overlay] Enabled drawtext overlay from {overlayOptions.TextFile}");
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[Overlay] Failed to start overlay service: {ex.Message}");
-                        }
-                    }
-
-                    streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions);
-                }
+                // Always use the ffmpeg-based streamer. If fullRtmpUrl is null, ffmpeg will produce HLS-only preview.
+                Console.WriteLine($"Starting ffmpeg streamer to {(fullRtmpUrl != null ? rtmpUrl + "/***" : "HLS-only")} (fps={targetFps}, kbps={bitrateKbps})");
+                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null);
                 
                 // Start streamer without awaiting so we can detect ingestion while it's running
                 var streamerStartTask = streamer.StartAsync(cancellationToken);
@@ -728,6 +905,25 @@ namespace PrintStreamer.Services
                                         if (!string.IsNullOrWhiteSpace(videoId))
                                         {
                                             Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+                                            try
+                                            {
+                                                // Attempt to set video thumbnail to last timelapse frame
+                                                var frameFiles = Directory.GetFiles(Path.GetDirectoryName(createdVideoPath) ?? string.Empty, "frame_*.jpg").OrderBy(f => f).ToArray();
+                                                if (frameFiles.Length > 0)
+                                                {
+                                                    var lastFrame = frameFiles[^1];
+                                                    var bytes = await File.ReadAllBytesAsync(lastFrame, CancellationToken.None);
+                                                    var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
+                                                    if (okThumb)
+                                                    {
+                                                        Console.WriteLine("[Timelapse] Set video thumbnail from last frame.");
+                                                    }
+                                                }
+                                            }
+                                            catch (Exception thx)
+                                            {
+                                                Console.WriteLine($"[Timelapse] Failed to set video thumbnail: {thx.Message}");
+                                            }
                                         }
                                     }
                                     catch (Exception ex)

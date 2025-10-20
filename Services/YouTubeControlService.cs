@@ -83,6 +83,15 @@ internal class YouTubeControlService : IDisposable
     }
 
     /// <summary>
+    /// Sets the thumbnail for an uploaded video using a JPEG image.
+    /// </summary>
+    public async Task<bool> SetVideoThumbnailAsync(string videoId, byte[] imageBytes, CancellationToken cancellationToken = default)
+    {
+        // Reuse the same underlying Thumbnails.Set API; it accepts a video ID as well.
+        return await SetBroadcastThumbnailAsync(videoId, imageBytes, cancellationToken);
+    }
+
+    /// <summary>
     /// Upload a timelapse video to YouTube as a regular video (not a live stream).
     /// </summary>
     public async Task<string?> UploadTimelapseVideoAsync(string videoFilePath, string? filename = null, CancellationToken cancellationToken = default)

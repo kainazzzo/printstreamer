@@ -1,5 +1,6 @@
 ﻿using PrintStreamer.Interfaces;
 using PrintStreamer.Streamers;
+using PrintStreamer.Overlay;
 using PrintStreamer.Timelapse;
 using PrintStreamer.Utils;
 using PrintStreamer.Services;
@@ -46,11 +47,8 @@ string? oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
 string? oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
 
 
-// Mode selection: support a string Mode ("read"/"serve"/"stream"/"poll")
-var mode = config.GetValue<string>("Mode")?.ToLowerInvariant() ?? "serve"; // Default to serve mode
-var readOnly = mode == "read";
-var serve = mode == "serve";
-var isPollingMode = mode == "poll";
+// New: allow serving the web UI by default; set Serve:Enabled=false to disable
+var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
 
 // Determine if we should use OAuth-based broadcast creation or manual stream key
 // We detect OAuth usage by presence of OAuth client credentials in config.
@@ -75,45 +73,11 @@ Console.CancelKeyPress += (s, e) =>
 
 // Removed proactive token acquisition. Authentication now happens on-demand in the streaming path
 
-if (readOnly)
-{
-	try
-	{
-		var reader = new MjpegReader(source!);
-		await reader.StartAsync(appCts.Token);
-	}
-	catch (OperationCanceledException)
-	{
-		Console.WriteLine("Read mode cancelled.");
-	}
-	catch (Exception ex)
-	{
-		Console.WriteLine($"Read mode error: {ex.Message}");
-	}
-	return;
-}
-
-if (mode == "testsrc")
-{
-	// Special diagnostic mode: create a YouTube broadcast+stream and push a test pattern (RTMPS) while polling ingestion.
-	try
-	{
-		await StartTestPushAsync(config, appCts.Token);
-	}
-	catch (OperationCanceledException)
-	{
-		Console.WriteLine("Test mode cancelled.");
-	}
-	catch (Exception ex)
-	{
-		Console.WriteLine($"Test mode error: {ex.Message}");
-	}
-	return;
-}
+// The application always runs the host and the hosted poller. Diagnostic/test modes were removed.
 
 // Ensure the WebApplication host is built and run in all modes so IHostedService instances start
 // Configure Kestrel only when we're serving HTTP
-if (serve)
+if (serveEnabled)
 {
 	webBuilder.WebHost.ConfigureKestrel(options => { options.ListenAnyIP(8080); });
 }
@@ -125,7 +89,7 @@ TimelapseManager? timelapseManager = null;
 
 var app = webBuilder.Build();
 
-if (serve)
+if (serveEnabled)
 {
 	// Start ASP.NET Core minimal server to proxy the MJPEG source to clients on /stream
 	if (string.IsNullOrWhiteSpace(source))
@@ -140,9 +104,9 @@ if (serve)
 	// Resolve timelapse manager from DI (registered earlier)
 	timelapseManager = app.Services.GetRequiredService<TimelapseManager>();
 
-	// If OAuth or stream key is provided, start YouTube streaming in the background
+	// If OAuth or stream key is provided, optionally start YouTube streaming in the background when configured
 	var startYoutubeInServe = config.GetValue<bool?>("YouTube:StartInServe") ?? false;
-	if ((useOAuth || !string.IsNullOrWhiteSpace(key)) && (!serve || startYoutubeInServe))
+	if ((useOAuth || !string.IsNullOrWhiteSpace(key)) && startYoutubeInServe)
 	{
 		// Link the stream cancellation to the top-level app cancellation token
 		streamCts = CancellationTokenSource.CreateLinkedTokenSource(appCts.Token);
@@ -159,6 +123,8 @@ if (serve)
 			}
 		}, streamCts.Token);
 	}
+
+// (Local HLS preview startup will be handled in the Serve static-file block below so we only declare the variables once.)
 
 	app.MapGet("/stream", async (HttpContext ctx) =>
 	{
@@ -197,6 +163,21 @@ if (serve)
 	{
 		var timelapses = timelapseManager.GetAllTimelapses();
 		return Results.Json(timelapses);
+	});
+
+	// Live control endpoint: start broadcast (promote current encoder to live)
+	app.MapPost("/api/live/start", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var (ok, message) = await MoonrakerPoller.StartBroadcastAsync(config, ctx.RequestAborted);
+			if (ok) return Results.Json(new { success = true });
+			return Results.Json(new { success = false, error = message });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
 	});
 
 	app.MapPost("/api/timelapses/{name}/start", async (string name, HttpContext ctx) =>
@@ -291,12 +272,26 @@ if (serve)
 		<h1>PrintStreamer - Control Panel</h1>
 		
 		<div class='section'>
-			<h2>Live Stream</h2>
-			<div class='stream-container'>
-				<img id='mjpeg' src='/stream' alt='MJPEG stream' />
-				<p>Direct stream URL: <a href='/stream' style='color:#66ccff'>/stream</a></p>
+			<h2>Live Stream Preview</h2>
+			<div class='stream-container' style='display:flex;gap:20px;align-items:flex-start'>
+				<div style='flex:1'>
+					<h3 style='margin:6px 0;font-size:1em'>Source (raw MJPEG)</h3>
+					<img id='mjpeg' src='/stream' alt='MJPEG stream' style='width:100%;height:auto;max-height:480px' />
+					<p>Direct stream URL: <a href='/stream' style='color:#66ccff'>/stream</a></p>
+				</div>
+				<div style='flex:1'>
+					<h3 style='margin:6px 0;font-size:1em'>Preview (with overlay)</h3>
+					<video id='hlsPlayer' autoplay muted playsinline style='width:100%;height:auto;max-height:480px;background:#000;border:4px solid #333'></video>
+					<div id='hlsStatus' style='margin-top:8px;color:#66ccff;font-size:0.9em'>HLS status: initializing...</div>
+					<p>Local HLS: <a href='/hls/stream.m3u8' style='color:#66ccff'>/hls/stream.m3u8</a></p>
+				</div>
 			</div>
 		</div>
+
+			<div style='margin-top:12px'>
+				<button id='goLiveBtn' class='success'>Go Live</button>
+				<span id='goLiveStatus' style='margin-left:10px;color:#66ccff'></span>
+			</div>
 
 		<div class='section'>
 			<h2>Timelapse Control</h2>
@@ -312,6 +307,14 @@ if (serve)
 	<script>
 		// Basic reconnection: reload the img if it fails
 		const img = document.getElementById('mjpeg');
+		let imgReady = false;
+		img.addEventListener('load', () => {
+			if (!imgReady) {
+				imgReady = true;
+				// Try to start HLS playback once the MJPEG source is showing a frame
+				try { startHlsIfReady(); } catch (e) { }
+			}
+		});
 		img.addEventListener('error', () => {
 			console.log('Stream image error, retrying in 2s');
 			setTimeout(() => { img.src = '/stream?ts=' + Date.now(); }, 2000);
@@ -407,6 +410,118 @@ if (serve)
 		
 		// Auto-refresh every 30 seconds
 		setInterval(refreshTimelapses, 30000);
+
+		// HLS preview: use hls.js when available, otherwise rely on native HLS (Safari)
+		(function(){
+			const video = document.getElementById('hlsPlayer');
+			const hlsUrl = '/hls/stream.m3u8';
+			// Load hls.js from CDN if necessary
+			function loadHls() {
+				return new Promise((resolve, reject) => {
+					if (window.Hls) return resolve(window.Hls);
+					const s = document.createElement('script');
+					s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.0/dist/hls.min.js';
+					s.onload = () => resolve(window.Hls);
+					s.onerror = () => reject(new Error('Failed to load hls.js'));
+					document.head.appendChild(s);
+				});
+			}
+
+			async function attach() {
+				try {
+					// Expose a helper so we can start playback from other places (e.g., when MJPEG first frame loads)
+					window.__hlsAttached = false;
+					function attachHls() {
+						if (window.__hlsAttached) return;
+						window.__hlsAttached = true;
+						hlsStatus('attaching');
+						if (window.Hls) {
+							// Use a small buffer and short live sync to reduce preview latency
+							const hls = new window.Hls({ liveSyncDuration: 2, maxBufferLength: 10 });
+							window.__hlsInstance = hls;
+							hls.on(window.Hls.Events.MANIFEST_PARSED, function() { hlsStatus('manifest parsed'); video.muted = true; video.play().catch(()=>{}); });
+							hls.on(window.Hls.Events.ERROR, function(event, data) { hlsStatus('error: ' + data.type + ' - ' + (data.details || data.reason || 'unknown')); console.warn('HLS error', event, data); });
+							hls.loadSource(hlsUrl);
+							hls.attachMedia(video);
+						} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+							// Native HLS (Safari)
+							video.src = hlsUrl;
+							video.addEventListener('loadedmetadata', function() { hlsStatus('native loaded'); video.muted = true; video.play().catch(()=>{}); });
+						} else {
+							// Try to load hls.js then attach
+							await loadHls();
+							const hls = new window.Hls({ liveSyncDuration: 2, maxBufferLength: 10 });
+							window.__hlsInstance = hls;
+							hls.on(window.Hls.Events.MANIFEST_PARSED, function() { hlsStatus('manifest parsed'); video.muted = true; video.play().catch(()=>{}); });
+							hls.on(window.Hls.Events.ERROR, function(event, data) { hlsStatus('error: ' + data.type + ' - ' + (data.details || data.reason || 'unknown')); console.warn('HLS error', event, data); });
+							hls.loadSource(hlsUrl);
+							hls.attachMedia(video);
+						}
+					}
+
+
+					// HLS status helper
+					function hlsStatus(text) {
+						try { document.getElementById('hlsStatus').textContent = 'HLS status: ' + text; } catch (e) { }
+						console.log('[HLS] ' + text);
+					}
+
+					// Start HLS if MJPEG frame is visible or immediately when manifest parses
+					async function startHlsIfReady() {
+						try {
+							await attachHls();
+						} catch (e) {
+							console.warn('Failed to attach HLS:', e);
+							hlsStatus('attach failed: ' + e.message);
+						}
+					}
+
+					// Periodically check whether playback started, else try reattaching
+					setInterval(() => {
+						try {
+							if (video && video.readyState < 2) {
+								hlsStatus('waiting for data... readyState=' + video.readyState);
+								// if no data and we have an hls instance, try to reload manifest
+								if (window.__hlsInstance && typeof window.__hlsInstance.stopLoad === 'function') {
+									window.__hlsInstance.stopLoad();
+									window.__hlsInstance.startLoad();
+								} else if (!window.__hlsAttached) {
+									// try to reattach once
+									attachHls().catch(()=>{});
+								}
+							} else {
+								if (!video.paused) hlsStatus('playing');
+							}
+						} catch (e) { }
+					}, 2000);
+
+					// Kick off attachment immediately as well (will be idempotent)
+					startHlsIfReady();
+				} catch (ex) {
+					console.warn('HLS preview not available:', ex);
+				}
+			}
+
+			attach();
+		})();
+
+		// Go Live button handler
+		document.getElementById('goLiveBtn').addEventListener('click', async () => {
+			const status = document.getElementById('goLiveStatus');
+			status.textContent = 'Promoting to live...';
+			try {
+				const resp = await fetch('/api/live/start', { method: 'POST' });
+				const j = await resp.json();
+				if (j && j.success) {
+					status.textContent = 'Live started';
+					setTimeout(()=> status.textContent = '', 5000);
+				} else {
+					status.textContent = 'Failed: ' + (j.error || 'unknown');
+				}
+			} catch (ex) {
+				status.textContent = 'Error: ' + ex.message;
+			}
+		});
 	</script>
 </body>
 </html>";
@@ -425,13 +540,97 @@ if (serve)
         timelapseManager?.Dispose();
     });
 
+	// Serve local HLS output if configured
+	var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
+	var hlsFolderRaw = config.GetValue<string>("Stream:Local:HlsFolder");
+	// default to ./hls but ensure we use an absolute path for the file provider
+	var hlsFolder = Path.GetFullPath(hlsFolderRaw ?? Path.Combine(Directory.GetCurrentDirectory(), "hls"));
+	if (localStreamEnabled)
+	{
+		Console.WriteLine($"[Serve] Serving local HLS at /hls from {hlsFolder}");
+		Directory.CreateDirectory(hlsFolder);
+		app.UseStaticFiles(new StaticFileOptions
+		{
+			FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(hlsFolder),
+			RequestPath = "/hls",
+			ServeUnknownFileTypes = true
+		});
+
+		// Note: local HLS preview will be produced by the same ffmpeg process that streams to YouTube
+		// when Stream:Local:Enabled is true. We intentionally avoid running a second encoder process.
+	}
+
+	// Fallback HLS endpoint: serve manifests and segments from the HLS folder even
+	// if static files middleware doesn't handle them in some hosting scenarios.
+	app.MapGet("/hls/{**path}", async (string path, HttpContext ctx) =>
+	{
+		try
+		{
+			// Normalize path: remove any leading directory separators so Path.Combine treats it as relative
+			if (string.IsNullOrWhiteSpace(path)) path = "stream.m3u8";
+			path = path.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '/', '\\');
+
+			var requested = Path.GetFullPath(Path.Combine(hlsFolder, path));
+			var folderFull = Path.GetFullPath(hlsFolder);
+			if (!requested.StartsWith(folderFull))
+			{
+				Console.WriteLine($"[HLS] Forbidden path traversal attempt: {path} -> {requested}");
+				ctx.Response.StatusCode = 403;
+				return;
+			}
+
+			if (!File.Exists(requested))
+			{
+				Console.WriteLine($"[HLS] Not found: {requested}");
+				ctx.Response.StatusCode = 404;
+				return;
+			}
+
+			// Set content type for HLS manifests and ts segments
+			var ext = Path.GetExtension(requested).ToLowerInvariant();
+			switch (ext)
+			{
+				case ".m3u8": ctx.Response.ContentType = "application/vnd.apple.mpegurl"; break;
+				case ".ts": ctx.Response.ContentType = "video/MP2T"; break;
+				default: ctx.Response.ContentType = "application/octet-stream"; break;
+			}
+
+			await ctx.Response.SendFileAsync(requested);
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"[HLS] Serve error: {ex.Message}");
+			ctx.Response.StatusCode = 500;
+		}
+	});
+
+		// Debug endpoint: list files in the configured HLS folder (useful to diagnose 404s)
+		app.MapGet("/api/hls/list", (HttpContext ctx) =>
+		{
+			try
+			{
+				if (!localStreamEnabled)
+				{
+					return Results.Json(new { enabled = false, files = Array.Empty<string>() });
+				}
+				var files = Directory.Exists(hlsFolder)
+					? Directory.EnumerateFiles(hlsFolder).Select(p => Path.GetFileName(p)).ToArray()
+					: Array.Empty<string>();
+				return Results.Json(new { enabled = true, folder = hlsFolder, files });
+			}
+			catch (Exception ex)
+			{
+				return Results.Json(new { enabled = localStreamEnabled, error = ex.Message });
+			}
+		});
+
 }
 
 // Start the host so IHostedService instances (MoonrakerHostedService) are started in all modes
 await app.RunAsync();
 
-// If we were in serve mode, wait for the background stream task (if any) to complete and clean up
-if (serve)
+// If serve UI was enabled, wait for the background stream task (if any) to complete and clean up
+if (serveEnabled)
 {
     if (streamTask != null)
     {
@@ -441,100 +640,10 @@ if (serve)
 }
 // Poll/stream behavior is handled by MoonrakerHostedService when configured
 
-static async Task StartTestPushAsync(IConfiguration config, CancellationToken cancellationToken)
-{
-	var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
-	var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
-	if (string.IsNullOrWhiteSpace(oauthClientId) || string.IsNullOrWhiteSpace(oauthClientSecret))
-	{
-		Console.WriteLine("You must provide YouTube OAuth credentials in config to run testsrc mode.");
-		return;
-	}
-
-	var yt = new YouTubeControlService(config);
-	if (!await yt.AuthenticateAsync(cancellationToken))
-	{
-		Console.WriteLine("Failed to authenticate for testsrc.");
-		return;
-	}
-
-	var res = await yt.CreateLiveBroadcastAsync(cancellationToken);
-	if (res.rtmpUrl == null || res.streamKey == null)
-	{
-		Console.WriteLine("Failed to create broadcast for testsrc.");
-		return;
-	}
-
-	var rtmpsUrl = res.rtmpUrl.Replace("rtmp://", "rtmps://") + "/" + res.streamKey;
-	Console.WriteLine($"Pushing testsrc to: {rtmpsUrl}");
-
-	// Start ffmpeg pushing testsrc
-	var psi = new System.Diagnostics.ProcessStartInfo
-	{
-		FileName = "ffmpeg",
-		Arguments = $"-re -f lavfi -i testsrc=size=640x480:rate=6 -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -pix_fmt yuv420p -b:v 800k -maxrate 800k -bufsize 1600k -g 12 -f flv \"{rtmpsUrl}\"",
-		UseShellExecute = false,
-		RedirectStandardError = true,
-		RedirectStandardOutput = true,
-		CreateNoWindow = true
-	};
-
-	using var proc = System.Diagnostics.Process.Start(psi)!;
-	if (proc == null)
-	{
-		Console.WriteLine("Failed to start ffmpeg for test push.");
-		return;
-	}
-
-	// read stderr asynchronously to avoid blocking
-	_ = Task.Run(async () =>
-	{
-		var sr = proc.StandardError;
-		string? line;
-		while ((line = await sr.ReadLineAsync()) != null)
-		{
-			if (!string.IsNullOrWhiteSpace(line)) Console.WriteLine("[ffmpeg] " + line);
-		}
-	});
-
-	// Poll ingestion while ffmpeg runs (timeout 45s)
-	var pollTask = Task.Run(async () =>
-	{
-		var ok = await yt.WaitForIngestionAsync(null, TimeSpan.FromSeconds(45), cancellationToken);
-		Console.WriteLine($"Ingestion active: {ok}");
-		return ok;
-	});
-
-	// Wait for either proc exit or poll timeout
-	var finished = await Task.WhenAny(proc.WaitForExitAsync(cancellationToken), pollTask);
-	if (finished == pollTask)
-	{
-		Console.WriteLine("Poll completed. Killing ffmpeg push.");
-		try { proc.Kill(true); } catch { }
-	}
-	else
-	{
-		Console.WriteLine("ffmpeg exited before poll completed.");
-	}
-
-	// Attempt to transition if ingestion active
-	if (pollTask.IsCompleted && pollTask.Result)
-	{
-		Console.WriteLine("Attempting to transition broadcast to live after successful ingestion...");
-		await yt.TransitionBroadcastToLiveWhenReadyAsync(res.broadcastId ?? string.Empty, TimeSpan.FromSeconds(30), 3, cancellationToken);
-	}
-
-	// cleanup
-	Console.WriteLine("Ending test broadcast...");
-	if (!string.IsNullOrEmpty(res.broadcastId))
-	{
-		await yt.EndBroadcastAsync(res.broadcastId, CancellationToken.None);
-	}
-	yt.Dispose();
-}
+// Note: test-mode helper removed. The app now always runs the host and poller.
 
 static void PrintHelp()
-{
+{ 
 	Console.WriteLine("PrintStreamer - Stream 3D printer webcam to YouTube Live");
 	Console.WriteLine();
 	Console.WriteLine("Configuration Methods:");
@@ -543,38 +652,29 @@ static void PrintHelp()
 	Console.WriteLine("  3. Command-line arguments (use --Key value or --Key=value)");
 	Console.WriteLine();
 	Console.WriteLine("Configuration Keys:");
-	Console.WriteLine("  Mode                              - serve (default), stream, or read");
+	Console.WriteLine("  (Mode option removed) The application now always polls Moonraker and serves the UI by default. Use Serve:Enabled=false to disable the UI.");
 	Console.WriteLine("  Stream:Source                     - MJPEG URL (required)");
 	Console.WriteLine("  Stream:UseNativeStreamer          - true/false (default: false)");
 	Console.WriteLine("  YouTube:Key                       - Manual stream key (optional)");
 	Console.WriteLine("  YouTube:OAuth:ClientId            - OAuth client ID (optional)");
 	Console.WriteLine("  YouTube:OAuth:ClientSecret        - OAuth client secret (optional)");
 	Console.WriteLine();
-	Console.WriteLine("Modes:");
-	Console.WriteLine("  serve   - MJPEG proxy server on :8080 + YouTube streaming (if configured)");
-	Console.WriteLine("  stream  - Direct YouTube streaming only");
-	Console.WriteLine("  read    - Diagnostic mode (prints frame info, no streaming)");
-	Console.WriteLine();
 	Console.WriteLine("Examples:");
 	Console.WriteLine();
 	Console.WriteLine("  # Run with defaults from appsettings.json");
 	Console.WriteLine("  dotnet run");
 	Console.WriteLine();
-	Console.WriteLine("  # Override mode via command-line");
-	Console.WriteLine("  dotnet run -- --Mode stream");
-	Console.WriteLine();
 	Console.WriteLine("  # Set multiple options on command-line");
-	Console.WriteLine("  dotnet run -- --Mode stream --Stream:Source \"http://printer/webcam/?action=stream\"");
+	Console.WriteLine("  dotnet run -- --Stream:Source \"http://printer/webcam/?action=stream\"");
 	Console.WriteLine();
 	Console.WriteLine("  # Use environment variables");
 	Console.WriteLine("  export Stream__Source=\"http://printer/webcam/?action=stream\"");
-	Console.WriteLine("  export Mode=stream");
 	Console.WriteLine("  export Stream__UseNativeStreamer=true");
 	Console.WriteLine("  dotnet run");
 	Console.WriteLine();
 	Console.WriteLine("  # Mix config file, env vars, and command-line");
 	Console.WriteLine("  # (Command-line > Env vars > appsettings.json)");
-	Console.WriteLine("  dotnet run -- --Mode serve --YouTube:Key \"your-key\"");
+	Console.WriteLine("  dotnet run -- --YouTube:Key \"your-key\"");
 	Console.WriteLine();
 	Console.WriteLine("See README.md for complete documentation.");
 	Console.WriteLine();

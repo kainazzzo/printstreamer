@@ -22,49 +22,28 @@ namespace PrintStreamer.Services
 
         public Task StartAsync(CancellationToken cancellationToken)
         {
-            // Only start background poll/streaming based on configured mode
-            var mode = _config.GetValue<string>("Mode")?.ToLowerInvariant() ?? "serve";
-
-            // For serve mode, optionally start streaming when configured (YouTube:StartInServe)
-            var startInServe = _config.GetValue<bool?>("YouTube:StartInServe") ?? false;
-
-            if (mode == "poll" || mode == "stream" || (mode == "serve" && startInServe))
+            // Always start the poller as part of the host lifecycle. The app now always polls Moonraker
+            // and serves the UI (serving can be disabled via Serve:Enabled).
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var token = _cts.Token;
+            _executingTask = Task.Run(async () =>
             {
-                _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                var token = _cts.Token;
-                _executingTask = Task.Run(async () =>
+                try
                 {
-                    try
-                    {
-                        if (mode == "poll")
-                        {
-                            _logger.LogInformation("MoonrakerHostedService starting in poll mode");
-                            await MoonrakerPoller.PollAndStreamJobsAsync(_config, token);
-                        }
-                        else
-                        {
-                            _logger.LogInformation("MoonrakerHostedService starting stream mode");
-                            var source = _config.GetValue<string>("Stream:Source");
-                            var key = _config.GetValue<string>("YouTube:Key");
-                            // StartYouTubeStreamAsync now reads Stream:Source and YouTube:Key from IConfiguration internally
-                            await MoonrakerPoller.StartYouTubeStreamAsync(_config, token, enableTimelapse: true, timelapseProvider: null);
-                        }
-                    }
-                    catch (OperationCanceledException) when (token.IsCancellationRequested)
-                    {
-                        _logger.LogInformation("MoonrakerHostedService canceled");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "MoonrakerHostedService error");
-                    }
-                }, token);
+                    _logger.LogInformation("MoonrakerHostedService starting poller");
+                    await MoonrakerPoller.PollAndStreamJobsAsync(_config, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    _logger.LogInformation("MoonrakerHostedService canceled");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "MoonrakerHostedService error");
+                }
+            }, token);
 
-                // don't block StartAsync; return completed
-                return Task.CompletedTask;
-            }
-
-            _logger.LogInformation("MoonrakerHostedService not started (mode={mode})", mode);
+            // don't block StartAsync; return completed
             return Task.CompletedTask;
         }
 
