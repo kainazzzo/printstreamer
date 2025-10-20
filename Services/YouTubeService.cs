@@ -7,11 +7,6 @@ using System.Text.Json;
 using Google.Apis.Util.Store;
 // using Google.Apis.Auth.OAuth2.Flows; // not used with the standard broker flow
 using System.Collections.Concurrent;
-using System;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
 using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Auth.OAuth2.Requests;
 using System.Diagnostics;

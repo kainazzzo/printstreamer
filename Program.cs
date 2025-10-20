@@ -1,8 +1,4 @@
-﻿using PrintStreamer.Interfaces;
-using PrintStreamer.Streamers;
-using PrintStreamer.Overlay;
-using PrintStreamer.Timelapse;
-using PrintStreamer.Utils;
+﻿using PrintStreamer.Timelapse;
 using PrintStreamer.Services;
 
 // Moonraker polling and streaming helpers moved to Services/MoonrakerPoller.cs

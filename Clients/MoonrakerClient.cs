@@ -1,10 +1,5 @@
 // Minimal Moonraker client helpers
-using System;
-using System.Collections.Generic;
-using System.Net.Http;
 using System.Text.Json.Nodes;
-using System.Threading;
-using System.Threading.Tasks;
 
 internal static class MoonrakerClient
 {

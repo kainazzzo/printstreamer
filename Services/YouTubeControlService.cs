@@ -11,7 +11,6 @@ using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Auth.OAuth2.Requests;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
-using System.Linq;
 
 internal class YouTubeControlService : IDisposable
 {

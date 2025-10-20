@@ -1,14 +1,7 @@
-using System;
 using System.Collections.Concurrent;
-using System.IO;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Net.Http;
 using System.Text.Json.Nodes;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
 using PrintStreamer.Utils;
 
 namespace PrintStreamer.Timelapse

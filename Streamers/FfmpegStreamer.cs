@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Collections.Generic;
 using PrintStreamer.Interfaces;
 
 namespace PrintStreamer.Streamers
