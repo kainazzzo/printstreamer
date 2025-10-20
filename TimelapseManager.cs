@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 
-public class TimelapseManager : IDisposable
+public class TimelapseManager : IDisposable, PrintStreamer.Overlay.ITimelapseMetadataProvider
 {
     private readonly IConfiguration _config;
     private readonly string _mainTimelapseDir;
@@ -41,6 +44,125 @@ public class TimelapseManager : IDisposable
             LastCaptureTime = null
         };
 
+        // If a Moonraker filename was provided, try to download it once and cache contents + parsed layer markers
+        if (!string.IsNullOrWhiteSpace(moonrakerFilename))
+        {
+            try
+            {
+                var baseUrl = _config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125";
+                var apiKey = _config.GetValue<string>("Moonraker:ApiKey");
+                var authHeader = _config.GetValue<string>("Moonraker:AuthHeader");
+                var baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(baseUrl) ?? new Uri(baseUrl);
+
+                Console.WriteLine($"[TimelapseManager] Attempting to download G-code: {moonrakerFilename}");
+                // Best-effort: list remote gcode files under common roots to help debug 404s
+                try
+                {
+                    var listRootCandidates = new[] { "", "gcodes", "/gcodes" };
+                    foreach (var root in listRootCandidates)
+                    {
+                        var list = await MoonrakerClient.ListFilesAsync(baseUri, string.IsNullOrWhiteSpace(root) ? null : root, apiKey, authHeader, CancellationToken.None);
+                        if (list != null)
+                        {
+                            try
+                            {
+                                // The response shape varies; try to extract file names from common locations
+                                Console.WriteLine($"[TimelapseManager] Moonraker file list for '{root}':");
+                                // If result.files exists as an array
+                                var files = list["result"]? ["files"];
+                                if (files is JsonArray fa)
+                                {
+                                    foreach (var f in fa)
+                                    {
+                                        var name = f?["name"]?.ToString() ?? f?.ToString();
+                                        if (!string.IsNullOrWhiteSpace(name) && name.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase))
+                                            Console.WriteLine($"[TimelapseManager] - {name}");
+                                    }
+                                }
+                                else
+                                {
+                                    // Walk the JSON and print any gcode-looking strings
+                                    void Walk(JsonNode? n)
+                                    {
+                                        if (n == null) return;
+                                        if (n is JsonValue v)
+                                        {
+                                            var s = v.ToString();
+                                            if (!string.IsNullOrWhiteSpace(s) && s.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase))
+                                                Console.WriteLine($"[TimelapseManager] - {s}");
+                                        }
+                                        else if (n is JsonObject o)
+                                        {
+                                            foreach (var kv in o) Walk(kv.Value);
+                                        }
+                                        else if (n is JsonArray a)
+                                        {
+                                            foreach (var it in a) Walk(it);
+                                        }
+                                    }
+                                    Walk(list);
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+                var bytes = await MoonrakerClient.DownloadFileAsync(baseUri, moonrakerFilename, apiKey, authHeader, CancellationToken.None);
+                if (bytes != null && bytes.Length > 0)
+                {
+                    session.CachedGcode = bytes;
+                    // Save a copy to disk under configured folder for inspection
+                    try
+                    {
+                        var gcodeFolder = _config.GetValue<string>("GcodeFolder") ?? Path.Combine(_mainTimelapseDir, "gcode");
+                        Directory.CreateDirectory(gcodeFolder);
+                        var safeName = SanitizeFilename(moonrakerFilename ?? session.Name);
+                        var savePath = Path.Combine(gcodeFolder, safeName + ".gcode");
+                        await File.WriteAllBytesAsync(savePath, bytes);
+                        session.SavedGcodePath = savePath;
+                        Console.WriteLine($"[TimelapseManager] Saved G-code to: {savePath}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[TimelapseManager] Failed to save G-code to disk: {ex.Message}");
+                    }
+                    // Parse layer markers from G-code (Mainsail-style: look for ;LAYER: or ; layer or ;LAYER: markers)
+                    session.LayerStarts = ParseGcodeLayerStarts(bytes);
+                    session.TotalLayersFromGcode = session.LayerStarts?.Length;
+                    Console.WriteLine($"[TimelapseManager] Downloaded and parsed G-code ({session.TotalLayersFromGcode ?? 0} layers)");
+
+                    // Try to also fetch server file metadata (slicer, estimated times etc.)
+                    var meta = await MoonrakerClient.GetFileMetadataAsync(baseUri, moonrakerFilename!, apiKey, authHeader, CancellationToken.None);
+                    if (meta != null)
+                    {
+                        session.MetadataRaw = meta;
+                        // Try to extract some common metadata fields
+                        try
+                        {
+                            if (meta is JsonObject m && m.TryGetPropertyValue("result", out var res) && res is JsonObject r)
+                            {
+                                if (r.TryGetPropertyValue("metadata", out var md) && md is JsonObject mdObj)
+                                {
+                                    if (mdObj.TryGetPropertyValue("slicer", out var slicer)) session.Slicer = slicer?.ToString();
+                                    if (mdObj.TryGetPropertyValue("estimated_time", out var est)) session.EstimatedSeconds = TryParseDouble(est?.ToString());
+                                    if (mdObj.TryGetPropertyValue("layer_count", out var lc) && int.TryParse(lc?.ToString(), out var lcInt)) session.TotalLayersFromMetadata = lcInt;
+                                }
+                                // some frontends place layer_count at result
+                                if (session.TotalLayersFromMetadata == null && r.TryGetPropertyValue("layer_count", out var topLc) && int.TryParse(topLc?.ToString(), out var topLcInt))
+                                    session.TotalLayersFromMetadata = topLcInt;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TimelapseManager] Error downloading/parsing G-code: {ex.Message}");
+            }
+        }
+
         if (_activeSessions.TryAdd(actualFolderName, session))
         {
             Console.WriteLine($"[TimelapseManager] Started timelapse session: {actualFolderName}");
@@ -78,19 +200,27 @@ public class TimelapseManager : IDisposable
             Console.WriteLine($"[TimelapseManager] Stopped capture timer");
         }
 
-        // Create video
+    // Create video
         var folderName = Path.GetFileName(session.Service.OutputDir);
         var videoPath = Path.Combine(session.Service.OutputDir, $"{folderName}.mp4");
         
         try
         {
             var result = await session.Service.CreateVideoAsync(videoPath, 30, CancellationToken.None);
+            // Clear cached gcode and metadata
+            session.CachedGcode = null;
+            session.LayerStarts = null;
+            session.MetadataRaw = null;
             session.Service.Dispose();
             return result;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[TimelapseManager] Failed to create video for {sessionName}: {ex.Message}");
+            // Ensure cleanup
+            session.CachedGcode = null;
+            session.LayerStarts = null;
+            session.MetadataRaw = null;
             session.Service.Dispose();
             return null;
         }
@@ -143,6 +273,47 @@ public class TimelapseManager : IDisposable
 
     public IEnumerable<string> GetActiveSessionNames() => _activeSessions.Keys;
 
+    // Provide a thread-safe accessor for overlay/other services to read cached metadata for a given printer filename
+    public PrintStreamer.Overlay.TimelapseSessionMetadata? GetMetadataForFilename(string filename)
+    {
+        if (string.IsNullOrWhiteSpace(filename)) return null;
+
+        // Attempt to match by sanitized filename to session folder names
+        var sanitized = SanitizeFilename(filename);
+        if (_activeSessions.TryGetValue(sanitized, out var session))
+        {
+            return new PrintStreamer.Overlay.TimelapseSessionMetadata
+            {
+                TotalLayersFromGcode = session.TotalLayersFromGcode,
+                TotalLayersFromMetadata = session.TotalLayersFromMetadata,
+                RawMetadata = session.MetadataRaw,
+                Slicer = session.Slicer,
+                    EstimatedSeconds = session.EstimatedSeconds,
+                    SavedGcodePath = session.SavedGcodePath
+            };
+        }
+
+        // If direct key didn't match, try to find any session whose name equals or contains the sanitized filename
+        foreach (var kv in _activeSessions)
+        {
+            if (kv.Key.Equals(sanitized, StringComparison.OrdinalIgnoreCase) || kv.Key.Contains(sanitized, StringComparison.OrdinalIgnoreCase))
+            {
+                var s = kv.Value;
+                return new PrintStreamer.Overlay.TimelapseSessionMetadata
+                {
+                    TotalLayersFromGcode = s.TotalLayersFromGcode,
+                    TotalLayersFromMetadata = s.TotalLayersFromMetadata,
+                    RawMetadata = s.MetadataRaw,
+                    Slicer = s.Slicer,
+                    EstimatedSeconds = s.EstimatedSeconds,
+                    SavedGcodePath = s.SavedGcodePath
+                };
+            }
+        }
+
+        return null;
+    }
+
     private async void CaptureFramesAsync(object? state)
     {
         if (_disposed || _activeSessions.IsEmpty)
@@ -182,6 +353,37 @@ public class TimelapseManager : IDisposable
         {
             Console.WriteLine($"[TimelapseManager] Error capturing frame for {session.Name}: {ex.Message}");
         }
+    }
+
+    // Parse gcode bytes and return an array of file offsets where layer markers were found
+    private static long[] ParseGcodeLayerStarts(byte[] bytes)
+    {
+        try
+        {
+            var text = Encoding.UTF8.GetString(bytes);
+            // Mainsail / many slicers annotate layers with lines like: ";LAYER:10" or "; layer 10" or ";LAYER: 10"
+            var matches = Regex.Matches(text, @"^\s*;\s*(?:LAYER:|layer\s+)(\d+)", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            var offsets = new List<long>();
+            foreach (Match m in matches)
+            {
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var layerIdx))
+                {
+                    // compute byte offset by finding the match index in the raw text
+                    var charIndex = m.Index;
+                    var byteOffset = Encoding.UTF8.GetByteCount(text.Substring(0, charIndex));
+                    offsets.Add(byteOffset);
+                }
+            }
+            return offsets.ToArray();
+        }
+        catch { return Array.Empty<long>(); }
+    }
+
+    private static double? TryParseDouble(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        if (double.TryParse(s, out var d)) return d;
+        return null;
     }
 
     private static string SanitizeFilename(string filename)
@@ -271,6 +473,21 @@ public class TimelapseSession
     public required TimelapseService Service { get; set; }
     public DateTime StartTime { get; set; }
     public DateTime? LastCaptureTime { get; set; }
+    // Cached G-code bytes (downloaded once at session start when available)
+    public byte[]? CachedGcode { get; set; }
+    // Parsed byte offsets where each layer starts (zero-based layer index -> file offset)
+    public long[]? LayerStarts { get; set; }
+    // Total layers inferred from parsed G-code
+    public int? TotalLayersFromGcode { get; set; }
+    // Total layers as reported in file metadata (if available)
+    public int? TotalLayersFromMetadata { get; set; }
+    // Raw metadata JSON from Moonraker /server/files/metadata
+    public JsonNode? MetadataRaw { get; set; }
+    // Slicer name and estimated seconds
+    public string? Slicer { get; set; }
+    public double? EstimatedSeconds { get; set; }
+    // Path on disk where the downloaded G-code was saved (if saved)
+    public string? SavedGcodePath { get; set; }
 }
 
 public class TimelapseInfo

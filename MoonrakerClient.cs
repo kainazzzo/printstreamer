@@ -36,6 +36,129 @@ internal static class MoonrakerClient
     }
 
     /// <summary>
+    /// Fetch file metadata for a given filename from Moonraker: /server/files/metadata?filename=...
+    /// Returns the parsed JsonNode (raw response) or null on failure.
+    /// </summary>
+    public static async Task<JsonNode?> GetFileMetadataAsync(Uri baseUri, string filename, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(8) };
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
+                try { http.DefaultRequestHeaders.Remove(header); } catch { }
+                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
+            }
+            // Try candidates: as-is, and with common root prefix 'gcodes/' when not provided
+            foreach (var candidate in EnumerateFilenameCandidates(filename))
+            {
+                var endpoint = $"/server/files/metadata?filename={Uri.EscapeDataString(candidate)}";
+                Console.WriteLine($"[Moonraker] GET {endpoint}");
+                var resp = await http.GetAsync(endpoint, cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    return JsonNode.Parse(txt);
+                }
+                else
+                {
+                    Console.WriteLine($"[Moonraker] Metadata request failed for '{candidate}': {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                }
+            }
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Download a file from Moonraker server files API: /server/files/download?filename=...
+    /// Returns the file bytes or null on failure.
+    /// </summary>
+    public static async Task<byte[]?> DownloadFileAsync(Uri baseUri, string filename, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(30) };
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
+                try { http.DefaultRequestHeaders.Remove(header); } catch { }
+                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
+            }
+            // Try candidates: as-is, and with common root prefix 'gcodes/' when not provided
+            foreach (var candidate in EnumerateFilenameCandidates(filename))
+            {
+                var endpoint = $"/server/files/download?filename={Uri.EscapeDataString(candidate)}";
+                Console.WriteLine($"[Moonraker] GET {endpoint}");
+                var resp = await http.GetAsync(endpoint, cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    return await resp.Content.ReadAsByteArrayAsync(cancellationToken);
+                }
+                else
+                {
+                    Console.WriteLine($"[Moonraker] Download failed for '{candidate}': {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                }
+            }
+            return null;
+        }
+        catch { return null; }
+    }
+
+    // Generate reasonable candidates for Moonraker file API: try the filename as-is, and if it lacks a
+    // directory component, also try prefixing the common Mainsail root 'gcodes/'. Trim any leading slashes.
+    private static IEnumerable<string> EnumerateFilenameCandidates(string filename)
+    {
+        if (string.IsNullOrWhiteSpace(filename)) yield break;
+        var f = filename.Trim();
+        while (f.StartsWith("/")) f = f.Substring(1);
+        yield return f;
+        if (!f.Contains('/') && !f.StartsWith("gcodes/", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return $"gcodes/{f}";
+        }
+    }
+
+    /// <summary>
+    /// List files on the Moonraker server under an optional path (for example 'gcodes/').
+    /// Returns the parsed JsonNode or null on failure. This is a best-effort helper and
+    /// callers should handle different response shapes from various frontends.
+    /// </summary>
+    public static async Task<JsonNode?> ListFilesAsync(Uri baseUri, string? path = null, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(8) };
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
+                try { http.DefaultRequestHeaders.Remove(header); } catch { }
+                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
+            }
+
+            var endpoint = "/server/files/list";
+            if (!string.IsNullOrWhiteSpace(path)) endpoint += $"?path={Uri.EscapeDataString(path)}";
+            Console.WriteLine($"[Moonraker] GET {endpoint}");
+            var resp = await http.GetAsync(endpoint, cancellationToken);
+            if (resp.IsSuccessStatusCode)
+            {
+                var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+                return JsonNode.Parse(txt);
+            }
+            else
+            {
+                Console.WriteLine($"[Moonraker] File list request failed: {(int)resp.StatusCode} {resp.ReasonPhrase}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Moonraker] File list error: {ex.Message}");
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Rich print info fetched from Moonraker: filename, progress, times, temperatures, sensors.
     /// </summary>
     public record MoonrakerPrintInfo(
@@ -49,7 +172,9 @@ internal static class MoonrakerClient
         (double? Actual, double? Target)? Tool0Temp,
         List<SensorInfo>? Sensors,
         JsonNode? RawJson,
-        string? JobQueueId
+        string? JobQueueId,
+        int? CurrentLayer,
+        int? TotalLayers
     );
 
     /// <summary>
@@ -372,7 +497,124 @@ internal static class MoonrakerClient
         if (dispNode != null) raw["display_status"] = dispNode;
         if (infoNode != null) raw["info"] = infoNode;
 
-    return new MoonrakerPrintInfo(filename, state, progress, elapsed, remaining, bedActual, bedTarget, tool0, sensors, raw, jobQueueId);
+            // Extract layer information from print_stats or metadata (robust with fallbacks)
+            int? currentLayer = null;
+            int? totalLayers = null;
+
+            // Try print_stats first (common locations: result.status.print_stats.info.current_layer / total_layer
+            // or result.print_stats.info.current_layer / total_layer)
+            try
+            {
+                if (statsNode is JsonObject s && s.TryGetPropertyValue("result", out var res) && res is JsonObject r)
+                {
+                    // Try direct print_stats block
+                    if (r.TryGetPropertyValue("print_stats", out var psDirect) && psDirect is JsonObject psd)
+                    {
+                        if (psd.TryGetPropertyValue("info", out var infoDirect) && infoDirect is JsonObject infoD)
+                        {
+                            TryReadLayerFieldsFromInfo(infoD, ref currentLayer, ref totalLayers);
+                        }
+                    }
+
+                    // Try status -> print_stats block (another common structure)
+                    if (r.TryGetPropertyValue("status", out var status) && status is JsonObject statusObj)
+                    {
+                        if (statusObj.TryGetPropertyValue("print_stats", out var ps) && ps is JsonObject psobj)
+                        {
+                            if (psobj.TryGetPropertyValue("info", out var info) && info is JsonObject infoObj)
+                            {
+                                TryReadLayerFieldsFromInfo(infoObj, ref currentLayer, ref totalLayers);
+                            }
+                            else
+                            {
+                                // Sometimes layer info is present directly under print_stats
+                                TryReadLayerFieldsFromInfo(psobj, ref currentLayer, ref totalLayers);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // If not found, try metadata responses. Different Moonraker/frontends may embed metadata under different keys.
+            if ((currentLayer == null || totalLayers == null) && metadataNode != null)
+            {
+                try
+                {
+                    if (metadataNode is JsonObject m && m.TryGetPropertyValue("result", out var mres) && mres is JsonObject mresObj)
+                    {
+                        // Common: result -> metadata -> layer_count
+                        if (mresObj.TryGetPropertyValue("metadata", out var md) && md is JsonObject mdObj)
+                        {
+                            if (mdObj.TryGetPropertyValue("layer_count", out var lc) && int.TryParse(lc?.ToString(), out var lcInt))
+                                totalLayers = lcInt;
+
+                            // Some frontends put gcode metadata under gcode
+                            if (mdObj.TryGetPropertyValue("gcode", out var gcode) && gcode is JsonObject gcodeObj)
+                            {
+                                if (gcodeObj.TryGetPropertyValue("layer_count", out var glc) && int.TryParse(glc?.ToString(), out var glcInt))
+                                    totalLayers = totalLayers ?? glcInt;
+                            }
+                        }
+
+                        // Older/alternate responses may expose layer_count at the top of result
+                        if (mresObj.TryGetPropertyValue("layer_count", out var topLc) && int.TryParse(topLc?.ToString(), out var topLcInt))
+                            totalLayers = totalLayers ?? topLcInt;
+                    }
+                }
+                catch { }
+            }
+
+            // Final fallback: if we have totalLayers and a numeric progress percent, estimate current layer
+            try
+            {
+                if (currentLayer == null && totalLayers != null && progress.HasValue)
+                {
+                    // progress is 0..100 (ExtractProgressFromStats returns percent)
+                    var pct = progress.Value / 100.0;
+                    var calc = (int)Math.Floor(pct * totalLayers.Value);
+                    if (calc < 0) calc = 0;
+                    if (calc > totalLayers.Value) calc = totalLayers.Value;
+                    currentLayer = calc;
+                }
+            }
+            catch { }
+
+            // Local helper to try multiple possible key names inside an "info" object
+            static void TryReadLayerFieldsFromInfo(JsonObject infoObj, ref int? currentLayerRef, ref int? totalLayersRef)
+            {
+                // Try a number of possíveis keys that have been observed in various setups
+                string[] currentKeys = new[] { "current_layer", "current_layer_index", "current_layer_number", "layer", "layer_index" };
+                string[] totalKeys = new[] { "total_layer", "total_layers", "layer_count", "total_layer_count" };
+
+                foreach (var k in currentKeys)
+                {
+                    if (currentLayerRef != null) break;
+                    if (infoObj.TryGetPropertyValue(k, out var v) && v != null)
+                    {
+                        if (int.TryParse(v.ToString(), out var iv))
+                        {
+                            currentLayerRef = iv;
+                            break;
+                        }
+                    }
+                }
+
+                foreach (var k in totalKeys)
+                {
+                    if (totalLayersRef != null) break;
+                    if (infoObj.TryGetPropertyValue(k, out var v) && v != null)
+                    {
+                        if (int.TryParse(v.ToString(), out var iv))
+                        {
+                            totalLayersRef = iv;
+                            break;
+                        }
+                    }
+                }
+            }
+
+        return new MoonrakerPrintInfo(filename, state, progress, elapsed, remaining, bedActual, bedTarget, tool0, sensors, raw, jobQueueId, currentLayer, totalLayers);
     }
 
     private static bool IsNullResponse(JsonNode? node, string selectKey)

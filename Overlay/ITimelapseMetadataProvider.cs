@@ -1,0 +1,25 @@
+using System.Text.Json.Nodes;
+
+namespace PrintStreamer.Overlay
+{
+    public interface ITimelapseMetadataProvider
+    {
+        /// <summary>
+        /// Return metadata for an active timelapse session matching the given filename (printer-reported filename).
+        /// Returns null if no active session or no cached metadata.
+        /// </summary>
+        TimelapseSessionMetadata? GetMetadataForFilename(string filename);
+    }
+
+    public sealed class TimelapseSessionMetadata
+    {
+        public int? TotalLayersFromGcode { get; init; }
+        public int? TotalLayersFromMetadata { get; init; }
+        public JsonNode? RawMetadata { get; init; }
+        public string? Slicer { get; init; }
+        public double? EstimatedSeconds { get; init; }
+        public string? SavedGcodePath { get; init; }
+        // Expose layer starts length for quick checks
+        public int? ParsedLayerCount => TotalLayersFromGcode ?? null;
+    }
+}

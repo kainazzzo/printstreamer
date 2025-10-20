@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "Poll (Local)": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Local",
+        "Mode": "poll"
+      }
+    }
+  }
+}

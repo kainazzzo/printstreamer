@@ -1,0 +1,2 @@
+﻿Nozzle: 199.3°C/0.0°C  |  Bed: 55.3°C/0.0°C
+complete  |  0%  |  00:15:59  |  Layers: -/-

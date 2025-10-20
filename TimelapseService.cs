@@ -9,6 +9,8 @@ public class TimelapseService : IDisposable
     public string OutputDir { get; }
     private int _frameCount = 0;
     private bool _finalized = false;
+    private readonly object _saveLock = new object();
+    private bool _isAcceptingFrames = true; // true = accepting, false = stopped
 
     public TimelapseService(string mainFolder, string streamId)
     {
@@ -62,9 +64,18 @@ public class TimelapseService : IDisposable
 
     public async Task SaveFrameAsync(byte[] imageBytes, CancellationToken cancellationToken = default)
     {
-        var filename = Path.Combine(OutputDir, $"frame_{_frameCount:D6}.jpg");
+        if (imageBytes == null) return;
+        int myIndex;
+        lock (_saveLock)
+        {
+            if (!_isAcceptingFrames)
+                return; // no longer accepting frames
+            myIndex = _frameCount;
+            Interlocked.Increment(ref _frameCount);
+        }
+
+        var filename = Path.Combine(OutputDir, $"frame_{myIndex:D6}.jpg");
         await File.WriteAllBytesAsync(filename, imageBytes, cancellationToken);
-        Interlocked.Increment(ref _frameCount);
     }
 
     public async Task<string?> CreateVideoAsync(string outputVideoPath, int fps = 30, CancellationToken cancellationToken = default)
