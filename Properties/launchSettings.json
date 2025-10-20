@@ -3,8 +3,7 @@
     "Poll (Local)": {
       "commandName": "Project",
       "environmentVariables": {
-        "DOTNET_ENVIRONMENT": "Local",
-        "Mode": "poll"
+        "DOTNET_ENVIRONMENT": "Local"
       }
     }
   }

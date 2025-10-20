@@ -24,4 +24,4 @@ echo "Building Docker image..."
 docker build -t $DOTNET_IMAGE .
 
 echo "Docker image '$DOTNET_IMAGE' built and available locally."
-echo "Run with: docker run --rm -it --name $CONTAINER_NAME -e Mode=poll -v $(pwd)/appsettings.json:/app/appsettings.json $DOTNET_IMAGE"
+echo "Run with: docker run --rm -it --name $CONTAINER_NAME -v $(pwd)/appsettings.json:/app/appsettings.json $DOTNET_IMAGE"

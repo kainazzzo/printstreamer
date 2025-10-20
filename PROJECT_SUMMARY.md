@@ -14,7 +14,7 @@ A complete .NET 8.0 application for streaming 3D printer webcams to YouTube Live
 
 ```
 printstreamer/
-├── Program.cs                    # Main entry point, mode orchestration
+├── Program.cs                    # Main entry point, orchestration
 ├── YouTubeControlService.cs    # OAuth2 + YouTube API integration (control-plane)
 ├── FfmpegStreamer.cs            # FFmpeg-based streamer (default)
 ├── MjpegToRtmpStreamer.cs       # Native .NET streamer (advanced)
@@ -107,7 +107,7 @@ printstreamer/
       "IngestionType": "rtmp"
     }
   },
-  "Mode": "serve"
+  
 }
 ```
 
@@ -122,8 +122,8 @@ export YouTube__Key="your-stream-key"
 export YouTube__OAuth__ClientId="xxx.apps.googleusercontent.com"
 export YouTube__OAuth__ClientSecret="GOCSPX-xxx"
 
-# Operation mode
-export Mode=serve
+# Operation flags
+export Stream__Source="http://printer.local/webcam/?action=stream"
 ```
 
 ## 🎬 Usage Examples
@@ -136,13 +136,13 @@ Access at: `http://localhost:8080/stream`
 
 ### 2. Stream to YouTube (OAuth)
 ```bash
-dotnet run -- --Mode stream
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --YouTube:OAuth:ClientId "xxx" --YouTube:OAuth:ClientSecret "xxx"
 ```
-Creates broadcast automatically, prints YouTube URL
+Creates broadcast automatically when promoted to live (or use the UI Go Live button)
 
 ### 3. Proxy + YouTube Streaming
 ```bash
-dotnet run -- --Mode serve
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --YouTube:OAuth:ClientId "xxx" --YouTube:OAuth:ClientSecret "xxx"
 ```
 (with OAuth configured in appsettings.json)
 
@@ -153,19 +153,18 @@ docker run -p 8080:8080 \
   -e Stream__Source="http://printer.local/webcam/?action=stream" \
   -e YouTube__OAuth__ClientId="xxx" \
   -e YouTube__OAuth__ClientSecret="xxx" \
-  -e Mode=serve \
   printstreamer:latest
 ```
 
 ### 5. Native Streamer
 ```bash
 export Stream__UseNativeStreamer=true
-dotnet run -- --Mode stream
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream"
 ```
 
 ## 📈 Architecture Highlights
 
-### Data Flow (Serve + Stream Mode)
+### Data Flow (Serve + Stream)
 ```
 ┌─────────────────┐
 │  3D Printer     │
@@ -224,8 +223,8 @@ IStreamer (interface)
 # Run without building
 dotnet run
 
-# Run with specific mode
-dotnet run -- --Mode stream
+# Run examples
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream"
 
 # Build only
 dotnet build

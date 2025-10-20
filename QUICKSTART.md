@@ -18,13 +18,13 @@ ffmpeg -version
 ### Step 2: Configure Source (1 minute)
 Set your printer stream source at runtime using command-line switches:
 ```bash
-dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode serve
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream"
 ```
 
 ### Step 3: Test Locally (1 minute)
 ```bash
 # Start the app
-dotnet run
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream"
 
 # Open in browser
 open http://localhost:8080
@@ -34,11 +34,13 @@ You should see your printer's camera feed! 🎉
 
 ### Step 4: Setup YouTube (OAuth Only)
 
-PrintStreamer now requires Google OAuth for YouTube streaming. Manual stream key mode is no longer supported.
+PrintStreamer uses OAuth for YouTube streaming. You can also provide a manual stream key via YouTube:Key for non-OAuth scenarios.
 
 Set your OAuth credentials at runtime using command-line switches:
 ```bash
-dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Mode stream
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 ```
 **Warning:** Never pass your client secret on the command line in production! Use Docker secrets or a secrets manager for secure deployments. See `DOCKER_RELEASE.md` for secure setup.
 
@@ -47,13 +49,21 @@ On first run, a browser window will open for Google authentication. Approve acce
 ### Step 5: Start Streaming! (30 seconds)
 ```bash
 # Stream to YouTube
-dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode stream
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 
-# Or run proxy + streaming together
-dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode serve
+# Or run proxy + streaming together (startYouTubeInServe via config)
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" \
+  --YouTube:StartInServe true
 
-# Or use poll mode for automated streaming (requires Moonraker API)
-dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" --Mode poll
+# Or use the background poller for automated streaming (requires Moonraker API)
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 ```
 
 ---
@@ -63,19 +73,24 @@ dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.co
 ### Use Case 1: Just Testing?
 ```bash
 # Run proxy server only (no YouTube)
-dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode serve
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream"
 # View at http://localhost:8080
 ```
 
 ### Use Case 2: Stream to YouTube (OAuth)
 ```bash
-dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Mode stream
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 ```
 On first run, authorize in your browser. The app will print the YouTube URL.
 
-### Use Case 3: Poll Mode (Automated Streaming)
+### Use Case 3: Automated streaming (Poller)
 ```bash
-dotnet run -- --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" --Mode poll
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 ```
 The app will automatically start/stop YouTube streams based on print jobs.
 
@@ -90,8 +105,7 @@ docker run -p 8080:8080 \
   --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
   --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
   --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" \
-  --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" \
-  --Mode poll
+  --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125"
 ```
 **Warning:** Never pass your client secret directly in production! Use Docker secrets or a secrets manager. See `DOCKER_RELEASE.md` for secure deployment.
 
@@ -102,7 +116,7 @@ docker run -p 8080:8080 \
 ### Problem: "Error: Stream:Source is required"
 **Fix**: Pass the source as a runtime switch:
 ```bash
-dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --Mode serve
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream"
 ```
 
 ### Problem: "ffmpeg: command not found"
@@ -172,7 +186,6 @@ After setup, verify:
 Program.cs          → Start here, main flow
 FfmpegStreamer.cs   → How ffmpeg is called
 YouTubeControlService.cs → YouTube integration
-MjpegToRtmpStreamer.cs → Native streamer (advanced)
 ```
 
 ### Key Concepts

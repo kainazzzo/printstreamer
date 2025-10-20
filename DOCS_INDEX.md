@@ -163,7 +163,7 @@ Add custom features
 dotnet run
 
 # Stream to YouTube
-dotnet run -- --Mode stream
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --YouTube:OAuth:ClientId "YOUR_CLIENT_ID" --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 
 # Build Docker image
 docker build -t printstreamer .
@@ -181,7 +181,7 @@ Stream:UseNativeStreamer   # true/false
 YouTube:Key                # Manual stream key
 YouTube:OAuth:ClientId     # OAuth client ID
 YouTube:OAuth:ClientSecret # OAuth client secret
-Mode                       # serve/stream/read
+Serve:Enabled              # true/false (serve the web UI)
 ```
 
 ### Important URLs

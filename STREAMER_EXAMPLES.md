@@ -4,7 +4,7 @@
 
 ### Use FFmpeg Streamer (Default)
 ```bash
-dotnet run -- --Mode stream
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --Stream:UseNativeStreamer false
 ```
 or
 ```json
@@ -18,7 +18,7 @@ or
 ### Use Native .NET Streamer
 ```bash
 export Stream__UseNativeStreamer=true
-dotnet run -- --Mode stream
+dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream"
 ```
 or
 ```json
@@ -47,7 +47,7 @@ or
     "Source": "http://printer.local/webcam/?action=stream",
     "UseNativeStreamer": false
   },
-  "Mode": "stream"
+  
 }
 ```
 
@@ -71,7 +71,7 @@ or
     "Source": "http://printer.local/webcam/?action=stream",
     "UseNativeStreamer": true
   },
-  "Mode": "stream"
+  
 }
 ```
 

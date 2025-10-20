@@ -864,9 +864,6 @@ internal class YouTubeControlService : IDisposable
             var privacy = _config["YouTube:LiveBroadcast:Privacy"] ?? "unlisted";
             var categoryId = _config["YouTube:LiveBroadcast:CategoryId"] ?? "28";
 
-            var streamTitle = _config["YouTube:LiveStream:Title"] ?? "Print Stream";
-            var streamDescription = _config["YouTube:LiveStream:Description"] ?? "3D printer camera feed";
-
             // Try to get Moonraker info to augment title and description
             string? moonrakerFilename = null;
             MoonrakerClient.MoonrakerPrintInfo? moonrakerInfo = null;
@@ -961,7 +958,7 @@ internal class YouTubeControlService : IDisposable
                             description += "\n\n" + summary;
                             // For the stream description keep a compact single-line summary
                             var compact = info.Filename ?? (info.ProgressPercent.HasValue ? $"{info.ProgressPercent.Value:F0}%" : null);
-                            if (!string.IsNullOrWhiteSpace(compact)) streamDescription += $" — {compact}";
+                            if (!string.IsNullOrWhiteSpace(compact)) description += $" — {compact}";
                         }
                     }
                 }
@@ -1004,8 +1001,8 @@ internal class YouTubeControlService : IDisposable
             {
                 Snippet = new LiveStreamSnippet
                 {
-                    Title = streamTitle,
-                    Description = streamDescription
+                    Title = title,
+                    Description = description
                 },
                 Cdn = new CdnSettings
                 {

@@ -2,11 +2,12 @@
 
 Stream your 3D printer webcam to YouTube Live with automated broadcast creation and MJPEG proxy server.
 
-This app can operate in multiple modes:
-- **Serve mode**: Acts as an MJPEG proxy server on port 8080 for local testing
-- **Stream mode**: Streams directly to YouTube using ffmpeg
-- **Combined mode**: Runs both proxy server AND YouTube streaming simultaneously
+This application runs a small web UI and a background poller by default. Configure behavior at runtime using configuration keys (appsettings.json, environment variables, or command-line arguments).
 
+
+ By default the web UI (proxy) is served on port 8080 and the poller runs as a hosted background service.
+ Use Stream__UseNativeStreamer=false to disable the web UI when running in headless environments.
+ Control YouTube behavior with YouTube:OAuth (OAuth credentials) or YouTube:Key (manual stream key). Use YouTube:StartInServe to optionally start streaming when serving the UI.
 The app uses ffmpeg as the streaming engine to keep dependencies minimal and avoid reimplementing video encoding stacks.
 
 ## Quick Start
@@ -15,42 +16,38 @@ The app uses ffmpeg as the streaming engine to keep dependencies minimal and avo
 1. Install ffmpeg: `sudo apt install ffmpeg` (Debian/Ubuntu) or download from [ffmpeg.org](https://ffmpeg.org)
 2. Install .NET 8.0 SDK
 
-### Running Modes
+### Running the app
 
-#### 1. Proxy Server Only (for testing)
+The app's runtime behavior is controlled by configuration keys rather than a single "mode" flag. Examples below show common usage patterns.
+
+1) Run the web UI / MJPEG proxy (default)
+
 ```bash
-dotnet run
-# or with explicit mode
-dotnet run -- --Mode serve
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream"
 ```
-Access the stream at `http://localhost:8080/stream` or view the test page at `http://localhost:8080/`
 
+Open the control panel at http://localhost:8080 to view the raw MJPEG source and the local HLS preview.
 
-#### 2. Stream to YouTube (OAuth Only)
+ 2) Stream to YouTube (OAuth)
+
 ```bash
-dotnet run -- --Mode stream
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 ```
-Requires OAuth credentials set in `appsettings.json` (see setup below). 
 
-The app will:
-1. Authenticate with YouTube (browser opens on first run)
-2. Create a new live broadcast
-3. Create and bind a live stream
-4. Start ffmpeg streaming
-5. Transition the broadcast to "live" status
-6. Print the YouTube watch URL
+On first run, a browser window will open for Google authentication. The app will create and bind a broadcast and start ffmpeg when you promote the encoder to live (or use the Go Live control in the UI).
 
-#### 3. Combined Mode (Proxy + YouTube Streaming)
+ 3) Automated streaming based on Moonraker jobs (poller)
+
 ```bash
-dotnet run -- --Mode serve
+dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
+  --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125" \
+  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 ```
-With OAuth configured, this will run the proxy server on port 8080 AND stream to YouTube in the background.
 
-#### 4. Poll Mode (Automated Streaming)
-```bash
-dotnet run -- --Mode poll
-```
-Automatically starts/stops YouTube streams based on print jobs (requires Moonraker API configured).
+The background poller watches Moonraker print jobs and will start/stop streams automatically when jobs start and finish.
 
 ## Configuration
 
@@ -83,7 +80,7 @@ Configuration is loaded from `appsettings.json`, environment variables, or comma
   "Moonraker": {
     "ApiUrl": "http://YOUR_MOONRAKER_HOST:7125"
   },
-  "Mode": "serve"
+  
 }
 ```
 
@@ -95,20 +92,20 @@ export Stream__UseNativeStreamer=false
 export YouTube__OAuth__ClientId="xxx.apps.googleusercontent.com"
 export YouTube__OAuth__ClientSecret="GOCSPX-xxx"
 export Moonraker__ApiUrl="http://moonraker.local:7125"
-export Mode=serve
+export Stream__Source="http://printer.local/webcam/?action=stream"
 ```
 
 ## Streaming Implementations
 # PrintStreamer
 
-**PrintStreamer** streams your 3D printer webcam to YouTube Live with automated broadcast creation and MJPEG proxy server. It supports multiple modes, including automated job-based streaming via Moonraker.
+**PrintStreamer** streams your 3D printer webcam to YouTube Live with automated broadcast creation and MJPEG proxy server. It includes a web UI and a background poller for Moonraker integration.
 
 ---
 
 ## Documentation Index
 
 - **[QUICKSTART.md](./QUICKSTART.md)** — Fastest way to get streaming, with runtime configuration examples.
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Technical deep-dive, modes, and configuration system.
+ - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Technical deep-dive and configuration system.
 - **[DOCKER_RELEASE.md](./DOCKER_RELEASE.md)** — Secure Docker build, secrets, and deployment best practices.
 - **[PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md)** — Features, security, and development workflow.
 - **[NATIVE_STREAMER.md](./NATIVE_STREAMER.md)** — Native .NET streamer details and advanced features.
@@ -120,7 +117,7 @@ export Mode=serve
 
 - Automated YouTube Live streaming (OAuth only)
 - MJPEG proxy server for local testing
-- Poll mode: auto-start/stop streams based on print jobs (Moonraker)
+- Polling: auto-start/stop streams based on print jobs (Moonraker)
 - Secure, production-ready deployment (see Docker guide)
 
 ---

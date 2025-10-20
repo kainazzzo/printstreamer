@@ -11,13 +11,10 @@ using PrintStreamer.Services;
 // Configuration is loaded from appsettings.json, environment variables, and command-line arguments.
 //
 // Usage examples:
-//   dotnet run -- --Mode serve
-//   dotnet run -- --Mode stream --Stream:Source "http://printer.local/webcam/?action=stream"
-//   dotnet run -- --Mode read --Stream:Source "http://printer.local/webcam/?action=stream"
+//   dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream"
 //
 // Environment variables:
 //   export Stream__Source="http://printer.local/webcam/?action=stream"
-//   export Mode=serve
 //   dotnet run
 //
 // See README.md for full documentation.
@@ -428,15 +425,45 @@ if (serveEnabled)
 			}
 
 			async function attach() {
+				// helper to update visible status
+				function hlsStatus(text) {
+					try { document.getElementById('hlsStatus').textContent = 'HLS status: ' + text; } catch (e) { }
+					console.log('[HLS] ' + text);
+				}
+
+				window.__hlsAttached = false;
+
+				// Try to fetch the manifest first so we can show a clear error if it's missing or returns the wrong content-type
+				let manifestOk = false;
 				try {
-					// Expose a helper so we can start playback from other places (e.g., when MJPEG first frame loads)
-					window.__hlsAttached = false;
-					function attachHls() {
-						if (window.__hlsAttached) return;
-						window.__hlsAttached = true;
-						hlsStatus('attaching');
+					hlsStatus('checking manifest');
+					const resp = await fetch(hlsUrl, { cache: 'no-store' });
+					if (resp.ok) {
+						const ct = resp.headers.get('content-type') || '';
+						console.log('[HLS] manifest content-type:', ct);
+						if (ct.includes('mpegurl') || ct.includes('vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) {
+							manifestOk = true;
+						} else {
+							console.warn('[HLS] Unexpected manifest content-type:', ct);
+							// still attempt attach, but show warning
+							hlsStatus('manifest fetched (unexpected content-type)');
+							manifestOk = true;
+						}
+					} else {
+						console.warn('[HLS] manifest fetch failed:', resp.status);
+						hlsStatus('manifest fetch failed: ' + resp.status);
+					}
+				} catch (err) {
+					console.warn('[HLS] manifest fetch error', err);
+					hlsStatus('manifest fetch error');
+				}
+
+				async function attachHlsOnce() {
+					if (window.__hlsAttached) return;
+					window.__hlsAttached = true;
+					hlsStatus('attaching');
+					try {
 						if (window.Hls) {
-							// Use a small buffer and short live sync to reduce preview latency
 							const hls = new window.Hls({ liveSyncDuration: 2, maxBufferLength: 10 });
 							window.__hlsInstance = hls;
 							hls.on(window.Hls.Events.MANIFEST_PARSED, function() { hlsStatus('manifest parsed'); video.muted = true; video.play().catch(()=>{}); });
@@ -444,11 +471,10 @@ if (serveEnabled)
 							hls.loadSource(hlsUrl);
 							hls.attachMedia(video);
 						} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-							// Native HLS (Safari)
 							video.src = hlsUrl;
 							video.addEventListener('loadedmetadata', function() { hlsStatus('native loaded'); video.muted = true; video.play().catch(()=>{}); });
 						} else {
-							// Try to load hls.js then attach
+							// load hls.js then attach
 							await loadHls();
 							const hls = new window.Hls({ liveSyncDuration: 2, maxBufferLength: 10 });
 							window.__hlsInstance = hls;
@@ -457,50 +483,44 @@ if (serveEnabled)
 							hls.loadSource(hlsUrl);
 							hls.attachMedia(video);
 						}
+					} catch (err) {
+						console.warn('Failed to attach HLS', err);
+						window.__hlsAttached = false;
+						throw err;
 					}
-
-
-					// HLS status helper
-					function hlsStatus(text) {
-						try { document.getElementById('hlsStatus').textContent = 'HLS status: ' + text; } catch (e) { }
-						console.log('[HLS] ' + text);
-					}
-
-					// Start HLS if MJPEG frame is visible or immediately when manifest parses
-					async function startHlsIfReady() {
-						try {
-							await attachHls();
-						} catch (e) {
-							console.warn('Failed to attach HLS:', e);
-							hlsStatus('attach failed: ' + e.message);
-						}
-					}
-
-					// Periodically check whether playback started, else try reattaching
-					setInterval(() => {
-						try {
-							if (video && video.readyState < 2) {
-								hlsStatus('waiting for data... readyState=' + video.readyState);
-								// if no data and we have an hls instance, try to reload manifest
-								if (window.__hlsInstance && typeof window.__hlsInstance.stopLoad === 'function') {
-									window.__hlsInstance.stopLoad();
-									window.__hlsInstance.startLoad();
-								} else if (!window.__hlsAttached) {
-									// try to reattach once
-									attachHls().catch(()=>{});
-								}
-							} else {
-								if (!video.paused) hlsStatus('playing');
-							}
-						} catch (e) { }
-					}, 2000);
-
-					// Kick off attachment immediately as well (will be idempotent)
-					startHlsIfReady();
-				} catch (ex) {
-					console.warn('HLS preview not available:', ex);
 				}
-			}
+
+				// If manifest looks OK, try to attach immediately. Otherwise still attempt attach but show a prominent message.
+				try {
+					if (!manifestOk) {
+						// try loading hls.js first to surface errors
+						await loadHls().catch(()=>{});
+					}
+					await attachHlsOnce();
+				} catch (err) {
+					console.warn('attach() failed, will retry in 3s', err);
+					hlsStatus('attach failed, retrying...');
+					setTimeout(() => { attach(); }, 3000);
+				}
+
+				// Periodic check to restart loading if playback hasn't started
+				setInterval(() => {
+					try {
+						if (video && video.readyState < 2) {
+							hlsStatus('waiting for data... readyState=' + video.readyState);
+							if (window.__hlsInstance && typeof window.__hlsInstance.stopLoad === 'function') {
+								window.__hlsInstance.stopLoad();
+								window.__hlsInstance.startLoad();
+							} else if (!window.__hlsAttached) {
+								attachHlsOnce().catch(()=>{});
+							}
+						} else {
+							if (!video.paused) hlsStatus('playing');
+						}
+					} catch (e) { console.warn('HLS poll err', e); }
+				}, 2500);
+
+			};
 
 			attach();
 		})();

@@ -11,7 +11,7 @@ PrintStreamer is a .NET 8.0 application for streaming 3D printer MJPEG webcam fe
 
 ### Program.cs (Main Entry Point)
 - Loads configuration (CLI args, env vars, appsettings.json)
-- Selects mode: serve, stream, poll, or read
+- Starts the web UI (Serve) and the background poller as configured
 - Orchestrates all services and handles graceful shutdown
 
 ### YouTubeControlService.cs
@@ -37,7 +37,7 @@ PrintStreamer is a .NET 8.0 application for streaming 3D printer MJPEG webcam fe
 
 ## Data Flow
 
-### Serve Mode (Proxy + YouTube)
+### Serve (Proxy + YouTube)
 ```
 3D Printer Camera (MJPEG)
         ↓
@@ -51,7 +51,7 @@ PrintStreamer is a .NET 8.0 application for streaming 3D printer MJPEG webcam fe
    YouTube Live
 ```
 
-### Stream Mode
+### Stream
 ```
 3D Printer Camera (MJPEG)
         ↓
@@ -60,7 +60,7 @@ PrintStreamer is a .NET 8.0 application for streaming 3D printer MJPEG webcam fe
    YouTube Live
 ```
 
-### Poll Mode
+### Poller (Moonraker-driven automated streaming)
 ```
 Moonraker API (job status)
         ↓

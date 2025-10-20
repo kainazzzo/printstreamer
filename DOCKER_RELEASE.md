@@ -36,7 +36,7 @@ PrintStreamer can be configured using either an `appsettings.json` file or envir
   "Moonraker": {
     "ApiUrl": "http://YOUR_MOONRAKER_HOST:7125"
   },
-  "Mode": "poll"
+  
 }
 ```
 
@@ -49,13 +49,8 @@ PrintStreamer can be configured using either an `appsettings.json` file or envir
 All configuration keys can be set as environment variables using double underscores (`__`) for nesting. For example:
 
 ```bash
--e Stream__Source="http://YOUR_PRINTER_IP/webcam/?action=stream" \
--e YouTube__OAuth__ClientId="YOUR_CLIENT_ID.apps.googleusercontent.com" \
--e YouTube__OAuth__ClientSecret="YOUR_CLIENT_SECRET" \
--e Moonraker__ApiUrl="http://YOUR_MOONRAKER_HOST:7125" \
--e Mode=poll
 ```
-
+  
 ---
 
 ## 4. Using Docker Secrets for Sensitive Data
@@ -91,7 +86,7 @@ services:
       - Stream__Source=http://YOUR_PRINTER_IP/webcam/?action=stream
       - YouTube__OAuth__ClientId=YOUR_CLIENT_ID.apps.googleusercontent.com
       - Moonraker__ApiUrl=http://YOUR_MOONRAKER_HOST:7125
-      - Mode=poll
+      
     secrets:
       - youtube_client_secret
 secrets:
@@ -140,7 +135,7 @@ docker run -p 8080:8080 \
   -e Stream__Source="http://YOUR_PRINTER_IP/webcam/?action=stream" \
   -e YouTube__OAuth__ClientId="YOUR_CLIENT_ID.apps.googleusercontent.com" \
   -e Moonraker__ApiUrl="http://YOUR_MOONRAKER_HOST:7125" \
-  -e Mode=poll \
+  
   printstreamer:latest
 ```
 
