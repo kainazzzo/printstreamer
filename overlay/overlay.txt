@@ -1,2 +1,0 @@
-﻿Nozzle: 96.5°C/95.7°C  |  Bed: 49.0°C/60.0°C
-printing  |  0%  |  08:14:55  |  Layers: -/-
