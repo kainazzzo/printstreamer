@@ -1,9 +1,12 @@
 using System.Diagnostics;
 using System.Collections.Generic;
+using PrintStreamer.Interfaces;
 
-class FfmpegStreamer : IStreamer
-
+namespace PrintStreamer.Streamers
 {
+	class FfmpegStreamer : IStreamer
+
+	{
 	private readonly string _source;
 	private readonly string _rtmpUrl;
 	private readonly int _targetFps;
@@ -254,10 +257,10 @@ class FfmpegStreamer : IStreamer
 		Stop();
 		_proc?.Dispose();
 	}
-}
+	}
 
-public sealed class FfmpegOverlayOptions
-{
+	public sealed class FfmpegOverlayOptions
+	{
 	public string TextFile { get; init; } = string.Empty;
 	public string FontFile { get; init; } = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
 	public int FontSize { get; init; } = 22;
@@ -267,4 +270,5 @@ public sealed class FfmpegOverlayOptions
 	public int BoxBorderW { get; init; } = 8;
 	public string X { get; init; } = "(w-tw)-20";
 	public string Y { get; init; } = "20";
+	}
 }

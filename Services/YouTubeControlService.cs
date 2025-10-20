@@ -936,7 +936,7 @@ internal class YouTubeControlService : IDisposable
                                 var measurements = new System.Collections.Generic.List<string>();
                                 foreach (var kv in sensor.Measurements)
                                 {
-                                    var valueStr = kv.Value is double d ? d.ToString("F1") : kv.Value.ToString();
+                                    var valueStr = kv.Value is double d ? d.ToString("F1") : (kv.Value?.ToString() ?? "n/a");
                                     measurements.Add($"{kv.Key}: {valueStr}");
                                 }
                                 if (measurements.Count > 0)

@@ -1,14 +1,17 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using PrintStreamer.Interfaces;
 
-/// <summary>
-/// Native .NET MJPEG to RTMP streamer that processes frames without external ffmpeg dependency.
-/// Reads MJPEG stream, extracts JPEG frames, and streams to RTMP destination.
-/// </summary>
-[Obsolete("EXPERIMENTAL/BROKEN: Native .NET MJPEG-to-RTMP streamer. Not production-ready. See NATIVE_STREAMER.md for details.")]
-internal class MjpegToRtmpStreamer : IStreamer
+namespace PrintStreamer.Streamers
 {
+	/// <summary>
+	/// Native .NET MJPEG to RTMP streamer that processes frames without external ffmpeg dependency.
+	/// Reads MJPEG stream, extracts JPEG frames, and streams to RTMP destination.
+	/// </summary>
+	[Obsolete("EXPERIMENTAL/BROKEN: Native .NET MJPEG-to-RTMP streamer. Not production-ready. See NATIVE_STREAMER.md for details.")]
+	internal class MjpegToRtmpStreamer : IStreamer
+	{
 	private readonly string _sourceUrl;
 	private readonly string _rtmpUrl;
 	private readonly HttpClient _httpClient;
@@ -217,14 +220,14 @@ internal class MjpegToRtmpStreamer : IStreamer
 		_cts?.Dispose();
 		_httpClient?.Dispose();
 	}
-}
+	}
 
-/// <summary>
-/// Extracts JPEG frames from an MJPEG stream using boundary detection or JPEG markers.
-/// </summary>
-[System.Obsolete("EXPERIMENTAL: MJPEG frame extraction for native streamer. Used only in experimental pipeline.")]
-internal class MjpegFrameExtractor
-{
+	/// <summary>
+	/// Extracts JPEG frames from an MJPEG stream using boundary detection or JPEG markers.
+	/// </summary>
+	[System.Obsolete("EXPERIMENTAL: MJPEG frame extraction for native streamer. Used only in experimental pipeline.")]
+	internal class MjpegFrameExtractor
+	{
 	private readonly string? _boundary;
 	private readonly MemoryStream _buffer;
 	private static ReadOnlySpan<byte> JpegSoi => new byte[] { 0xFF, 0xD8 };
@@ -372,21 +375,21 @@ internal class MjpegFrameExtractor
 
 		return ms.ToArray();
 	}
-}
+	}
 
-/// <summary>
-/// RTMP connection handler for sending video frames.
-/// This is a simplified placeholder - a full RTMP implementation would require
-/// proper handshake, AMF encoding, and FLV packet formatting.
-/// 
-/// For production use, consider using a library like:
-/// - FFmpeg.AutoGen (FFmpeg bindings for .NET)
-/// - SIPSorcery (has RTMP support)
-/// - Or shell out to ffmpeg for encoding only
-/// </summary>
-[System.Obsolete("EXPERIMENTAL: RTMP connection for native streamer. Used only in experimental pipeline.")]
-internal class RtmpConnection : IDisposable
-{
+	/// <summary>
+	/// RTMP connection handler for sending video frames.
+	/// This is a simplified placeholder - a full RTMP implementation would require
+	/// proper handshake, AMF encoding, and FLV packet formatting.
+	/// 
+	/// For production use, consider using a library like:
+	/// - FFmpeg.AutoGen (FFmpeg bindings for .NET)
+	/// - SIPSorcery (has RTMP support)
+	/// - Or shell out to ffmpeg for encoding only
+	/// </summary>
+	[System.Obsolete("EXPERIMENTAL: RTMP connection for native streamer. Used only in experimental pipeline.")]
+	internal class RtmpConnection : IDisposable
+	{
 	private readonly string _rtmpUrl;
 	private readonly int _fps;
 	private readonly int _bitrateKbps;
@@ -396,144 +399,73 @@ internal class RtmpConnection : IDisposable
 	private readonly ConcurrentQueue<string> _ffmpegStderr = new ConcurrentQueue<string>();
 	private const int _ffmpegStderrMax = 100;
 
-	public RtmpConnection(string rtmpUrl, int fps = 30, int bitrateKbps = 800)
+	public RtmpConnection(string rtmpUrl, int fps, int bitrateKbps)
 	{
 		_rtmpUrl = rtmpUrl;
-		_fps = fps <= 0 ? 30 : fps;
-		_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
+		_fps = fps;
+		_bitrateKbps = bitrateKbps;
 	}
 
 	public async Task ConnectAsync(CancellationToken cancellationToken)
 	{
-		Console.WriteLine($"Initializing RTMP connection to {_rtmpUrl}...");
-
-		// For now, we'll use ffmpeg as an encoder bridge:
-		// - Read MJPEG frames in .NET (already done)
-		// - Pipe them to ffmpeg stdin as individual JPEGs
-		// - ffmpeg re-encodes to H.264 and streams RTMP
-		
-		// This gives us native frame control while still using ffmpeg for encoding
+		// Use ffmpeg as a simple pipe encoder for JPEG frames to RTMP/FLV.
+		var gop = Math.Max(2, _fps * 2);
+		var args = $"-hide_banner -loglevel error -f mjpeg -framerate {_fps} -i pipe:0 -c:v libx264 -pix_fmt yuv420p -preset veryfast -tune zerolatency -g {gop} -keyint_min {gop} -b:v {_bitrateKbps}k -maxrate {_bitrateKbps}k -bufsize {_bitrateKbps * 2}k -f flv {_rtmpUrl}";
 		var psi = new System.Diagnostics.ProcessStartInfo
 		{
 			FileName = "ffmpeg",
-			Arguments = BuildFfmpegPipeArgs(_rtmpUrl),
+			Arguments = args,
 			UseShellExecute = false,
 			RedirectStandardInput = true,
 			RedirectStandardError = true,
-			RedirectStandardOutput = true,
 			CreateNoWindow = true
 		};
 
-		_ffmpegProcess = new System.Diagnostics.Process { StartInfo = psi };
-		_ffmpegProcess.ErrorDataReceived += (s, e) => 
-		{ 
-			if (!string.IsNullOrEmpty(e.Data))
-			{
-				// store recent stderr lines
-				_ffmpegStderr.Enqueue(e.Data);
-				while (_ffmpegStderr.Count > _ffmpegStderrMax && _ffmpegStderr.TryDequeue(out _)) { }
-
-				if (e.Data.Contains("frame="))
-				{
-					// Only log every ~100 frames to avoid spam
-					if (e.Data.Contains("frame= ") && int.TryParse(e.Data.Split("frame=")[1].Trim().Split(' ')[0], out var frameNum) && frameNum % 100 == 0)
-					{
-						Console.WriteLine($"[ffmpeg] {e.Data.Trim()}");
-					}
-				}
-			}
-		};
-
-		if (!_ffmpegProcess.Start())
+		_ffmpegProcess = System.Diagnostics.Process.Start(psi);
+		if (_ffmpegProcess == null)
 		{
-			throw new InvalidOperationException("Failed to start ffmpeg process");
+			throw new InvalidOperationException("Failed to start ffmpeg process for RTMP connection.");
 		}
-
-		_ffmpegProcess.BeginErrorReadLine();
 		_ffmpegInputStream = _ffmpegProcess.StandardInput.BaseStream;
 
-		Console.WriteLine("RTMP connection established via ffmpeg pipe.");
-		await Task.CompletedTask;
-	}
-
-	public async Task SendFrameAsync(ReadOnlyMemory<byte> jpegData, CancellationToken cancellationToken)
-	{
-		if (_ffmpegInputStream == null)
+		// Start reading stderr to capture logs
+		_ = Task.Run(async () =>
 		{
-			throw new InvalidOperationException("Not connected. Call ConnectAsync first.");
-		}
-
 			try
 			{
-				// Write JPEG frame directly to ffmpeg stdin
-				await _ffmpegInputStream.WriteAsync(jpegData, cancellationToken);
-				await _ffmpegInputStream.FlushAsync(cancellationToken);
-			}
-			catch (Exception ex)
-			{
-				// If ffmpeg has exited, include its exit code and recent stderr to help debug Broken pipe
-				var extra = string.Empty;
-				try
+				using var reader = _ffmpegProcess.StandardError;
+				string? line;
+				while ((line = await reader.ReadLineAsync()) != null)
 				{
-					if (_ffmpegProcess != null && _ffmpegProcess.HasExited)
-					{
-						extra = $" (ffmpeg exited with code {_ffmpegProcess.ExitCode})";
-					}
+					_ffmpegStderr.Enqueue(line);
+					while (_ffmpegStderr.Count > _ffmpegStderrMax && _ffmpegStderr.TryDequeue(out _)) { }
 				}
-				catch { }
-
-				// collect recent stderr lines
-				try
-				{
-					if (_ffmpegStderr.Count > 0)
-					{
-						extra += "\nRecent ffmpeg stderr:";
-						foreach (var line in _ffmpegStderr)
-						{
-							extra += "\n  " + line;
-						}
-					}
-				}
-				catch { }
-
-				Console.WriteLine($"Error sending frame to RTMP: {ex.Message}{extra}");
-				throw;
 			}
+			catch { }
+		});
+
+		await Task.Delay(250, cancellationToken); // brief startup
 	}
 
-	private string BuildFfmpegPipeArgs(string rtmpUrl)
+	public async Task SendFrameAsync(ReadOnlyMemory<byte> jpegFrame, CancellationToken cancellationToken)
 	{
-		// Read MJPEG frames from stdin, re-encode to H.264, output to RTMP
-		// -f image2pipe tells ffmpeg to expect a stream of images
-		// -c:v mjpeg tells it the input codec
-		// -r sets output framerate
-		var fpsArg = $"-r {_fps}";
-		var bitrateArg = $"-b:v {_bitrateKbps}k -maxrate {_bitrateKbps}k -bufsize {_bitrateKbps * 2}k";
-		// Use tune and profile for low-latency small streams
-		return $"-f image2pipe -c:v mjpeg {fpsArg} -i pipe:0 " +
-			   $"-c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -pix_fmt yuv420p -g {_fps * 2} " +
-			   bitrateArg +
-			   $" -an -f flv \"{rtmpUrl}\"";
+		if (_ffmpegInputStream == null) throw new InvalidOperationException("RTMP connection not established.");
+		await _ffmpegInputStream.WriteAsync(jpegFrame, cancellationToken);
+		await _ffmpegInputStream.FlushAsync(cancellationToken);
 	}
 
 	public void Dispose()
 	{
 		try
 		{
-			_ffmpegInputStream?.Close();
 			_ffmpegInputStream?.Dispose();
-			
 			if (_ffmpegProcess != null && !_ffmpegProcess.HasExited)
 			{
 				_ffmpegProcess.Kill(true);
-				_ffmpegProcess.WaitForExit(5000);
 			}
-			
 			_ffmpegProcess?.Dispose();
 		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Error disposing RTMP connection: {ex.Message}");
-		}
+		catch { }
+	}
 	}
 }

@@ -1,8 +1,10 @@
-/// <summary>
-/// Common interface for video streaming implementations.
-/// </summary>
-internal interface IStreamer : IDisposable
+namespace PrintStreamer.Interfaces
 {
+	/// <summary>
+	/// Common interface for video streaming implementations.
+	/// </summary>
+	internal interface IStreamer : IDisposable
+	{
 	/// <summary>
 	/// Task that completes when the stream ends.
 	/// </summary>
@@ -17,4 +19,5 @@ internal interface IStreamer : IDisposable
 	/// Stop the streaming process.
 	/// </summary>
 	void Stop();
+	}
 }

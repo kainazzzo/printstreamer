@@ -11,4 +11,14 @@
     <PackageReference Include="Google.Apis.YouTube.v3" Version="1.70.0.3847" />
   </ItemGroup>
 
+  <!-- Exclude old root files that have been moved into subfolders -->
+  <ItemGroup>
+    <Compile Remove="FfmpegStreamer.cs" />
+    <Compile Remove="MjpegToRtmpStreamer.cs" />
+    <Compile Remove="IStreamer.cs" />
+    <Compile Remove="TimelapseService.cs" />
+    <Compile Remove="TimelapseManager.cs" />
+    <Compile Remove="MoonrakerClient.cs" />
+  </ItemGroup>
+
 </Project>
