@@ -227,6 +227,21 @@ namespace PrintStreamer.Services
 
                     Console.WriteLine($"[Watcher] Poll result - Filename: '{currentJob}', State: '{state}', Progress: {progressPct?.ToString("F1") ?? "n/a"}%, Remaining: {remaining?.ToString() ?? "n/a"}, Layer: {currentLayer?.ToString() ?? "n/a"}/{totalLayers?.ToString() ?? "n/a"}");
 
+                    // Inform TimelapseManager about current progress so it can stop capturing when last-layer threshold is reached
+                    try
+                    {
+                        if (timelapseManager != null && activeTimelapseSessionName != null)
+                        {
+                            // NotifyPrintProgress is void - it just stops capturing frames internally when threshold is reached
+                            // The actual finalization and upload is handled by the "else if" block below
+                            timelapseManager.NotifyPrintProgress(activeTimelapseSessionName, currentLayer, totalLayers);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Watcher] Failed to notify timelapse manager of print progress: {ex.Message}");
+                    }
+
                     // Track if a stream is already active
                     var streamingActive = streamCts != null && streamTask != null && !streamTask.IsCompleted;
 

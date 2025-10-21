@@ -49,9 +49,7 @@ internal static class MoonrakerClient
     {
         try
         {
-            // For now, this is a conservative stub: return null if we can't quickly fetch data.
-            // Future: implement detailed parsing of /printer/objects/query or /printer/print_stats.
-            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(4) };
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(5) };
             if (!string.IsNullOrWhiteSpace(apiKey))
             {
                 var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
@@ -59,8 +57,60 @@ internal static class MoonrakerClient
                 try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
             }
 
-            // Try a lightweight status endpoint commonly exposed by Moonraker frontends
-            var candidates = new[] { "/printer/objects/query?print_stats", "/printer/print", "/printer/objects/query?display_status" };
+            // 1) Prefer print_stats which can include current/total layer when the slicer emits SET_PRINT_STATS_INFO
+            try
+            {
+                var resp = await http.GetAsync("/printer/objects/query?print_stats", cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    var root = JsonNode.Parse(txt);
+                    var status = root?["result"]?["status"]?["print_stats"] as JsonObject;
+                    if (status != null)
+                    {
+                        var info = new MoonrakerPrintInfo();
+                        // filename/state/progress
+                        info.Filename = status["filename"]?.ToString();
+                        info.State = status["state"]?.ToString();
+                        // Progress may be 0..1 or 0..100 depending on frontend; normalize to 0..100
+                        double? progRaw = TryGetDouble(status["progress"]);
+                        if (progRaw.HasValue)
+                        {
+                            info.ProgressPercent = progRaw.Value <= 1.0 ? progRaw.Value * 100.0 : progRaw.Value;
+                        }
+
+                        // info object can contain slicer-provided fields
+                        var infoObj = status["info"] as JsonObject;
+                        if (infoObj != null)
+                        {
+                            // Common keys observed across slicers/frontends
+                            info.CurrentLayer = TryGetInt(
+                                infoObj["CURRENT_LAYER"] ?? infoObj["current_layer"] ?? infoObj["layer"] ?? infoObj["currentLayer"]);
+                            info.TotalLayers = TryGetInt(
+                                infoObj["TOTAL_LAYER"] ?? infoObj["total_layer"] ?? infoObj["total_layers"] ?? infoObj["total_layer_count"] ?? infoObj["layer_count"]);
+
+                            // Remaining time (best-effort). Often reported in seconds.
+                            var remainingSec = TryGetDouble(infoObj["time_remaining"] ?? infoObj["remaining_time"] ?? infoObj["eta_seconds"]);
+                            if (remainingSec.HasValue)
+                            {
+                                try { info.Remaining = TimeSpan.FromSeconds(remainingSec.Value); } catch { }
+                            }
+                        }
+
+                        // Fallback: if progress percent not provided but layers are, compute approx
+                        if (!info.ProgressPercent.HasValue && info.CurrentLayer.HasValue && info.TotalLayers.HasValue && info.TotalLayers.Value > 0)
+                        {
+                            info.ProgressPercent = (double)info.CurrentLayer.Value / (double)info.TotalLayers.Value * 100.0;
+                        }
+
+                        return info;
+                    }
+                }
+            }
+            catch { }
+
+            // 2) Fallbacks: /printer/print and display_status for minimal info
+            var candidates = new[] { "/printer/print", "/printer/objects/query?display_status" };
             foreach (var ep in candidates)
             {
                 try
@@ -68,41 +118,151 @@ internal static class MoonrakerClient
                     var resp = await http.GetAsync(ep, cancellationToken);
                     if (!resp.IsSuccessStatusCode) continue;
                     var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
-                    // Try to parse some common fields if present
-                    try
-                    {
-                        var node = JsonNode.Parse(txt);
-                        if (node == null) continue;
-                        var info = new MoonrakerPrintInfo();
-                        // Best-effort: search for strings/values in JSON
-                        void Walk(JsonNode? n)
-                        {
-                            if (n == null) return;
-                            if (n is JsonValue v)
-                            {
-                                var s = v.ToString();
-                                if (string.IsNullOrWhiteSpace(info.Filename) && s.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase)) info.Filename = s;
-                                if (string.IsNullOrWhiteSpace(info.State) && (s.Equals("printing", StringComparison.OrdinalIgnoreCase) || s.Equals("idle", StringComparison.OrdinalIgnoreCase))) info.State = s;
-                            }
-                            else if (n is JsonObject o)
-                            {
-                                foreach (var kv in o) Walk(kv.Value);
-                            }
-                            else if (n is JsonArray a)
-                            {
-                                foreach (var it in a) Walk(it);
-                            }
-                        }
-                        Walk(node);
-                        return info;
-                    }
-                    catch { }
+                    var node = JsonNode.Parse(txt);
+                    if (node == null) continue;
+                    var info = new MoonrakerPrintInfo();
+
+                    // Heuristic pulls
+                    info.Filename = FindStringEndingWith(node, ".gcode") ?? info.Filename;
+                    info.State = FindFirstOf(node, new[] { "printing", "paused", "complete", "error", "idle" }) ?? info.State;
+                    var p = TryFindDouble(node, new[] { "progress" });
+                    if (p.HasValue) info.ProgressPercent = p.Value <= 1.0 ? p.Value * 100.0 : p.Value;
+                    // No layers in these endpoints typically
+                    return info;
                 }
                 catch { }
             }
         }
         catch { }
         return null;
+    }
+
+    private static int? TryGetInt(JsonNode? n)
+    {
+        try
+        {
+            if (n == null) return null;
+            if (n is JsonValue v)
+            {
+                if (v.TryGetValue<int>(out var i)) return i;
+                if (int.TryParse(v.ToString(), out var i2)) return i2;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static double? TryGetDouble(JsonNode? n)
+    {
+        try
+        {
+            if (n == null) return null;
+            if (n is JsonValue v)
+            {
+                if (v.TryGetValue<double>(out var d)) return d;
+                if (double.TryParse(v.ToString(), out var d2)) return d2;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static string? FindStringEndingWith(JsonNode n, string suffix)
+    {
+        try
+        {
+            string? found = null;
+            void Walk(JsonNode? node)
+            {
+                if (node == null || found != null) return;
+                if (node is JsonValue v)
+                {
+                    var s = v.ToString();
+                    if (s.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) { found = s; return; }
+                }
+                else if (node is JsonObject o)
+                {
+                    foreach (var kv in o) { Walk(kv.Value); if (found != null) break; }
+                }
+                else if (node is JsonArray a)
+                {
+                    foreach (var it in a) { Walk(it); if (found != null) break; }
+                }
+            }
+            Walk(n);
+            return found;
+        }
+        catch { return null; }
+    }
+
+    private static string? FindFirstOf(JsonNode n, IEnumerable<string> candidates)
+    {
+        try
+        {
+            string? found = null;
+            var set = new HashSet<string>(candidates, StringComparer.OrdinalIgnoreCase);
+            void Walk(JsonNode? node)
+            {
+                if (node == null || found != null) return;
+                if (node is JsonValue v)
+                {
+                    var s = v.ToString();
+                    if (set.Contains(s)) { found = s; return; }
+                }
+                else if (node is JsonObject o)
+                {
+                    foreach (var kv in o) { Walk(kv.Value); if (found != null) break; }
+                }
+                else if (node is JsonArray a)
+                {
+                    foreach (var it in a) { Walk(it); if (found != null) break; }
+                }
+            }
+            Walk(n);
+            return found;
+        }
+        catch { return null; }
+    }
+
+    private static double? TryFindDouble(JsonNode n, IEnumerable<string> candidateKeys)
+    {
+        // Search the JSON object graph for the first numeric value under any of the given keys
+        try
+        {
+            double? found = null;
+            var set = new HashSet<string>(candidateKeys, StringComparer.OrdinalIgnoreCase);
+            void Walk(string? key, JsonNode? node)
+            {
+                if (node == null || found.HasValue) return;
+                if (node is JsonValue v)
+                {
+                    if (key != null && set.Contains(key))
+                    {
+                        if (v.TryGetValue<double>(out var d)) { found = d; return; }
+                        if (double.TryParse(v.ToString(), out var d2)) { found = d2; return; }
+                    }
+                }
+                else if (node is JsonObject o)
+                {
+                    foreach (var kv in o)
+                    {
+                        Walk(kv.Key, kv.Value);
+                        if (found.HasValue) break;
+                    }
+                }
+                else if (node is JsonArray a)
+                {
+                    foreach (var it in a)
+                    {
+                        Walk(null, it);
+                        if (found.HasValue) break;
+                    }
+                }
+            }
+            Walk(null, n);
+            return found;
+        }
+        catch { return null; }
     }
 
     /// <summary>
@@ -152,10 +312,17 @@ internal static class MoonrakerClient
                 try { http.DefaultRequestHeaders.Remove(header); } catch { }
                 try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
             }
-            // Try candidates: as-is, and with common root prefix 'gcodes/' when not provided
-            foreach (var candidate in EnumerateFilenameCandidates(filename))
+
+            // Try the filename as provided first
+            var endpoints = new List<string> { $"/server/files/metadata?filename={Uri.EscapeDataString(filename)}" };
+            // If the filename looks like a bare name, also try "gcodes/" prefix (best-effort)
+            if (!string.IsNullOrWhiteSpace(filename) && !filename.Contains('/') && !filename.StartsWith("gcodes/", StringComparison.OrdinalIgnoreCase))
             {
-                var endpoint = $"/server/files/metadata?filename={Uri.EscapeDataString(candidate)}";
+                endpoints.Add($"/server/files/metadata?filename={Uri.EscapeDataString("gcodes/" + filename)}");
+            }
+
+            foreach (var endpoint in endpoints)
+            {
                 Console.WriteLine($"[Moonraker] GET {endpoint}");
                 var resp = await http.GetAsync(endpoint, cancellationToken);
                 if (resp.IsSuccessStatusCode)
@@ -165,7 +332,7 @@ internal static class MoonrakerClient
                 }
                 else
                 {
-                    Console.WriteLine($"[Moonraker] Metadata request failed for '{candidate}': {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                    Console.WriteLine($"[Moonraker] Metadata request failed for '{endpoint}': {(int)resp.StatusCode} {resp.ReasonPhrase}");
                 }
             }
             return null;
@@ -174,64 +341,27 @@ internal static class MoonrakerClient
     }
 
     /// <summary>
-    /// Download a file from Moonraker server files API: /server/files/download?filename=...
-    /// Returns the file bytes or null on failure.
+    /// Note: Download/list helpers were removed. The project no longer attempts to download or list
+    /// G-code files from Moonraker. GetFileMetadataAsync will still try a sensible filename and a
+    /// "gcodes/" prefixed variant when appropriate.
     /// </summary>
-    public static async Task<byte[]?> DownloadFileAsync(Uri baseUri, string filename, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(30) };
-            if (!string.IsNullOrWhiteSpace(apiKey))
-            {
-                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
-                try { http.DefaultRequestHeaders.Remove(header); } catch { }
-                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
-            }
-            // Try candidates: as-is, and with common root prefix 'gcodes/' when not provided
-            foreach (var candidate in EnumerateFilenameCandidates(filename))
-            {
-                var endpoint = $"/server/files/download?filename={Uri.EscapeDataString(candidate)}";
-                Console.WriteLine($"[Moonraker] GET {endpoint}");
-                var resp = await http.GetAsync(endpoint, cancellationToken);
-                if (resp.IsSuccessStatusCode)
-                {
-                    return await resp.Content.ReadAsByteArrayAsync(cancellationToken);
-                }
-                else
-                {
-                    Console.WriteLine($"[Moonraker] Download failed for '{candidate}': {(int)resp.StatusCode} {resp.ReasonPhrase}");
-                }
-            }
-            return null;
-        }
-        catch { return null; }
-    }
-
-    // Generate reasonable candidates for Moonraker file API: try the filename as-is, and if it lacks a
-    // directory component, also try prefixing the common Mainsail root 'gcodes/'. Trim any leading slashes.
-    private static IEnumerable<string> EnumerateFilenameCandidates(string filename)
-    {
-        if (string.IsNullOrWhiteSpace(filename)) yield break;
-        var f = filename.Trim();
-        while (f.StartsWith("/")) f = f.Substring(1);
-        yield return f;
-        if (!f.Contains('/') && !f.StartsWith("gcodes/", StringComparison.OrdinalIgnoreCase))
-        {
-            yield return $"gcodes/{f}";
-        }
-    }
 
     /// <summary>
     /// List files on the Moonraker server under an optional path (for example 'gcodes/').
     /// Returns the parsed JsonNode or null on failure. This is a best-effort helper and
     /// callers should handle different response shapes from various frontends.
     /// </summary>
-    public static async Task<JsonNode?> ListFilesAsync(Uri baseUri, string? path = null, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    // ListFilesAsync removed — the client no longer exposes listing of server-side files.
+
+    /// <summary>
+    /// Fetch the printer print_stats object via /printer/objects/query?print_stats
+    /// Returns the parsed JsonNode or null on failure.
+    /// </summary>
+    public static async Task<JsonNode?> GetPrintStatsAsync(Uri baseUri, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(8) };
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(5) };
             if (!string.IsNullOrWhiteSpace(apiKey))
             {
                 var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
@@ -239,8 +369,7 @@ internal static class MoonrakerClient
                 try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
             }
 
-            var endpoint = "/server/files/list";
-            if (!string.IsNullOrWhiteSpace(path)) endpoint += $"?path={Uri.EscapeDataString(path)}";
+            var endpoint = "/printer/objects/query?print_stats";
             Console.WriteLine($"[Moonraker] GET {endpoint}");
             var resp = await http.GetAsync(endpoint, cancellationToken);
             if (resp.IsSuccessStatusCode)
@@ -250,12 +379,12 @@ internal static class MoonrakerClient
             }
             else
             {
-                Console.WriteLine($"[Moonraker] File list request failed: {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                Console.WriteLine($"[Moonraker] print_stats request failed: {(int)resp.StatusCode} {resp.ReasonPhrase}");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Moonraker] File list error: {ex.Message}");
+            Console.WriteLine($"[Moonraker] GetPrintStatsAsync error: {ex.Message}");
         }
         return null;
     }

@@ -164,13 +164,22 @@ namespace PrintStreamer.Streamers
 		}
 
 	// Build encoding args tuned for target fps/bitrate
-	var gop = Math.Max(2, fps * 2);
+	// If the source is an HTTP MJPEG stream, prefer to let ffmpeg preserve the input frame timing
+	// instead of forcing an output frame rate. Only add -r when an explicit target fps is desired.
+	// Detect HTTP source early
+	var isHttpSource = srcArg.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+	int effectiveFps = fps <= 0 ? 0 : fps;
+	if (isHttpSource)
+	{
+		// For HTTP/MJPEG inputs, avoid forcing the output -r so ffmpeg follows input timing
+		effectiveFps = 0;
+	}
+	var gop = Math.Max(2, (effectiveFps > 0 ? effectiveFps * 2 : Math.Max(2, fps * 2)));
 	// Use keyint equal to GOP, set pix_fmt and genpts to help timestamping for variable sources
-	var videoEncArgs = $"-c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
+	// (video encoding args constructed later when mux targets are known)
 
 	// For MJPEG/http sources that have no audio, include a silent audio track so YouTube sees audio present.
 	// We'll add a lavfi anullsrc input and map it as the audio input.
-	var isHttpSource = srcArg.StartsWith("http", StringComparison.OrdinalIgnoreCase);
 	var addSilentAudio = isHttpSource || srcArg.StartsWith("/dev/") == false;
 
 	// ffmpeg logging: allow overriding via env var to hide benign errors
@@ -290,7 +299,9 @@ namespace PrintStreamer.Streamers
 	var flvFlags = "-flvflags no_duration_filesize";
 
 	// Common encoding args for video
-	var videoEnc = $"-c:v libx264 -preset veryfast -tune zerolatency {profile} -pix_fmt yuv420p -r {fps} -g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
+	// Only include -r when effectiveFps > 0; otherwise don't force output framerate and let ffmpeg use input timing.
+	var rArg = effectiveFps > 0 ? $"-r {effectiveFps} " : string.Empty;
+	var videoEnc = $"-c:v libx264 -preset veryfast -tune zerolatency {profile} -pix_fmt yuv420p {rArg}-g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
 
 
 	// Build the final command so both outputs explicitly map the filtered [vout] and audio map.

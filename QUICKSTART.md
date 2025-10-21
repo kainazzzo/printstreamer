@@ -113,6 +113,25 @@ docker run -p 8080:8080 \
 
 ## 🆘 Quick Troubleshooting
 
+### Timelapse / Slicer integration
+
+If you plan to use the Timelapse features that map frames to print layers, it's recommended to emit print-stats information from your slicer so the printer/Moonraker exposes current layer and total layers via the `print_stats` object. Add these G-code lines in your slicer:
+
+- In "machine start" (at the beginning of the print):
+
+```
+SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]
+```
+
+- In "before layer change" (or a layer change script):
+
+```
+SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}
+```
+
+These lines let the printer update `print_stats` (accessible at `/printer/objects/query?print_stats`) with the current and total layer counts so PrintStreamer can track progress without downloading G-code files.
+
+
 ### Problem: "Error: Stream:Source is required"
 **Fix**: Pass the source as a runtime switch:
 ```bash

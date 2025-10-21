@@ -56,90 +56,15 @@ namespace PrintStreamer.Timelapse
                 var authHeader = _config.GetValue<string>("Moonraker:AuthHeader");
                 var baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(baseUrl) ?? new Uri(baseUrl);
 
-                Console.WriteLine($"[TimelapseManager] Attempting to download G-code: {moonrakerFilename}");
-                // Best-effort: list remote gcode files under common roots to help debug 404s
+                Console.WriteLine($"[TimelapseManager] Skipping remote G-code download/list for: {moonrakerFilename}.\n[TimelapseManager] Timelapse now expects slicer to embed print stats via SET_PRINT_STATS_INFO.");
+                // Instead of downloading or listing gcode, rely on server-side print_stats provided by the printer
                 try
                 {
-                    var listRootCandidates = new[] { "", "gcodes", "/gcodes" };
-                    foreach (var root in listRootCandidates)
-                    {
-                        var list = await MoonrakerClient.ListFilesAsync(baseUri, string.IsNullOrWhiteSpace(root) ? null : root, apiKey, authHeader, CancellationToken.None);
-                        if (list != null)
-                        {
-                            try
-                            {
-                                // The response shape varies; try to extract file names from common locations
-                                Console.WriteLine($"[TimelapseManager] Moonraker file list for '{root}':");
-                                // If result.files exists as an array
-                                var files = list["result"]? ["files"];
-                                if (files is JsonArray fa)
-                                {
-                                    foreach (var f in fa)
-                                    {
-                                        var name = f?["name"]?.ToString() ?? f?.ToString();
-                                        if (!string.IsNullOrWhiteSpace(name) && name.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase))
-                                            Console.WriteLine($"[TimelapseManager] - {name}");
-                                    }
-                                }
-                                else
-                                {
-                                    // Walk the JSON and print any gcode-looking strings
-                                    void Walk(JsonNode? n)
-                                    {
-                                        if (n == null) return;
-                                        if (n is JsonValue v)
-                                        {
-                                            var s = v.ToString();
-                                            if (!string.IsNullOrWhiteSpace(s) && s.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase))
-                                                Console.WriteLine($"[TimelapseManager] - {s}");
-                                        }
-                                        else if (n is JsonObject o)
-                                        {
-                                            foreach (var kv in o) Walk(kv.Value);
-                                        }
-                                        else if (n is JsonArray a)
-                                        {
-                                            foreach (var it in a) Walk(it);
-                                        }
-                                    }
-                                    Walk(list);
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-                catch { }
-                var bytes = await MoonrakerClient.DownloadFileAsync(baseUri, moonrakerFilename, apiKey, authHeader, CancellationToken.None);
-                if (bytes != null && bytes.Length > 0)
-                {
-                    session.CachedGcode = bytes;
-                    // Save a copy to disk under configured folder for inspection
-                    try
-                    {
-                        var gcodeFolder = _config.GetValue<string>("GcodeFolder") ?? Path.Combine(_mainTimelapseDir, "gcode");
-                        Directory.CreateDirectory(gcodeFolder);
-                        var safeName = SanitizeFilename(moonrakerFilename ?? session.Name);
-                        var savePath = Path.Combine(gcodeFolder, safeName + ".gcode");
-                        await File.WriteAllBytesAsync(savePath, bytes);
-                        session.SavedGcodePath = savePath;
-                        Console.WriteLine($"[TimelapseManager] Saved G-code to: {savePath}");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[TimelapseManager] Failed to save G-code to disk: {ex.Message}");
-                    }
-                    // Parse layer markers from G-code (Mainsail-style: look for ;LAYER: or ; layer or ;LAYER: markers)
-                    session.LayerStarts = ParseGcodeLayerStarts(bytes);
-                    session.TotalLayersFromGcode = session.LayerStarts?.Length;
-                    Console.WriteLine($"[TimelapseManager] Downloaded and parsed G-code ({session.TotalLayersFromGcode ?? 0} layers)");
-
-                    // Try to also fetch server file metadata (slicer, estimated times etc.)
                     var meta = await MoonrakerClient.GetFileMetadataAsync(baseUri, moonrakerFilename!, apiKey, authHeader, CancellationToken.None);
                     if (meta != null)
                     {
                         session.MetadataRaw = meta;
-                        // Try to extract some common metadata fields
+                        // Try to extract some common metadata fields without assuming layer markers in the file
                         try
                         {
                             if (meta is JsonObject m && m.TryGetPropertyValue("result", out var res) && res is JsonObject r)
@@ -150,7 +75,6 @@ namespace PrintStreamer.Timelapse
                                     if (mdObj.TryGetPropertyValue("estimated_time", out var est)) session.EstimatedSeconds = TryParseDouble(est?.ToString());
                                     if (mdObj.TryGetPropertyValue("layer_count", out var lc) && int.TryParse(lc?.ToString(), out var lcInt)) session.TotalLayersFromMetadata = lcInt;
                                 }
-                                // some frontends place layer_count at result
                                 if (session.TotalLayersFromMetadata == null && r.TryGetPropertyValue("layer_count", out var topLc) && int.TryParse(topLc?.ToString(), out var topLcInt))
                                     session.TotalLayersFromMetadata = topLcInt;
                             }
@@ -158,6 +82,7 @@ namespace PrintStreamer.Timelapse
                         catch { }
                     }
                 }
+                catch { }
             }
             catch (Exception ex)
             {
@@ -188,12 +113,60 @@ namespace PrintStreamer.Timelapse
         return null;
     }
 
+    /// <summary>
+    /// Notify the manager of current print layer progress for a named session.
+    /// When currentLayer >= totalLayers the manager will stop capturing further frames
+    /// for that session (to avoid capturing the bed-lower cooldown frames).
+    /// </summary>
+    public void NotifyPrintProgress(string? sessionName, int? currentLayer, int? totalLayers)
+    {
+        if (string.IsNullOrWhiteSpace(sessionName)) return;
+        if (!_activeSessions.TryGetValue(sessionName, out var session)) return;
+
+        try
+        {
+            // Update any cached layer totals on the session
+            if (session.TotalLayersFromGcode == null && totalLayers.HasValue)
+            {
+                session.TotalLayersFromGcode = totalLayers.Value;
+            }
+
+            // If we have the total layers and current layer is at or past the configured threshold, stop the session
+            var layerOffset = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
+            if (layerOffset < 0) layerOffset = 0;
+            if (currentLayer.HasValue && totalLayers.HasValue && totalLayers.Value > 0)
+            {
+                var triggerLayer = Math.Max(0, totalLayers.Value - layerOffset);
+                if (currentLayer.Value >= triggerLayer)
+                {
+                    Console.WriteLine($"[TimelapseManager] Print reached last-layer threshold for session {sessionName} ({currentLayer}/{totalLayers}, offset={layerOffset}) - stopping further captures.");
+                    // Mark session as stopped to prevent timer from capturing more frames
+                    session.IsStopped = true;
+                    Console.WriteLine($"[TimelapseManager] Session {sessionName} marked as stopped (will be finalized by caller)");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TimelapseManager] Error in NotifyPrintProgress for {sessionName}: {ex.Message}");
+        }
+    }
+
     public async Task<string?> StopTimelapseAsync(string sessionName)
     {
-        if (!_activeSessions.TryRemove(sessionName, out var session))
+        if (!_activeSessions.TryGetValue(sessionName, out var session))
             return null;
 
         Console.WriteLine($"[TimelapseManager] Stopping timelapse session: {sessionName}");
+
+        // Mark session as stopped first to prevent any more captures
+        session.IsStopped = true;
+        
+        // Give any in-flight timer callback a moment to check the flag
+        await Task.Delay(100);
+        
+        // Now remove the session
+        _activeSessions.TryRemove(sessionName, out _);
 
         // Stop timer if no more sessions
         if (_activeSessions.IsEmpty)
@@ -325,8 +298,22 @@ namespace PrintStreamer.Timelapse
         if (string.IsNullOrWhiteSpace(streamSource))
             return;
 
+        // Diagnostic: show how many sessions are being scanned on each tick
+        try
+        {
+            Console.WriteLine($"[TimelapseManager] Timer tick: {_activeSessions.Count} active session(s)");
+        }
+        catch { }
+
         foreach (var session in _activeSessions.Values)
         {
+            // Skip sessions that have been marked as stopped
+            if (session.IsStopped)
+            {
+                Console.WriteLine($"[TimelapseManager] Skipping frame capture for stopped session: {session.Name}");
+                continue;
+            }
+            
             await CaptureFrameForSessionAsync(session);
         }
     }
@@ -335,6 +322,13 @@ namespace PrintStreamer.Timelapse
     {
         try
         {
+            // Guard: if session was marked stopped, don't attempt capture
+            if (session.IsStopped)
+            {
+                Console.WriteLine($"[TimelapseManager] Session {session.Name} is stopped; skipping capture.");
+                return;
+            }
+
             var streamSource = _config.GetValue<string>("Stream:Source");
             if (string.IsNullOrWhiteSpace(streamSource))
                 return;
@@ -342,6 +336,12 @@ namespace PrintStreamer.Timelapse
             var frame = await FetchSingleJpegFrameAsync(streamSource, 10, CancellationToken.None);
             if (frame != null)
             {
+                // Guard again right before saving in case stop flag flipped during fetch
+                if (session.IsStopped)
+                {
+                    Console.WriteLine($"[TimelapseManager] Session {session.Name} was stopped after fetch; dropping frame.");
+                    return;
+                }
                 await session.Service.SaveFrameAsync(frame, CancellationToken.None);
                 session.LastCaptureTime = DateTime.UtcNow;
                 Console.WriteLine($"[TimelapseManager] Captured frame for {session.Name}");
@@ -478,6 +478,7 @@ namespace PrintStreamer.Timelapse
     public string? Slicer { get; set; }
     public double? EstimatedSeconds { get; set; }
     public string? SavedGcodePath { get; set; }
+    public bool IsStopped { get; set; } = false;
     }
 
     public class TimelapseInfo

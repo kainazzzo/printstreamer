@@ -344,7 +344,7 @@ if (serveEnabled)
 				if (t.isActive) {
 					itemHtml += `<button onclick='stopTimelapse(""${t.name}"")' class='danger'>Stop Recording</button>`;
 				} else {
-					itemHtml += `<button onclick='startTimelapse(""${t.name}"")' class='success'>Resume</button>`;
+					itemHtml += `<button onclick='startTimelapse(""${t.name}"")' class='success'>Create</button>`;
 				}
 				for (const video of t.videoFiles) {
 					itemHtml += ` <a href='/api/timelapses/${encodeURIComponent(t.name)}/frames/${encodeURIComponent(video)}' class='video-link' target='_blank'>📹 ${video}</a>`;
@@ -565,6 +565,76 @@ if (serveEnabled)
 	{
 		Console.WriteLine($"[Serve] Serving local HLS at /hls from {hlsFolder}");
 		Directory.CreateDirectory(hlsFolder);
+
+		// Wipe any existing HLS files on startup so we start with a clean slate.
+		try
+		{
+			if (Directory.Exists(hlsFolder))
+			{
+				foreach (var f in Directory.EnumerateFiles(hlsFolder))
+				{
+					try { File.Delete(f); } catch { }
+				}
+				foreach (var d in Directory.EnumerateDirectories(hlsFolder))
+				{
+					try { Directory.Delete(d, true); } catch { }
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"[HLS] Failed to wipe HLS folder on startup: {ex.Message}");
+		}
+
+		// Start a background cleanup task to keep the HLS folder tidy.
+		// Configurable options:
+		// Stream:Local:HlsMaxSegments (int) - keep at most this many segment files (default 20)
+		// Stream:Local:HlsCleanupIntervalSeconds (int) - cleanup interval in seconds (default 10)
+		var hlsMaxSegments = config.GetValue<int?>("Stream:Local:HlsMaxSegments") ?? 20;
+		var hlsCleanupInterval = config.GetValue<int?>("Stream:Local:HlsCleanupIntervalSeconds") ?? 10;
+
+		_ = Task.Run(async () =>
+		{
+			try
+			{
+				while (!appCts.IsCancellationRequested)
+				{
+					try
+					{
+						if (Directory.Exists(hlsFolder))
+						{
+							// Collect segment files (seg_*.ts) and manifest files (*.m3u8)
+							var segFiles = Directory.GetFiles(hlsFolder, "seg_*.ts").Select(p => new FileInfo(p)).OrderByDescending(f => f.CreationTimeUtc).ToArray();
+							if (segFiles.Length > hlsMaxSegments)
+							{
+								// Keep newest hlsMaxSegments and delete the rest
+								var toDelete = segFiles.Skip(hlsMaxSegments).ToArray();
+								foreach (var f in toDelete)
+								{
+									try { File.Delete(f.FullName); } catch { }
+								}
+							}
+							// Also remove any orphaned temporary files or old manifests older than a minute
+							var oldFiles = Directory.GetFiles(hlsFolder).Select(p => new FileInfo(p)).Where(fi => (DateTime.UtcNow - fi.CreationTimeUtc).TotalSeconds > 60).ToArray();
+							foreach (var of in oldFiles)
+							{
+								if (of.Name.StartsWith("seg_") || of.Extension.Equals(".tmp", StringComparison.OrdinalIgnoreCase) || of.Extension.Equals(".old", StringComparison.OrdinalIgnoreCase))
+								{
+									try { File.Delete(of.FullName); } catch { }
+								}
+							}
+						}
+					}
+					catch { }
+					await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, hlsCleanupInterval)), appCts.Token).ContinueWith(_ => { });
+				}
+			}
+			catch (OperationCanceledException) { }
+			catch (Exception ex)
+			{
+				Console.WriteLine($"[HLS Cleanup] Error: {ex.Message}");
+			}
+		});
 		app.UseStaticFiles(new StaticFileOptions
 		{
 			FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(hlsFolder),
