@@ -58,15 +58,27 @@ echo "  Port        : ${HOST_PORT} -> 8080"
 echo "  Environment : Home"
 echo "  Config      : appsettings.Home.json"
 
-docker run -d \
+# Allow interactive auth (-it) when INTERACTIVE=1 (useful to paste OAuth codes once)
+DOCKER_INTERACTIVE_FLAGS=""
+if [[ "${INTERACTIVE:-0}" == "1" ]]; then
+  DOCKER_INTERACTIVE_FLAGS="-it"
+fi
+
+# Host data directory for persistent HLS/timelapses
+HOST_DATA_DIR="${HOST_DATA_DIR:-${HOME}/PrintStreamerData}"
+mkdir -p "${HOST_DATA_DIR}"
+echo "  Data mount  : ${HOST_DATA_DIR} -> /usr/local/share/data"
+
+docker run ${DOCKER_INTERACTIVE_FLAGS} \
   --name "${CONTAINER_NAME}" \
   --restart "${RESTART_POLICY}" \
   -p "${HOST_PORT}:8080" \
   -e "ASPNETCORE_ENVIRONMENT=Home" \
   -v "$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro" \
-  -v "$REPO_ROOT/timelapse:/app/timelapse" \
-  -v "$REPO_ROOT/gcode:/app/gcode" \
-  -v "$REPO_ROOT/tokens:/app/tokens" \
+  -v "$HOST_DATA_DIR/timelapse:/app/timelapse" \
+  -v "$HOST_DATA_DIR/gcode:/app/gcode" \
+  -v "$HOST_DATA_DIR/tokens:/app/tokens" \
+  -v "${HOST_DATA_DIR}:/usr/local/share/data" \
   "${IMAGE_NAME}"
 
 echo

@@ -678,132 +678,164 @@ namespace PrintStreamer.Services
                     // Authenticate
                     if (!await ytService.AuthenticateAsync(cancellationToken))
                     {
-                        Console.WriteLine("Failed to authenticate with YouTube. Exiting.");
-                        return;
-                    }
+                        Console.WriteLine("Failed to authenticate with YouTube. Falling back to manual key or HLS-only.");
+                        ytService?.Dispose();
+                        ytService = null;
 
-                    // Create broadcast and stream
-                    var result = await ytService.CreateLiveBroadcastAsync(cancellationToken);
-                    if (result.rtmpUrl == null || result.streamKey == null)
-                    {
-                        Console.WriteLine("Failed to create YouTube broadcast. Exiting.");
-                        return;
-                    }
-
-                    rtmpUrl = result.rtmpUrl;
-                    streamKey = result.streamKey;
-                    broadcastId = result.broadcastId;
-                    moonrakerFilename = result.filename;
-
-                    Console.WriteLine($"YouTube broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
-                    // Dump the LiveBroadcast and LiveStream resources for debugging
-                    try
-                    {
-                        await ytService.LogBroadcastAndStreamResourcesAsync(broadcastId, null, cancellationToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
-                    }
-
-                    // Ensure and add broadcast to playlist if configured
-                    try
-                    {
-                        var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
-                        if (!string.IsNullOrWhiteSpace(playlistName))
+                        if (!string.IsNullOrWhiteSpace(manualKey))
                         {
-                            var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
-                            var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
-                            if (!string.IsNullOrWhiteSpace(pid) && !string.IsNullOrWhiteSpace(broadcastId))
-                            {
-                                await ytService.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[YouTube] Failed to add broadcast to playlist: {ex.Message}");
-                    }
-
-                // Upload initial thumbnail for the broadcast
-                try
-                {
-                    Console.WriteLine("[Thumbnail] Capturing initial thumbnail...");
-                    var initialThumbnail = await FetchSingleJpegFrameAsync(source, 10, cancellationToken);
-                    if (initialThumbnail != null && !string.IsNullOrWhiteSpace(broadcastId))
-                    {
-                        var ok = await ytService.SetBroadcastThumbnailAsync(broadcastId, initialThumbnail, cancellationToken);
-                        if (ok)
-                            Console.WriteLine($"[Thumbnail] Initial thumbnail uploaded successfully");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Thumbnail] Failed to upload initial thumbnail: {ex.Message}");
-                }
-
-                // Start timelapse service for stream mode (only if enabled)
-                if (enableTimelapse)
-                {
-                    var mainTlDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
-                    // Use filename from Moonraker if available, otherwise use timestamp
-                    string streamId;
-                    if (!string.IsNullOrWhiteSpace(moonrakerFilename))
-                    {
-                        // Use just the filename for consistency with poll mode
-                        var filenameSafe = SanitizeFilename(moonrakerFilename);
-                        streamId = filenameSafe;
-                        Console.WriteLine($"[Timelapse] Using filename from Moonraker: {moonrakerFilename}");
-                    }
-                    else
-                    {
-                        streamId = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-                        Console.WriteLine($"[Timelapse] No filename from Moonraker, using timestamp only");
-                    }
-                    timelapse = new TimelapseService(mainTlDir, streamId);
-
-                    // Capture immediate first frame for timelapse
-                    Console.WriteLine($"[Timelapse] Capturing initial frame...");
-                    try
-                    {
-                        var initialFrame = await FetchSingleJpegFrameAsync(source, 10, cancellationToken);
-                        if (initialFrame != null)
-                        {
-                            await timelapse.SaveFrameAsync(initialFrame, cancellationToken);
-                            Console.WriteLine($"[Timelapse] Initial frame captured successfully");
+                            Console.WriteLine("Falling back to manual YouTube stream key...");
+                            rtmpUrl = "rtmp://a.rtmp.youtube.com/live2";
+                            streamKey = manualKey;
                         }
                         else
                         {
-                            Console.WriteLine($"[Timelapse] Warning: Failed to capture initial frame");
+                            Console.WriteLine("No manual key configured; starting local HLS preview only.");
+                            rtmpUrl = null;
+                            streamKey = null;
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Console.WriteLine($"[Timelapse] Error capturing initial frame: {ex.Message}");
-                    }
-
-                    timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
-                    timelapseTask = Task.Run(async () =>
-                    {
-                        while (!timelapseCts.Token.IsCancellationRequested)
+                        // Create broadcast and stream
+                        var result = await ytService.CreateLiveBroadcastAsync(cancellationToken);
+                        if (result.rtmpUrl == null || result.streamKey == null)
                         {
+                            Console.WriteLine("Failed to create YouTube broadcast. Falling back to manual key or HLS-only.");
+                            ytService?.Dispose();
+                            ytService = null;
+
+                            if (!string.IsNullOrWhiteSpace(manualKey))
+                            {
+                                Console.WriteLine("Falling back to manual YouTube stream key...");
+                                rtmpUrl = "rtmp://a.rtmp.youtube.com/live2";
+                                streamKey = manualKey;
+                            }
+                            else
+                            {
+                                Console.WriteLine("No manual key configured; starting local HLS preview only.");
+                                rtmpUrl = null;
+                                streamKey = null;
+                            }
+                        }
+                        else
+                        {
+                            rtmpUrl = result.rtmpUrl;
+                            streamKey = result.streamKey;
+                            broadcastId = result.broadcastId;
+                            moonrakerFilename = result.filename;
+
+                            Console.WriteLine($"YouTube broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
+                            // Dump the LiveBroadcast and LiveStream resources for debugging
                             try
                             {
-                                var frame = await FetchSingleJpegFrameAsync(source, 10, timelapseCts.Token);
-                                if (frame != null)
+                                await ytService.LogBroadcastAndStreamResourcesAsync(broadcastId, null, cancellationToken);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
+                            }
+
+                            // Ensure and add broadcast to playlist if configured
+                            try
+                            {
+                                var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
+                                if (!string.IsNullOrWhiteSpace(playlistName))
                                 {
-                                    await timelapse.SaveFrameAsync(frame, timelapseCts.Token);
+                                    var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
+                                    var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
+                                    if (!string.IsNullOrWhiteSpace(pid) && !string.IsNullOrWhiteSpace(broadcastId))
+                                    {
+                                        await ytService.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
+                                    }
                                 }
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"Timelapse frame error: {ex.Message}");
+                                Console.WriteLine($"[YouTube] Failed to add broadcast to playlist: {ex.Message}");
                             }
-                            await Task.Delay(timelapsePeriod, timelapseCts.Token);
+
+                            // Upload initial thumbnail for the broadcast
+                            try
+                            {
+                                Console.WriteLine("[Thumbnail] Capturing initial thumbnail...");
+                                var initialThumbnail = await FetchSingleJpegFrameAsync(source, 10, cancellationToken);
+                                if (initialThumbnail != null && !string.IsNullOrWhiteSpace(broadcastId))
+                                {
+                                    var ok = await ytService.SetBroadcastThumbnailAsync(broadcastId, initialThumbnail, cancellationToken);
+                                    if (ok)
+                                        Console.WriteLine($"[Thumbnail] Initial thumbnail uploaded successfully");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Thumbnail] Failed to upload initial thumbnail: {ex.Message}");
+                            }
+
+                            // Start timelapse service for stream mode (only if enabled)
+                            if (enableTimelapse)
+                            {
+                                var mainTlDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
+                                // Use filename from Moonraker if available, otherwise use timestamp
+                                string streamId;
+                                if (!string.IsNullOrWhiteSpace(moonrakerFilename))
+                                {
+                                    // Use just the filename for consistency with poll mode
+                                    var filenameSafe = SanitizeFilename(moonrakerFilename);
+                                    streamId = filenameSafe;
+                                    Console.WriteLine($"[Timelapse] Using filename from Moonraker: {moonrakerFilename}");
+                                }
+                                else
+                                {
+                                    streamId = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+                                    Console.WriteLine($"[Timelapse] No filename from Moonraker, using timestamp only");
+                                }
+                                timelapse = new TimelapseService(mainTlDir, streamId);
+
+                                // Capture immediate first frame for timelapse
+                                Console.WriteLine($"[Timelapse] Capturing initial frame...");
+                                try
+                                {
+                                    var initialFrame = await FetchSingleJpegFrameAsync(source, 10, cancellationToken);
+                                    if (initialFrame != null)
+                                    {
+                                        await timelapse.SaveFrameAsync(initialFrame, cancellationToken);
+                                        Console.WriteLine($"[Timelapse] Initial frame captured successfully");
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine($"[Timelapse] Warning: Failed to capture initial frame");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[Timelapse] Error capturing initial frame: {ex.Message}");
+                                }
+
+                                timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                                var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
+                                timelapseTask = Task.Run(async () =>
+                                {
+                                    while (!timelapseCts.Token.IsCancellationRequested)
+                                    {
+                                        try
+                                        {
+                                            var frame = await FetchSingleJpegFrameAsync(source, 10, timelapseCts.Token);
+                                            if (frame != null)
+                                            {
+                                                await timelapse.SaveFrameAsync(frame, timelapseCts.Token);
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            Console.WriteLine($"Timelapse frame error: {ex.Message}");
+                                        }
+                                        await Task.Delay(timelapsePeriod, timelapseCts.Token);
+                                    }
+                                }, timelapseCts.Token);
+                            }
                         }
-                    }, timelapseCts.Token);
-                }
+                    }
                 }
                 else if (!string.IsNullOrWhiteSpace(manualKey))
                 {

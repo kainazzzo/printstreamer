@@ -25,7 +25,7 @@ internal class YouTubeControlService : IDisposable
     public YouTubeControlService(IConfiguration config)
     {
         _config = config;
-        _tokenPath = Path.Combine(Directory.GetCurrentDirectory(), "youtube_tokens");
+        _tokenPath = Path.Combine(Directory.GetCurrentDirectory(), "tokens", "youtube_token.json");
     }
 
     /// <summary>
@@ -462,10 +462,11 @@ internal class YouTubeControlService : IDisposable
 
             var secrets = new ClientSecrets { ClientId = clientId, ClientSecret = clientSecret };
 
-            // Use a single-file token store pointing at youtube_token.json so refresh tokens
-            // are only stored in that file (user requested). This store will be used by the
-            // Google OAuth flow to persist tokens on refresh as well.
-            var tokenFilePath = Path.Combine(Directory.GetCurrentDirectory(), "youtube_token.json");
+            // Use a single-file token store pointing at a mounted tokens path by default.
+            // Default: /app/tokens/youtube_token.json (persisted via Docker volume from scripts/run.sh)
+            // Override with YouTube:OAuth:TokenFile if desired.
+            var tokenFilePath = _config["YouTube:OAuth:TokenFile"]
+                                ?? Path.Combine(Directory.GetCurrentDirectory(), "tokens", "youtube_token.json");
             var fileStore = new YoutubeTokenFileDataStore(tokenFilePath);
             IDataStore dataStore = fileStore;
 

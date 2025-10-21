@@ -1,0 +1,36 @@
+# Build artifacts
+bin/
+obj/
+
+# Scripts (not needed in container)
+scripts/
+
+# Runtime state (will be mounted as volumes)
+tokens/
+timelapse/
+gcode/
+
+# IDE and editor files
+.vscode/
+.vs/
+*.user
+*.suo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Documentation
+*.md
+ARCHITECTURE.md
+DOCS_INDEX.md
+DOCKER_RELEASE.md
+NATIVE_STREAMER.md
+PROJECT_SUMMARY.md
+QUICKSTART.md
+README.md
+STREAMER_EXAMPLES.md
