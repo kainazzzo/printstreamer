@@ -1,18 +1,16 @@
 # Multi-stage build for printstreamer
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-
-# copy csproj and restore first for better layer caching
-COPY *.csproj ./
-RUN dotnet restore
-
 # copy everything and publish
 COPY . ./
+
+RUN dotnet restore
 RUN dotnet publish -c Release -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
+RUN apt-get update && apt-get install -y ffmpeg
 
 # Expose the proxy port
 EXPOSE 8080
