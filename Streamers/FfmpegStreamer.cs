@@ -301,7 +301,7 @@ namespace PrintStreamer.Streamers
 	// Common encoding args for video
 	// Only include -r when effectiveFps > 0; otherwise don't force output framerate and let ffmpeg use input timing.
 	var rArg = effectiveFps > 0 ? $"-r {effectiveFps} " : string.Empty;
-	var videoEnc = $"-c:v libx264 -preset veryfast -tune zerolatency {profile} -pix_fmt yuv420p {rArg}-g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
+	var videoEnc = $"-c:v libx264 -preset ultrafast -tune zerolatency {profile} -pix_fmt yuv420p {rArg}-g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
 
 
 	// Build the final command so both outputs explicitly map the filtered [vout] and audio map.
