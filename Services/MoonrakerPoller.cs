@@ -8,21 +8,89 @@ namespace PrintStreamer.Services
 {
     internal static class MoonrakerPoller
     {
-        // Shared runtime state to allow promoting the currently-running encoder to a live broadcast
+    // Shared runtime state to allow promoting the currently-running encoder to a live broadcast
         private static readonly object _streamLock = new object();
         private static IStreamer? _currentStreamer;
         private static CancellationTokenSource? _currentStreamerCts;
         private static YouTubeControlService? _currentYouTubeService;
         private static string? _currentBroadcastId;
+    // Monitor state exposed to the UI
+    private static volatile bool _isWaitingForIngestion = false;
+
+    // Camera simulation flag exposed so streamers can honor simulated upstream disconnects
+    private static volatile bool _webcamInputDisabled = false;
+
+    public static bool WebcamInputDisabled
+    {
+        get => _webcamInputDisabled;
+        set => _webcamInputDisabled = value;
+    }
+
+        /// <summary>
+        /// Cancel the current streamer (if any) and start a new one using the provided configuration.
+        /// This is useful to force ffmpeg to re-read the configured source (for example when toggling
+        /// camera simulation so the new streamer can use the local proxy endpoint).
+        /// </summary>
+        public static void RestartCurrentStreamerWithConfig(IConfiguration config)
+        {
+            Task.Run(async () =>
+            {
+                IStreamer? old; CancellationTokenSource? oldCts;
+                lock (_streamLock)
+                {
+                    old = _currentStreamer;
+                    oldCts = _currentStreamerCts;
+                    _currentStreamer = null;
+                    _currentStreamerCts = null;
+                }
+
+                try
+                {
+                    try { oldCts?.Cancel(); } catch { }
+                    try { await Task.WhenAny(old?.ExitTask ?? Task.CompletedTask, Task.Delay(2000)); } catch { }
+                    try { old?.Stop(); } catch { }
+                }
+                catch { }
+
+                // Start a new streamer in background. Use a linked CTS that can be cancelled by callers via config-driven mechanisms.
+                try
+                {
+                    var cts = new CancellationTokenSource();
+                    lock (_streamLock)
+                    {
+                        // We'll start the new streamer, but do not set _currentStreamer here because StartYouTubeStreamAsync will set it
+                    }
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await StartYouTubeStreamAsync(config, cts.Token, enableTimelapse: false, timelapseProvider: null);
+                        }
+                        catch (OperationCanceledException) { }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[RestartStreamer] Error starting new streamer: {ex.Message}");
+                        }
+                    }, cts.Token);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[RestartStreamer] Failed to restart streamer: {ex.Message}");
+                }
+            });
+        }
 
         public static bool IsBroadcastActive => !string.IsNullOrWhiteSpace(_currentBroadcastId);
+        public static string? CurrentBroadcastId => _currentBroadcastId;
+    public static bool IsStreamerRunning => _currentStreamer != null;
+    public static bool IsWaitingForIngestion => _isWaitingForIngestion;
 
         /// <summary>
         /// Promote the currently-running encoder (HLS-only) to a YouTube live broadcast by creating
         /// the broadcast resources and restarting the ffmpeg process to include RTMP output.
         /// Returns true on success.
         /// </summary>
-        public static async Task<(bool ok, string? message)> StartBroadcastAsync(IConfiguration config, CancellationToken cancellationToken)
+        public static async Task<(bool ok, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, CancellationToken cancellationToken)
         {
             // Only supports OAuth flow for automatic broadcast creation
             var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
@@ -30,14 +98,14 @@ namespace PrintStreamer.Services
             bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
             if (!useOAuth)
             {
-                return (false, "OAuth client credentials not configured");
+                return (false, "OAuth client credentials not configured", null);
             }
 
             lock (_streamLock)
             {
                 if (_currentStreamer == null)
                 {
-                    return (false, "No running encoder to promote");
+                    return (false, "No running encoder to promote", null);
                 }
             }
 
@@ -46,14 +114,14 @@ namespace PrintStreamer.Services
             if (!await yt.AuthenticateAsync(cancellationToken))
             {
                 yt.Dispose();
-                return (false, "YouTube authentication failed");
+                return (false, "YouTube authentication failed", null);
             }
 
             var res = await yt.CreateLiveBroadcastAsync(cancellationToken);
             if (res.rtmpUrl == null || res.streamKey == null)
             {
                 yt.Dispose();
-                return (false, "Failed to create YouTube broadcast");
+                return (false, "Failed to create YouTube broadcast", null);
             }
 
             var newRtmp = res.rtmpUrl;
@@ -108,10 +176,24 @@ namespace PrintStreamer.Services
                 }
 
                 var source = config.GetValue<string>("Stream:Source");
+                var useLocalProxy = config.GetValue<bool?>("Stream:UseLocalProxy") ?? false;
+                var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
+                if (useLocalProxy && serveEnabled)
+                {
+                    source = "http://127.0.0.1:8080/stream";
+                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (Stream:UseLocalProxy=true)");
+                }
+                // If camera simulation is active, force the local proxy as the source so the new ffmpeg
+                // streamer will see the server's fallback frames.
+                if (PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled && serveEnabled)
+                {
+                    source = "http://127.0.0.1:8080/stream";
+                    Console.WriteLine("[Stream] Camera simulation active - forcing local proxy as ffmpeg source");
+                }
                 if (string.IsNullOrWhiteSpace(source))
                 {
                     yt.Dispose();
-                    return (false, "Stream:Source is not configured");
+                    return (false, "Stream:Source is not configured", null);
                 }
                 var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null);
                 var cts = new CancellationTokenSource();
@@ -152,12 +234,12 @@ namespace PrintStreamer.Services
                     Console.WriteLine("[YouTube] No broadcastId available; skipping automatic transition to live.");
                 }
 
-                return (true, null);
+                return (true, null, newBroadcastId);
             }
             catch (Exception ex)
             {
                 yt.Dispose();
-                return (false, ex.Message);
+                return (false, ex.Message, null);
             }
         }
 
@@ -693,6 +775,22 @@ namespace PrintStreamer.Services
 
                 // Read source and manual key from config now (Program.cs shouldn't pass them)
                 var source = config.GetValue<string>("Stream:Source");
+                // Optionally prefer the local proxy stream (useful for the overlay to run even when webcam upstream is flaky)
+                var useLocalProxy = config.GetValue<bool?>("Stream:UseLocalProxy") ?? false;
+                var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
+                if (useLocalProxy && serveEnabled)
+                {
+                    // Use local server's /stream endpoint as input for ffmpeg
+                    source = "http://127.0.0.1:8080/stream";
+                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (Stream:UseLocalProxy=true)");
+                }
+                // If camera simulation is active (camera intentionally disabled), force the local proxy as the source
+                // so the ffmpeg process will see the server fallback frames instead of connecting to the real camera.
+                if (PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled && serveEnabled)
+                {
+                    source = "http://127.0.0.1:8080/stream";
+                    Console.WriteLine("[Stream] Camera simulation active - forcing local proxy as ffmpeg source");
+                }
                 var manualKey = config.GetValue<string>("YouTube:Key");
 
                 // Respect new config flag: whether automatic LiveBroadcast creation is enabled
@@ -982,6 +1080,80 @@ namespace PrintStreamer.Services
                     {
                         Console.WriteLine("Cancellation requested before transition; skipping TransitionBroadcastToLive.");
                     }
+
+                    // If the initial transition didn't succeed because the camera/feed wasn't yet available,
+                    // keep monitoring ingestion and retry transitioning until either we succeed or the streamer stops.
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            // Read monitor settings from config (fallback to defaults)
+                            var monitorRetrySeconds = config.GetValue<int?>("YouTube:Monitor:RetrySeconds") ?? 30;
+                            var ingestionWaitSeconds = config.GetValue<int?>("YouTube:Monitor:IngestionWaitSeconds") ?? 60;
+
+                            Console.WriteLine("[YouTubeMonitor] Starting background monitor to retry transition if ingestion becomes active later...");
+                            while (!cancellationToken.IsCancellationRequested)
+                            {
+                                try
+                                {
+                                    _isWaitingForIngestion = true;
+
+                                    // First, try transitioning immediately (this will be treated as success if already live)
+                                    try
+                                    {
+                                        var tried = await ytService.TransitionBroadcastToLiveAsync(broadcastId, cancellationToken);
+                                        Console.WriteLine($"[YouTubeMonitor] Immediate transition attempt result: {tried}");
+                                        if (tried)
+                                        {
+                                            Console.WriteLine("[YouTubeMonitor] Transition succeeded (or already live); stopping monitor.");
+                                            break;
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"[YouTubeMonitor] Immediate transition attempt failed: {ex.Message}");
+                                    }
+
+                                    // Wait for ingestion to become active, then try transition
+                                    var ok = await ytService.WaitForIngestionAsync(null, TimeSpan.FromSeconds(ingestionWaitSeconds), cancellationToken);
+                                    if (ok)
+                                    {
+                                        Console.WriteLine("[YouTubeMonitor] Ingestion active; attempting transition to live...");
+                                        try
+                                        {
+                                            var tOk = await ytService.TransitionBroadcastToLiveAsync(broadcastId, cancellationToken);
+                                            Console.WriteLine($"[YouTubeMonitor] Transition attempt result: {tOk}");
+                                            if (tOk) break;
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            Console.WriteLine($"[YouTubeMonitor] Transition attempt failed: {ex.Message}");
+                                        }
+                                    }
+                                }
+                                catch (OperationCanceledException) { break; }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[YouTubeMonitor] Monitor error: {ex.Message}");
+                                }
+                                finally
+                                {
+                                    _isWaitingForIngestion = false;
+                                }
+
+                                // Sleep before retrying (configurable)
+                                try { await Task.Delay(TimeSpan.FromSeconds(monitorRetrySeconds), cancellationToken); } catch (OperationCanceledException) { break; }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[YouTubeMonitor] Background monitor failed: {ex.Message}");
+                        }
+                        finally
+                        {
+                            _isWaitingForIngestion = false;
+                        }
+                    }, cancellationToken);
                 }
 
                 // Wait for the stream to end (started earlier)

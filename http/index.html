@@ -18,9 +18,18 @@
 		button.success{background:#009900}
 		button.success:hover{background:#007700}
 		.timelapse-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px;margin-top:20px}
-		.timelapse-item{background:#333;padding:15px;border-radius:8px;word-wrap:break-word;overflow-wrap:break-word}
-		.timelapse-item h3{word-wrap:break-word;overflow-wrap:break-word;margin:0 0 10px 0}
-		.timelapse-item.active{border:2px solid #0066cc}
+		.timelapse-item{background:#333;padding:15px;border-radius:8px;word-wrap:break-word;overflow-wrap:break-word;position:relative;padding-right:50px}
+		.timelapse-item h3{word-wrap:break-word;overflow-wrap:break-word;margin:0 0 10px 0;padding-right:10px}
+		.timelapse-item p{margin:8px 0}
+		.timelapse-item.active{border:2px solid #0066cc;padding:13px;padding-right:48px}
+		.delete-btn{position:absolute;top:8px;right:8px;background:#cc0000;border:none;color:white;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:18px;padding:0;display:flex;align-items:center;justify-content:center;margin:0}
+		.delete-btn:hover{background:#a30000;transform:scale(1.05)}
+		.delete-btn:active{transform:scale(0.95)}
+		.regenerate-btn{background:#0066cc;border:none;color:white;width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:16px;padding:0;display:flex;align-items:center;justify-content:center;margin:0}
+		.regenerate-btn:hover{background:#0052a3;transform:rotate(90deg)}
+		.regenerate-btn:active{transform:rotate(180deg)}
+		.regenerate-btn:disabled{background:#666;cursor:not-allowed;opacity:0.5}
+		.timelapse-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 		.status{padding:5px 10px;border-radius:4px;font-size:0.9em}
 		.status.active{background:#009900}
 		.status.inactive{background:#666}
@@ -28,6 +37,13 @@
 		.video-link{color:#66ccff;text-decoration:none}
 		.video-link:hover{text-decoration:underline}
 		@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+		#toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:10px;max-width:400px}
+		.toast{background:#333;color:#eee;padding:15px 20px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.5);display:flex;align-items:center;gap:10px;animation:slideIn 0.3s ease-out}
+		.toast.success{border-left:4px solid #009900}
+		.toast.error{border-left:4px solid #cc0000}
+		.toast.info{border-left:4px solid #0066cc}
+		@keyframes slideIn{from{transform:translateX(400px);opacity:0}to{transform:translateX(0);opacity:1}}
+		@keyframes slideOut{from{transform:translateX(0);opacity:1}to{transform:translateX(400px);opacity:0}}
 	</style>
 </head>
 <body>
@@ -58,23 +74,57 @@
 			<div style='margin-top:12px'>
 				<button id='goLiveBtn' class='success' style='display:none'>Go Live</button>
 				<button id='stopLiveBtn' class='danger' style='display:none'>Stop Live</button>
+				<!-- Camera simulation toggle -->
+				<button id='cameraToggleBtn' style='margin-left:8px'>Toggle Camera (Sim)</button>
 				<span id='liveIndicator' style='margin-left:10px;padding:5px 10px;border-radius:4px;display:none'>
 					<span style='display:inline-block;width:10px;height:10px;background:#f00;border-radius:50%;margin-right:5px;animation:pulse 1.5s infinite'></span>
 					LIVE
 				</span>
+				<span id='waitingIndicator' style='margin-left:10px;padding:5px 10px;border-radius:4px;display:none;background:#ffa500;color:#111;font-weight:600'>
+					Waiting for camera / preview (not live)
+				</span>
 				<span id='goLiveStatus' style='margin-left:10px;color:#66ccff'></span>
+				<div id='liveBroadcastUrl' style='margin-top:10px;display:none'>
+					<strong>Live URL:</strong> <a id='liveBroadcastLink' href='#' target='_blank' style='color:#66ccff;text-decoration:underline'></a>
+				</div>
 			</div>
 
 		<div class='section'>
 			<h2>Timelapse Control</h2>
 			<div style='margin-bottom:15px'>
 				<button onclick='refreshTimelapses()'>Refresh</button>
+				<button onclick='deleteAllTimelapses()' class='danger'>Delete All</button>
 			</div>
 			<div id='timelapseList'></div>
 		</div>
 	</div>
 	
+	<div id='toast-container'></div>
+	
 	<script>
+		// Toast notification system
+		function showToast(message, type = 'info') {
+			const container = document.getElementById('toast-container');
+			const toast = document.createElement('div');
+			toast.className = `toast ${type}`;
+			
+			const icon = type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ';
+			
+			// Convert URLs in message to clickable links
+			const messageWithLinks = message.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:#66ccff;text-decoration:underline">$1</a>');
+			
+			toast.innerHTML = `<span style='font-size:1.2em'>${icon}</span><span>${messageWithLinks}</span>`;
+			
+			container.appendChild(toast);
+			
+			// Auto-remove after 5 seconds (longer for messages with links)
+			const duration = message.includes('http') ? 8000 : 4000;
+			setTimeout(() => {
+				toast.style.animation = 'slideOut 0.3s ease-in forwards';
+				setTimeout(() => toast.remove(), 300);
+			}, duration);
+		}
+		
 		// Basic reconnection: reload the img if it fails
 		const img = document.getElementById('mjpeg');
 		const hlsContainer = document.getElementById('hlsContainer');
@@ -125,22 +175,74 @@
 			}
 
 			const html = timelapses.map(t => {
+				const hasVideo = t.videoFiles && t.videoFiles.length > 0;
+				const hasFrames = t.frameCount > 0;
+				
 				let itemHtml = `<div class='timelapse-item ${t.isActive ? 'active' : ''}'>`;
-				itemHtml += `<h3>${t.name}</h3>`;
-				itemHtml += `<div class='status ${t.isActive ? 'active' : 'inactive'}'>${t.isActive ? 'RECORDING' : 'STOPPED'}</div>`;
-				itemHtml += `<p><strong>Frames:</strong> ${t.frameCount}</p>`;
-				itemHtml += `<p><strong>Started:</strong> ${new Date(t.startTime).toLocaleString()}</p>`;
-				if (t.lastFrameTime) {
-					itemHtml += `<p><strong>Last Frame:</strong> ${new Date(t.lastFrameTime).toLocaleString()}</p>`;
+				
+				// Delete button (top right) - only for inactive timelapses
+				if (!t.isActive) {
+					itemHtml += `<button onclick='deleteTimelapse("${t.name}")' class='delete-btn' title='Delete timelapse'>🗑️</button>`;
 				}
-				itemHtml += '<div>';
+				
+				// Title with regenerate button
+				itemHtml += `<div style='display:flex;align-items:flex-start;gap:8px;margin-bottom:10px'>`;
+				itemHtml += `<h3 style='margin:0;flex:1;word-wrap:break-word;overflow-wrap:break-word'>${t.name}</h3>`;
+				if (!t.isActive && hasVideo) {
+					itemHtml += `<button onclick='regenerateTimelapse("${t.name}")' class='regenerate-btn' title='Regenerate video' style='flex-shrink:0'>🔄</button>`;
+				}
+				itemHtml += `</div>`;
+				
+				// Status badge
+				itemHtml += `<div class='status ${t.isActive ? 'active' : 'inactive'}'>${t.isActive ? 'RECORDING' : 'STOPPED'}</div>`;
+				
+				// Info section
+				itemHtml += `<p style='margin:8px 0'><strong>Frames:</strong> ${t.frameCount}</p>`;
+				itemHtml += `<p style='margin:8px 0'><strong>Started:</strong> ${new Date(t.startTime).toLocaleString()}</p>`;
+				if (t.lastFrameTime) {
+					itemHtml += `<p style='margin:8px 0'><strong>Last Frame:</strong> ${new Date(t.lastFrameTime).toLocaleString()}</p>`;
+				}
+				
+				// Actions section
+				itemHtml += '<div class="timelapse-actions" style="margin-top:15px">';
+				
+				// Active timelapse: Stop Recording button
 				if (t.isActive) {
 					itemHtml += `<button onclick='stopTimelapse("${t.name}")' class='danger'>Stop Recording</button>`;
 				}
-				for (const video of t.videoFiles) {
-					itemHtml += ` <a href='/api/timelapses/${encodeURIComponent(t.name)}/frames/${encodeURIComponent(video)}' class='video-link' target='_blank'>📹 ${video}</a>`;
+				
+				// Inactive timelapse with frames: Generate or Upload button
+				if (!t.isActive && hasFrames) {
+					if (hasVideo) {
+						// Only show upload button when we don't already have a YouTube link saved
+						if (!t.youTubeUrl) {
+							itemHtml += `<button onclick='uploadTimelapse("${t.name}")' id='upload-${t.name}'>Upload to YouTube</button>`;
+						}
+					} else {
+						itemHtml += `<button onclick='generateTimelapse("${t.name}")' id='generate-${t.name}'>Generate Video</button>`;
+					}
 				}
-				itemHtml += '</div></div>';
+				
+				// Video file links
+				if (hasVideo) {
+					for (const video of t.videoFiles) {
+						itemHtml += ` <a href='/api/timelapses/${encodeURIComponent(t.name)}/frames/${encodeURIComponent(video)}' class='video-link' target='_blank'>📹 ${video}</a>`;
+					}
+				}
+				
+				// YouTube URL if uploaded (show even if no local video files present)
+				if (t.youTubeUrl) {
+					itemHtml += `<div style='margin-top:10px;padding-top:10px;border-top:1px solid #555'><a href='${t.youTubeUrl}' class='video-link' target='_blank' style='font-size:0.9em'>🎬 View on YouTube</a></div>`;
+				}
+				
+				itemHtml += '</div>';
+				
+				// YouTube URL if uploaded
+				if (t.youTubeUrl) {
+					itemHtml += `<div style='margin-top:10px;padding-top:10px;border-top:1px solid #555'><a href='${t.youTubeUrl}' class='video-link' target='_blank' style='font-size:0.9em'>🎬 View on YouTube</a></div>`;
+				}
+				
+				itemHtml += '</div>';
 				return itemHtml;
 			}).join('');
 			
@@ -151,7 +253,7 @@
 			if (!name) {
 				name = document.getElementById('newTimelapseInput').value.trim();
 				if (!name) {
-					alert('Please enter a timelapse name');
+					showToast('Please enter a timelapse name', 'error');
 					return;
 				}
 			}
@@ -162,11 +264,12 @@
 				if (result.success) {
 					document.getElementById('newTimelapseInput').value = '';
 					await refreshTimelapses();
+					showToast('Timelapse started successfully', 'success');
 				} else {
-					alert('Failed to start timelapse: ' + (result.error || 'Unknown error'));
+					showToast('Failed to start timelapse: ' + (result.error || 'Unknown error'), 'error');
 				}
 			} catch (error) {
-				alert('Error starting timelapse: ' + error.message);
+				showToast('Error starting timelapse: ' + error.message, 'error');
 			}
 		}
 
@@ -179,13 +282,151 @@
 				if (result.success) {
 					await refreshTimelapses();
 					if (result.videoPath) {
-						alert('Video created successfully!');
+						showToast('Video created successfully!', 'success');
 					}
 				} else {
-					alert('Failed to stop timelapse: ' + (result.error || 'Unknown error'));
+					showToast('Failed to stop timelapse: ' + (result.error || 'Unknown error'), 'error');
 				}
 			} catch (error) {
-				alert('Error stopping timelapse: ' + error.message);
+				showToast('Error stopping timelapse: ' + error.message, 'error');
+			}
+		}
+
+		async function generateTimelapse(name) {
+			const btn = document.getElementById(`generate-${name}`);
+			if (btn) {
+				btn.disabled = true;
+				btn.textContent = 'Generating...';
+			}
+
+			try {
+				const response = await fetch(`/api/timelapses/${encodeURIComponent(name)}/generate`, { method: 'POST' });
+				const result = await response.json();
+				if (result.success) {
+					await refreshTimelapses();
+					showToast('Video generated successfully!', 'success');
+				} else {
+					showToast('Failed to generate video: ' + (result.error || 'Unknown error'), 'error');
+					if (btn) {
+						btn.disabled = false;
+						btn.textContent = 'Generate Video';
+					}
+				}
+			} catch (error) {
+				showToast('Error generating video: ' + error.message, 'error');
+				if (btn) {
+					btn.disabled = false;
+					btn.textContent = 'Generate Video';
+				}
+			}
+		}
+
+		async function regenerateTimelapse(name) {
+			if (!confirm(`Regenerate video for '${name}'? This will replace the existing video.`)) return;
+
+			try {
+				const response = await fetch(`/api/timelapses/${encodeURIComponent(name)}/generate`, { method: 'POST' });
+				const result = await response.json();
+				if (result.success) {
+					await refreshTimelapses();
+					showToast('Video regenerated successfully!', 'success');
+				} else {
+					showToast('Failed to regenerate video: ' + (result.error || 'Unknown error'), 'error');
+				}
+			} catch (error) {
+				showToast('Error regenerating video: ' + error.message, 'error');
+			}
+		}
+
+		async function uploadTimelapse(name) {
+			const btn = document.getElementById(`upload-${name}`);
+			if (btn) {
+				btn.disabled = true;
+				btn.textContent = 'Uploading...';
+			}
+
+			try {
+				const response = await fetch(`/api/timelapses/${encodeURIComponent(name)}/upload`, { method: 'POST' });
+				const result = await response.json();
+				if (result.success) {
+					showToast(`Video uploaded successfully! ${result.url}`, 'success');
+					if (btn) {
+						btn.disabled = false;
+						btn.textContent = 'Upload to YouTube';
+					}
+				} else {
+					showToast('Failed to upload video: ' + (result.error || 'Unknown error'), 'error');
+					if (btn) {
+						btn.disabled = false;
+						btn.textContent = 'Upload to YouTube';
+					}
+				}
+			} catch (error) {
+				showToast('Error uploading video: ' + error.message, 'error');
+				if (btn) {
+					btn.disabled = false;
+					btn.textContent = 'Upload to YouTube';
+				}
+			}
+		}
+
+		async function deleteTimelapse(name) {
+			if (!confirm(`Delete timelapse '${name}' and all its files?`)) return;
+
+			try {
+				const response = await fetch(`/api/timelapses/${encodeURIComponent(name)}`, { method: 'DELETE' });
+				const result = await response.json();
+				if (result.success) {
+					await refreshTimelapses();
+					showToast('Timelapse deleted successfully', 'success');
+				} else {
+					showToast('Failed to delete timelapse: ' + (result.error || 'Unknown error'), 'error');
+				}
+			} catch (error) {
+				showToast('Error deleting timelapse: ' + error.message, 'error');
+			}
+		}
+
+		async function deleteAllTimelapses() {
+			try {
+				// Get current timelapses to count inactive ones
+				const response = await fetch('/api/timelapses');
+				const timelapses = await response.json();
+				const inactiveTimelapses = timelapses.filter(t => !t.isActive);
+				
+				if (inactiveTimelapses.length === 0) {
+					showToast('No inactive timelapses to delete', 'info');
+					return;
+				}
+				
+				if (!confirm(`Delete all ${inactiveTimelapses.length} inactive timelapse(s)?`)) return;
+
+				let deleted = 0;
+				let failed = 0;
+				
+				for (const t of inactiveTimelapses) {
+					try {
+						const deleteResponse = await fetch(`/api/timelapses/${encodeURIComponent(t.name)}`, { method: 'DELETE' });
+						const result = await deleteResponse.json();
+						if (result.success) {
+							deleted++;
+						} else {
+							failed++;
+						}
+					} catch {
+						failed++;
+					}
+				}
+				
+				await refreshTimelapses();
+				
+				if (failed === 0) {
+					showToast(`Successfully deleted ${deleted} timelapse(s)`, 'success');
+				} else {
+					showToast(`Deleted ${deleted} timelapse(s), ${failed} failed`, 'error');
+				}
+			} catch (error) {
+				showToast('Error deleting timelapses: ' + error.message, 'error');
 			}
 		}
 
@@ -399,26 +640,42 @@
 				}
 			}, 5000);
 
+			// Expose attach/cleanup so other UI controls can re-run the attachment process
+			window.attachHls = attach;
+			window.detachHls = cleanup;
 			// Start attachment process
 			attach();
 		})();
 
 		// Live broadcast state management
-		function updateLiveUI(live) {
+		function updateLiveUI(live, broadcastId = null) {
 			isLive = live;
 			const goLiveBtn = document.getElementById('goLiveBtn');
 			const stopLiveBtn = document.getElementById('stopLiveBtn');
 			const liveIndicator = document.getElementById('liveIndicator');
 			const status = document.getElementById('goLiveStatus');
+			const urlContainer = document.getElementById('liveBroadcastUrl');
+			const urlLink = document.getElementById('liveBroadcastLink');
+			const waitingIndicator = document.getElementById('waitingIndicator');
 			
 			if (live) {
 				goLiveBtn.style.display = 'none';
 				stopLiveBtn.style.display = 'inline-block';
 				liveIndicator.style.display = 'inline-block';
+				if (waitingIndicator) waitingIndicator.style.display = 'none';
+				
+				// Show broadcast URL if we have a broadcastId
+				if (broadcastId) {
+					const url = `https://www.youtube.com/watch?v=${broadcastId}`;
+					urlLink.href = url;
+					urlLink.textContent = url;
+					urlContainer.style.display = 'block';
+				}
 			} else {
 				goLiveBtn.style.display = 'inline-block';
 				stopLiveBtn.style.display = 'none';
 				liveIndicator.style.display = 'none';
+				urlContainer.style.display = 'none';
 				updateGoLiveButton();
 			}
 		}
@@ -429,7 +686,20 @@
 				const resp = await fetch('/api/live/status');
 				if (resp.ok) {
 					const j = await resp.json();
-					updateLiveUI(j.isLive || false);
+					updateLiveUI(j.isLive || false, j.broadcastId);
+					// Show waiting indicator when streamer is running but not live or when waitingForIngestion is true
+					const waitingIndicator = document.getElementById('waitingIndicator');
+					if (waitingIndicator) {
+						const streamerRunning = !!j.streamerRunning;
+						const waitingFlag = !!j.waitingForIngestion;
+						if (!j.isLive && streamerRunning) {
+							waitingIndicator.style.display = 'inline-block';
+							if (waitingFlag) waitingIndicator.textContent = 'Waiting for camera / ingestion (will auto-go-live)';
+							else waitingIndicator.textContent = 'Preview running (not live)';
+						} else {
+							waitingIndicator.style.display = 'none';
+						}
+					}
 				} else {
 					updateLiveUI(false);
 				}
@@ -439,6 +709,45 @@
 			}
 		}
 		
+		// Camera simulation controls
+		async function refreshCameraSimState() {
+			try {
+				const resp = await fetch('/api/camera');
+				if (!resp.ok) return;
+				const j = await resp.json();
+				const btn = document.getElementById('cameraToggleBtn');
+				if (j.disabled) {
+					btn.textContent = 'Camera: OFF (click to enable)';
+					btn.style.background = '#cc0000';
+				} else {
+					btn.textContent = 'Camera: ON (click to disable)';
+					btn.style.background = '';
+				}
+			} catch (e) { console.warn('Failed to query camera sim state', e); }
+		}
+
+		document.getElementById('cameraToggleBtn').addEventListener('click', async () => {
+			try {
+				const resp = await fetch('/api/camera/toggle', { method: 'POST' });
+				if (!resp.ok) { showToast('Failed to toggle camera simulation', 'error'); return; }
+				const j = await resp.json();
+				refreshCameraSimState();
+				// Reload the MJPEG image and HLS attachment to reflect state change
+				const img = document.getElementById('mjpeg');
+				img.src = '/stream?ts=' + Date.now();
+				// Re-attach HLS after a short delay to allow server to update
+				setTimeout(() => { try { startHlsIfReady(); } catch (e) {} }, 800);
+			} catch (e) {
+				showToast('Error toggling camera: ' + e.message, 'error');
+			}
+		});
+
+		// Expose startHlsIfReady for toggling to call (it is defined in an IIFE above)
+		function startHlsIfReady() { try { if (window && typeof window.attachHls === 'function') window.attachHls(); } catch { /* noop */ } }
+
+		// Query initial camera simulation state
+		refreshCameraSimState();
+
 		// Go Live button handler
 		document.getElementById('goLiveBtn').addEventListener('click', async () => {
 			const status = document.getElementById('goLiveStatus');

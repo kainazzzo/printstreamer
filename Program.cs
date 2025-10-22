@@ -1,5 +1,6 @@
 ﻿using PrintStreamer.Timelapse;
 using PrintStreamer.Services;
+using System.Diagnostics;
 
 // Moonraker polling and streaming helpers moved to Services/MoonrakerPoller.cs
 
@@ -95,6 +96,8 @@ if (serveEnabled)
 	}
 
 	var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+	// Use shared simulation flag exposed by MoonrakerPoller so ffmpeg/streamer can also respect it
+	var webcamInputDisabled = PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled;
     
 	// Resolve timelapse manager from DI (registered earlier)
 	timelapseManager = app.Services.GetRequiredService<TimelapseManager>();
@@ -127,6 +130,42 @@ if (serveEnabled)
 
 		try
 		{
+			// If camera is simulated disabled, immediately serve the fallback MJPEG loop
+			if (PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled)
+			{
+				Console.WriteLine("Camera simulation: upstream disabled — serving fallback MJPEG");
+				ctx.Response.StatusCode = 200;
+				ctx.Response.ContentType = "multipart/x-mixed-replace; boundary=frame";
+
+				var blackJpegBase64 = 
+"/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAICAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGBggHBwcHBw0JCQgKCAgJCgsMDAwMDAwMDAwMDAwMDAz/wAALCAABAAEBAREA/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAgP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwD9AP/Z";
+				var blackBytes = Convert.FromBase64String(blackJpegBase64);
+				var boundary = "--frame\r\n";
+				var header = "Content-Type: image/jpeg\r\nContent-Length: ";
+
+				while (!ctx.RequestAborted.IsCancellationRequested)
+				{
+					try
+					{
+						await ctx.Response.WriteAsync(boundary, ctx.RequestAborted);
+						await ctx.Response.WriteAsync(header + blackBytes.Length + "\r\n\r\n", ctx.RequestAborted);
+						await ctx.Response.Body.WriteAsync(blackBytes, 0, blackBytes.Length, ctx.RequestAborted);
+						await ctx.Response.WriteAsync("\r\n", ctx.RequestAborted);
+						await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+					}
+					catch (OperationCanceledException) { break; }
+					catch (Exception ex)
+					{
+						Console.WriteLine($"Fallback MJPEG write failed: {ex.Message}");
+						break;
+					}
+
+					try { await Task.Delay(250, ctx.RequestAborted); } catch (OperationCanceledException) { break; }
+				}
+
+				return;
+			}
+
 			using var req = new HttpRequestMessage(HttpMethod.Get, source);
 			using var resp = await httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
 			resp.EnsureSuccessStatusCode();
@@ -140,17 +179,115 @@ if (serveEnabled)
 		}
 		catch (OperationCanceledException)
 		{
-			// client disconnected or cancellation
 			Console.WriteLine("Client disconnected or request canceled.");
 		}
 		catch (Exception ex)
 		{
 			Console.WriteLine($"Error proxying stream: {ex.Message}");
-			if (!ctx.Response.HasStarted)
+			// If upstream fails, provide a resilient MJPEG fallback composed of a repeating black JPEG
+			try
 			{
-				ctx.Response.StatusCode = 502;
+				if (ctx.RequestAborted.IsCancellationRequested) return;
+				ctx.Response.StatusCode = 200;
+				ctx.Response.ContentType = "multipart/x-mixed-replace; boundary=frame";
+
+				// Minimal 320x240 black JPEG (1x1 scaled by browsers) - base64 decoded
+				var blackJpegBase64 = 
+"/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAICAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGBggHBwcHBw0JCQgKCAgJCgsMDAwMDAwMDAwMDAwMDAz/wAALCAABAAEBAREA/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAgP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwD9AP/Z";
+				var blackBytes = Convert.FromBase64String(blackJpegBase64);
+				var boundary = "--frame\r\n";
+				var header = "Content-Type: image/jpeg\r\nContent-Length: ";
+
+				// probe interval: try to reconnect to upstream every 5 seconds
+				var probeInterval = TimeSpan.FromSeconds(5);
+				var lastProbe = DateTime.UtcNow;
+
+				while (!ctx.RequestAborted.IsCancellationRequested)
+				{
+					// Write a frame
+					try
+					{
+						await ctx.Response.WriteAsync(boundary, ctx.RequestAborted);
+						await ctx.Response.WriteAsync(header + blackBytes.Length + "\r\n\r\n", ctx.RequestAborted);
+						await ctx.Response.Body.WriteAsync(blackBytes, 0, blackBytes.Length, ctx.RequestAborted);
+						await ctx.Response.WriteAsync("\r\n", ctx.RequestAborted);
+						await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+					}
+					catch (OperationCanceledException) { break; }
+					catch (Exception writeEx)
+					{
+						Console.WriteLine($"Fallback MJPEG write failed: {writeEx.Message}");
+						break;
+					}
+
+					// Periodically attempt to reconnect to upstream and switch over if available
+					if ((DateTime.UtcNow - lastProbe) > probeInterval)
+					{
+						lastProbe = DateTime.UtcNow;
+						try
+						{
+							using var probeReq = new HttpRequestMessage(HttpMethod.Get, source);
+							using var probeResp = await httpClient.SendAsync(probeReq, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
+							if (probeResp.IsSuccessStatusCode)
+							{
+								Console.WriteLine("Upstream source is available again; switching to live feed for client.");
+								// switch: copy upstream into response and exit fallback loop
+								ctx.Response.ContentType = probeResp.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
+								using var upstream = await probeResp.Content.ReadAsStreamAsync(ctx.RequestAborted);
+								await upstream.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+								break;
+							}
+						}
+						catch (OperationCanceledException) { break; }
+						catch { /* still no upstream; continue fallback */ }
+					}
+
+					// throttle frame rate a bit to avoid spinning
+					try { await Task.Delay(250, ctx.RequestAborted); } catch (OperationCanceledException) { break; }
+				}
+			}
+			catch (Exception fx)
+			{
+				Console.WriteLine($"Failed to serve fallback MJPEG: {fx.Message}");
+				if (!ctx.Response.HasStarted)
+				{
+					ctx.Response.StatusCode = 502;
+				}
 			}
 		}
+	});
+
+	// Camera simulation control endpoints (useful for testing camera disconnects)
+	app.MapGet("/api/camera", (HttpContext ctx) =>
+	{
+		return Results.Json(new { disabled = PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled });
+	});
+
+	app.MapPost("/api/camera/on", (HttpContext ctx) =>
+	{
+		PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled = false;
+		Console.WriteLine("Camera simulation: enabled (camera on)");
+		// Restart streamer so ffmpeg picks up the new upstream availability
+		try { PrintStreamer.Services.MoonrakerPoller.RestartCurrentStreamerWithConfig(config); } catch { }
+		return Results.Json(new { disabled = PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled });
+	});
+
+	app.MapPost("/api/camera/off", (HttpContext ctx) =>
+	{
+		PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled = true;
+		Console.WriteLine("Camera simulation: disabled (camera off)");
+		// Restart streamer so ffmpeg will read from the local proxy and therefore see the fallback frames
+		try { PrintStreamer.Services.MoonrakerPoller.RestartCurrentStreamerWithConfig(config); } catch { }
+		return Results.Json(new { disabled = PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled });
+	});
+
+	app.MapPost("/api/camera/toggle", (HttpContext ctx) =>
+	{
+		var newVal = !PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled;
+		PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled = newVal;
+		Console.WriteLine($"Camera simulation: toggled -> disabled={newVal}");
+		try { PrintStreamer.Services.MoonrakerPoller.RestartCurrentStreamerWithConfig(config); } catch { }
+		return Results.Json(new { disabled = PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled });
 	});
 
 	// Timelapse API endpoints
@@ -165,8 +302,8 @@ if (serveEnabled)
 	{
 		try
 		{
-			var (ok, message) = await MoonrakerPoller.StartBroadcastAsync(config, ctx.RequestAborted);
-			if (ok) return Results.Json(new { success = true });
+			var (ok, message, broadcastId) = await MoonrakerPoller.StartBroadcastAsync(config, ctx.RequestAborted);
+			if (ok) return Results.Json(new { success = true, broadcastId });
 			return Results.Json(new { success = false, error = message });
 		}
 		catch (Exception ex)
@@ -180,11 +317,14 @@ if (serveEnabled)
 		try
 		{
 			var isLive = MoonrakerPoller.IsBroadcastActive;
-			return Results.Json(new { isLive });
+			var broadcastId = MoonrakerPoller.CurrentBroadcastId;
+			var streamerRunning = MoonrakerPoller.IsStreamerRunning;
+			var waitingForIngestion = MoonrakerPoller.IsWaitingForIngestion;
+			return Results.Json(new { isLive, broadcastId, streamerRunning, waitingForIngestion });
 		}
 		catch (Exception ex)
 		{
-			return Results.Json(new { isLive = false, error = ex.Message });
+			return Results.Json(new { isLive = false, broadcastId = (string?)null, streamerRunning = false, waitingForIngestion = false, error = ex.Message });
 		}
 	});
 
@@ -254,6 +394,156 @@ if (serveEnabled)
 		catch
 		{
 			return Results.NotFound();
+		}
+	});
+
+	app.MapPost("/api/timelapses/{name}/generate", async (string name, HttpContext ctx) =>
+	{
+		try
+		{
+			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+			if (!Directory.Exists(timelapseDir))
+			{
+				return Results.Json(new { success = false, error = "Timelapse not found" });
+			}
+
+			var frameFiles = Directory.GetFiles(timelapseDir, "frame_*.jpg").OrderBy(f => f).ToArray();
+			if (frameFiles.Length == 0)
+			{
+				return Results.Json(new { success = false, error = "No frames found" });
+			}
+
+			// Generate video directly using ffmpeg
+			var folderName = Path.GetFileName(timelapseDir);
+			var videoPath = Path.Combine(timelapseDir, $"{folderName}.mp4");
+			
+			Console.WriteLine($"[API] Generating video from {frameFiles.Length} frames: {videoPath}");
+			
+			// Use ffmpeg to create video
+			var arguments = $"-y -framerate 30 -start_number 0 -i \"{timelapseDir}/frame_%06d.jpg\" -vf \"tpad=stop_mode=clone:stop_duration=5\" -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p -movflags +faststart \"{videoPath}\"";
+			
+			var psi = new ProcessStartInfo
+			{
+				FileName = "ffmpeg",
+				Arguments = arguments,
+				UseShellExecute = false,
+				RedirectStandardError = true,
+				RedirectStandardOutput = true,
+				CreateNoWindow = true
+			};
+			
+			using var proc = Process.Start(psi);
+			if (proc == null)
+			{
+				return Results.Json(new { success = false, error = "Failed to start ffmpeg" });
+			}
+			
+			var output = await proc.StandardError.ReadToEndAsync(ctx.RequestAborted);
+			await proc.WaitForExitAsync(ctx.RequestAborted);
+			
+			if (proc.ExitCode == 0 && File.Exists(videoPath))
+			{
+				Console.WriteLine($"[API] Video created successfully: {videoPath}");
+				return Results.Json(new { success = true, videoPath });
+			}
+			else
+			{
+				Console.WriteLine($"[API] ffmpeg failed with exit code {proc.ExitCode}");
+				Console.WriteLine($"[API] ffmpeg output: {output}");
+				return Results.Json(new { success = false, error = $"ffmpeg failed with exit code {proc.ExitCode}" });
+			}
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"[API] Error generating video: {ex.Message}");
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	app.MapPost("/api/timelapses/{name}/upload", async (string name, HttpContext ctx) =>
+	{
+		try
+		{
+			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+			if (!Directory.Exists(timelapseDir))
+			{
+				return Results.Json(new { success = false, error = "Timelapse not found" });
+			}
+
+			var videoFiles = Directory.GetFiles(timelapseDir, "*.mp4");
+			if (videoFiles.Length == 0)
+			{
+				return Results.Json(new { success = false, error = "No video file found" });
+			}
+
+			var videoPath = videoFiles[0]; // Use first mp4 found
+
+			// Use YouTubeControlService to upload
+			var ytService = new YouTubeControlService(config);
+			if (!await ytService.AuthenticateAsync(ctx.RequestAborted))
+			{
+				ytService.Dispose();
+				return Results.Json(new { success = false, error = "YouTube authentication failed" });
+			}
+
+			var videoId = await ytService.UploadTimelapseVideoAsync(videoPath, name, ctx.RequestAborted);
+			ytService.Dispose();
+
+			if (!string.IsNullOrEmpty(videoId))
+			{
+				var url = $"https://www.youtube.com/watch?v={videoId}";
+				
+				// Save YouTube URL to metadata
+				try
+				{
+					var metadataPath = Path.Combine(timelapseDir, ".metadata");
+					var existingLines = File.Exists(metadataPath) ? File.ReadAllLines(metadataPath).ToList() : new List<string>();
+					
+					// Remove old YouTubeUrl if exists
+					existingLines.RemoveAll(line => line.StartsWith("YouTubeUrl="));
+					
+					// Add new YouTubeUrl
+					existingLines.Add($"YouTubeUrl={url}");
+					
+					File.WriteAllLines(metadataPath, existingLines);
+				}
+				catch (Exception ex)
+				{
+					Console.WriteLine($"[API] Failed to save YouTube URL to metadata: {ex.Message}");
+				}
+				
+				return Results.Json(new { success = true, videoId, url });
+			}
+			return Results.Json(new { success = false, error = "Upload failed" });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	app.MapDelete("/api/timelapses/{name}", (string name, HttpContext ctx) =>
+	{
+		try
+		{
+			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+			if (!Directory.Exists(timelapseDir))
+			{
+				return Results.Json(new { success = false, error = "Timelapse not found" });
+			}
+
+			// Don't delete active timelapses
+			if (timelapseManager.GetActiveSessionNames().Contains(name))
+			{
+				return Results.Json(new { success = false, error = "Cannot delete active timelapse" });
+			}
+
+			Directory.Delete(timelapseDir, true);
+			return Results.Json(new { success = true });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
 		}
 	});
 

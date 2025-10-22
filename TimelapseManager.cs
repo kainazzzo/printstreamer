@@ -46,6 +46,9 @@ namespace PrintStreamer.Timelapse
             LastCaptureTime = null
         };
 
+        // Create metadata file for the timelapse folder
+        CreateMetadataFile(service.OutputDir, DateTime.UtcNow);
+
         // If a Moonraker filename was provided, try to download it once and cache contents + parsed layer markers
         if (!string.IsNullOrWhiteSpace(moonrakerFilename))
         {
@@ -227,6 +230,25 @@ namespace PrintStreamer.Timelapse
             var frameFiles = Directory.GetFiles(dir, "frame_*.jpg").OrderBy(f => f).ToArray();
             var videoFiles = Directory.GetFiles(dir, "*.mp4").ToArray();
 
+            // Read creation date and YouTube URL from metadata file if it exists
+            DateTime creationDate;
+            string? youtubeUrl = null;
+
+            // Always attempt to read metadata so we can pick up a saved YouTube URL even for active sessions
+            var metadata = ReadMetadata(dir);
+            youtubeUrl = metadata.YouTubeUrl;
+
+            if (isActive && _activeSessions.TryGetValue(dirName, out var session))
+            {
+                // Prefer the live session's start time for active timelapses
+                creationDate = session.StartTime;
+            }
+            else
+            {
+                creationDate = metadata.CreatedAt 
+                    ?? (frameFiles.Length > 0 ? File.GetCreationTime(frameFiles[0]) : Directory.GetCreationTime(dir));
+            }
+
             var info = new TimelapseInfo
             {
                 Name = dirName,
@@ -234,18 +256,73 @@ namespace PrintStreamer.Timelapse
                 IsActive = isActive,
                 FrameCount = frameFiles.Length,
                 VideoFiles = videoFiles.Select(f => Path.GetFileName(f) ?? "unknown").ToArray(),
-                StartTime = isActive && _activeSessions.TryGetValue(dirName, out var session)
-                    ? session.StartTime
-                    : Directory.GetCreationTime(dir),
+                StartTime = creationDate,
                 LastFrameTime = frameFiles.Length > 0
                     ? File.GetLastWriteTime(frameFiles.Last())
-                    : (DateTime?)null
+                    : (DateTime?)null,
+                YouTubeUrl = youtubeUrl
             };
 
             timelapses.Add(info);
         }
 
+        // Sort by creation date from metadata (newest first)
         return timelapses.OrderByDescending(t => t.StartTime);
+    }
+    
+    private static void CreateMetadataFile(string directory, DateTime createdAt)
+    {
+        try
+        {
+            var metadataPath = Path.Combine(directory, ".metadata");
+            if (!File.Exists(metadataPath))
+            {
+                var metadata = $"CreatedAt={createdAt:O}\n";
+                File.WriteAllText(metadataPath, metadata);
+                Console.WriteLine($"[TimelapseManager] Created metadata file for {Path.GetFileName(directory)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TimelapseManager] Failed to create metadata file: {ex.Message}");
+        }
+    }
+    
+    private static (DateTime? CreatedAt, string? YouTubeUrl) ReadMetadata(string directory)
+    {
+        try
+        {
+            var metadataPath = Path.Combine(directory, ".metadata");
+            if (!File.Exists(metadataPath))
+                return (null, null);
+                
+            DateTime? createdAt = null;
+            string? youtubeUrl = null;
+            
+            var lines = File.ReadAllLines(metadataPath);
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("CreatedAt="))
+                {
+                    var dateStr = line.Substring("CreatedAt=".Length);
+                    if (DateTime.TryParse(dateStr, out var date))
+                    {
+                        createdAt = date;
+                    }
+                }
+                else if (line.StartsWith("YouTubeUrl="))
+                {
+                    youtubeUrl = line.Substring("YouTubeUrl=".Length);
+                }
+            }
+            
+            return (createdAt, youtubeUrl);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TimelapseManager] Failed to read metadata from {directory}: {ex.Message}");
+        }
+        return (null, null);
     }
 
     public IEnumerable<string> GetActiveSessionNames() => _activeSessions.Keys;
@@ -486,5 +563,6 @@ namespace PrintStreamer.Timelapse
     public string[] VideoFiles { get; set; } = Array.Empty<string>();
     public DateTime StartTime { get; set; }
     public DateTime? LastFrameTime { get; set; }
+    public string? YouTubeUrl { get; set; }
     }
 }

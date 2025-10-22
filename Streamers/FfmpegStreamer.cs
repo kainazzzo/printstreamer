@@ -167,7 +167,7 @@ namespace PrintStreamer.Streamers
 	// If the source is an HTTP MJPEG stream, prefer to let ffmpeg preserve the input frame timing
 	// instead of forcing an output frame rate. Only add -r when an explicit target fps is desired.
 	// Detect HTTP source early
-	var isHttpSource = srcArg.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+		var isHttpSource = srcArg.StartsWith("http", StringComparison.OrdinalIgnoreCase);
 	int effectiveFps = fps <= 0 ? 0 : fps;
 	if (isHttpSource)
 	{
@@ -180,7 +180,11 @@ namespace PrintStreamer.Streamers
 
 	// For MJPEG/http sources that have no audio, include a silent audio track so YouTube sees audio present.
 	// We'll add a lavfi anullsrc input and map it as the audio input.
-	var addSilentAudio = isHttpSource || srcArg.StartsWith("/dev/") == false;
+		var addSilentAudio = isHttpSource || srcArg.StartsWith("/dev/") == false;
+
+		// When using an HTTP MJPEG source, also provide a synthetic black video input as a background so
+		// the overlay can always render frames even if the camera feed temporarily stops.
+		var provideBlackBackground = isHttpSource;
 
 	// ffmpeg logging: allow overriding via env var to hide benign errors
 	string logLevel = System.Environment.GetEnvironmentVariable("FFMPEG_LOGLEVEL") ?? "error";
@@ -198,23 +202,33 @@ namespace PrintStreamer.Streamers
 	string audioEncArgs = "";
 
 	string audioMap = "";
-	if (addSilentAudio)
-	{
-		// Two inputs: video (0) and synthetic silent audio (1)
-		// Use reconnect options and input hints identical to youtube_stream.sh for MJPEG HTTP inputs.
-		var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
-		inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
-		// We will map the filtered video stream [vout] later via -map [vout]
-		// Map only the synthetic audio input here
-		audioMap = "-map 1:a:0";
-		audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
-	}
-	else
-	{
-		inputArgs = $"{baseFlags} -re {inputFormat}-i \"{srcArg}\"";
-		audioMap = "";
-		audioEncArgs = "-an";
-	}
+		if (addSilentAudio)
+		{
+			// When HTTP source: inputs will be either:
+			// - [0] synthetic black background (lavfi)
+			// - [1] HTTP MJPEG source (reconnect-enabled)
+			// - [2] synthetic silent audio (lavfi anullsrc)
+			var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
+
+			if (provideBlackBackground)
+			{
+				inputArgs = $"{baseFlags} -f lavfi -i color=s=640x480:c=black -fflags +genpts {reconnectArgs} -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
+				// audio is the third input
+				audioMap = "-map 2:a:0";
+			}
+			else
+			{
+				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
+				audioMap = "-map 1:a:0";
+			}
+			audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
+		}
+		else
+		{
+			inputArgs = $"{baseFlags} -re {inputFormat}-i \"{srcArg}\"";
+			audioMap = "";
+			audioEncArgs = "-an";
+		}
 
 	// Add input frame rate hint for better behavior on low-frame-rate sources
 	// (we set -r on the output later; no separate fpsArg needed)
@@ -284,15 +298,34 @@ namespace PrintStreamer.Streamers
 	// This avoids the "label ... already used elsewhere" error from ffmpeg when mapping the same filter output multiple times.
 	var needsSplit = !string.IsNullOrWhiteSpace(hlsArgs) && !string.IsNullOrWhiteSpace(rtmpUrl);
 	string filterComplex;
+
+	// Build the starting label for the video inputs. When a synthetic black background was provided
+	// the input order is: [0] = black background, [1] = camera source. We need to overlay camera onto
+	// the black background first, then apply the rest of the vfChain (format/scale/drawbox/drawtext).
+	string videoInputStart;
+	if (provideBlackBackground)
+	{
+		// overlay camera ([1:v]) onto background ([0:v]) and then continue the chain
+		// overlay=shortest=1 ensures the composite follows the shorter stream end (camera), but
+		// drawtext/drawbox will still render on the background when camera is missing frames.
+		videoInputStart = "[0:v][1:v]overlay=shortest=1,";
+	}
+	else
+	{
+		// single input chain starting from the primary video input
+		videoInputStart = "[0:v]";
+	}
+
 	if (needsSplit)
 	{
 		// produce two outputs: [vout0] for RTMP and [vout1] for HLS
-		filterComplex = $"-filter_complex [0:v]{vfChain},split=2[vout0][vout1]";
+		// quote the entire filter_complex argument to avoid shell parsing issues
+		filterComplex = $"-filter_complex \"{videoInputStart}{vfChain},split=2[vout0][vout1]\"";
 	}
 	else
 	{
 		// single labelled output [vout]
-		filterComplex = $"-filter_complex [0:v]{vfChain}[vout]";
+		filterComplex = $"-filter_complex \"{videoInputStart}{vfChain}[vout]\"";
 	}
 	var colorRange = "-color_range tv";
 	var profile = "-profile:v baseline";
