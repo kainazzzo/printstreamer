@@ -7,6 +7,13 @@
 GET {{base}}/printer/objects/query?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,filename,info,print_duration,filament_used,total_duration&display_status=progress,speed,flow,volumetric_flow&virtual_sdcard=progress,file_position,print_duration&gcode_move=speed,speed_factor,extrude_factor
 X-Api-Key: {{apiKey}}
 
+###
+### Get G-code file metadata (layer_height, extrusion_width, etc.)
+### Replace "washer.gcode" with your actual filename
+
+GET {{base}}/server/files/metadata?filename=washer.gcode
+X-Api-Key: {{apiKey}}
+
 ### Notes
 ### - If your Moonraker uses a different auth header (e.g., "Authorization: Bearer <token>"), replace the X-Api-Key header accordingly.
 ### - The overlay reads:

@@ -134,12 +134,13 @@ public class TimelapseService : IDisposable
         // -framerate: input framerate
         // -start_number 0: start from frame_000000.jpg
         // -i: input pattern
+        // -vf tpad: pad the end with the last frame for 5 seconds (stop_mode=clone, stop_duration=5)
         // -c:v libx264: use H.264 codec
         // -preset medium: balance between speed and compression
         // -crf 23: good quality (lower = better quality)
         // -pix_fmt yuv420p: ensure compatibility with most players
         // -movflags +faststart: optimize for web playback
-        var arguments = $"-y -framerate {fps} -start_number 0 -i \"{OutputDir}/frame_%06d.jpg\" -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p -movflags +faststart \"{outputVideoPath}\"";
+        var arguments = $"-y -framerate {fps} -start_number 0 -i \"{OutputDir}/frame_%06d.jpg\" -vf \"tpad=stop_mode=clone:stop_duration=7\" -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p -movflags +faststart \"{outputVideoPath}\"";
         
         var psi = new ProcessStartInfo
         {

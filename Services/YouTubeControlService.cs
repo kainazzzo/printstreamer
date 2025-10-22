@@ -95,6 +95,14 @@ internal class YouTubeControlService : IDisposable
     /// </summary>
     public async Task<string?> UploadTimelapseVideoAsync(string videoFilePath, string? filename = null, CancellationToken cancellationToken = default)
     {
+        // Check if timelapse upload is enabled
+        var uploadEnabled = _config.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
+        if (!uploadEnabled)
+        {
+            Console.WriteLine("Timelapse upload is disabled in configuration.");
+            return null;
+        }
+
         if (_youtubeService == null)
         {
             Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");

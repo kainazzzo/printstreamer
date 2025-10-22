@@ -319,7 +319,7 @@ namespace PrintStreamer.Services
 
                             // Stop timelapse via manager and kick off finalize/upload in the background
                             var sessionToFinalize = activeTimelapseSessionName;
-                            var uploadEnabled = config.GetValue<bool?>("Timelapse:Upload") ?? false;
+                            var uploadEnabled = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
                             timelapseFinalizeTask = Task.Run(async () =>
                             {
                                 try
@@ -396,7 +396,7 @@ namespace PrintStreamer.Services
                                 // Upload the timelapse video to YouTube if enabled and video was created successfully
                                 if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
                                 {
-                                    var uploadTimelapse = config.GetValue<bool?>("Timelapse:Upload") ?? false;
+                                    var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
                                     if (uploadTimelapse && ytService != null)
                                     {
                                         Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
@@ -452,7 +452,7 @@ namespace PrintStreamer.Services
                                     }
                                     else if (!uploadTimelapse)
                                     {
-                                        Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (Timelapse:Upload=false)");
+                                        Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
                                     }
                                 }
                             }
@@ -531,7 +531,7 @@ namespace PrintStreamer.Services
                         // Upload the timelapse video to YouTube if enabled and video was created successfully
                         if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
                         {
-                            var uploadTimelapse = config.GetValue<bool?>("Timelapse:Upload") ?? false;
+                            var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
                             if (uploadTimelapse && ytService != null)
                             {
                                 Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
@@ -588,7 +588,7 @@ namespace PrintStreamer.Services
                             }
                             else if (!uploadTimelapse)
                             {
-                                Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (Timelapse:Upload=false)");
+                                Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
                             }
                         }
                     }
@@ -954,7 +954,7 @@ namespace PrintStreamer.Services
                             // Upload the timelapse video to YouTube if enabled and video was created successfully
                             if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
                             {
-                                var uploadTimelapse = config.GetValue<bool?>("Timelapse:Upload") ?? false;
+                                var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
                                 if (uploadTimelapse && ytService != null)
                                 {
                                     Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
@@ -994,7 +994,7 @@ namespace PrintStreamer.Services
                                 }
                                 else if (!uploadTimelapse)
                                 {
-                                    Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (Timelapse:Upload=false)");
+                                    Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
                                 }
                             }
                         }

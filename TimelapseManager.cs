@@ -72,6 +72,9 @@ namespace PrintStreamer.Timelapse
                                     if (mdObj.TryGetPropertyValue("slicer", out var slicer)) session.Slicer = slicer?.ToString();
                                     if (mdObj.TryGetPropertyValue("estimated_time", out var est)) session.EstimatedSeconds = TryParseDouble(est?.ToString());
                                     if (mdObj.TryGetPropertyValue("layer_count", out var lc) && int.TryParse(lc?.ToString(), out var lcInt)) session.TotalLayersFromMetadata = lcInt;
+                                    if (mdObj.TryGetPropertyValue("layer_height", out var lh)) session.LayerHeight = TryParseDouble(lh?.ToString());
+                                    if (mdObj.TryGetPropertyValue("first_layer_height", out var flh)) session.FirstLayerHeight = TryParseDouble(flh?.ToString());
+                                    if (mdObj.TryGetPropertyValue("extrusion_width", out var ew)) session.ExtrusionWidth = TryParseDouble(ew?.ToString());
                                 }
                                 if (session.TotalLayersFromMetadata == null && r.TryGetPropertyValue("layer_count", out var topLc) && int.TryParse(topLc?.ToString(), out var topLcInt))
                                     session.TotalLayersFromMetadata = topLcInt;
@@ -263,7 +266,10 @@ namespace PrintStreamer.Timelapse
                 RawMetadata = session.MetadataRaw,
                 Slicer = session.Slicer,
                 EstimatedSeconds = session.EstimatedSeconds,
-                SavedGcodePath = session.SavedGcodePath
+                SavedGcodePath = session.SavedGcodePath,
+                LayerHeight = session.LayerHeight,
+                FirstLayerHeight = session.FirstLayerHeight,
+                ExtrusionWidth = session.ExtrusionWidth
             };
         }
 
@@ -280,7 +286,10 @@ namespace PrintStreamer.Timelapse
                     RawMetadata = s.MetadataRaw,
                     Slicer = s.Slicer,
                     EstimatedSeconds = s.EstimatedSeconds,
-                    SavedGcodePath = s.SavedGcodePath
+                    SavedGcodePath = s.SavedGcodePath,
+                    LayerHeight = s.LayerHeight,
+                    FirstLayerHeight = s.FirstLayerHeight,
+                    ExtrusionWidth = s.ExtrusionWidth
                 };
             }
         }
@@ -462,6 +471,10 @@ namespace PrintStreamer.Timelapse
     public double? EstimatedSeconds { get; set; }
     // Path on disk where the downloaded G-code was saved (if saved)
     public string? SavedGcodePath { get; set; }
+    // Slicer settings for volumetric flow calculation
+    public double? LayerHeight { get; set; }
+    public double? FirstLayerHeight { get; set; }
+    public double? ExtrusionWidth { get; set; }
     }
 
     public class TimelapseInfo

@@ -33,7 +33,7 @@ public sealed class OverlayTextService : IDisposable
         _authHeader = config.GetValue<string>("Moonraker:AuthHeader");
 
     _template = config.GetValue<string>("Overlay:Template") ??
-           "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} \n{progress:0}% | Spd:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
+           "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpd:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
 
         var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
         if (refreshMs < 200) refreshMs = 200;
@@ -171,16 +171,8 @@ public sealed class OverlayTextService : IDisposable
             if (!double.IsNaN(dspSpd) && dspSpd > 0) speedMmS = dspSpd / 60.0;
         }
 
-        int progress = 0;
-        if (currentLayer.HasValue && totalLayers.HasValue && totalLayers.Value > 0)
-        {
-            // Prefer layer-based progress when available
-            progress = (int)Math.Round((double)currentLayer.Value / totalLayers.Value * 100.0);
-        }
-        else
-        {
-            progress = (int)Math.Round(progress01 * 100);
-        }
+        // Use display_status.progress as primary source (already set from display_status or virtual_sdcard above)
+        int progress = (int)Math.Round(progress01 * 100);
         string filename = TryString(print, "filename") ?? string.Empty;
 
         // Get print duration and filament used for ETA calculation
@@ -198,6 +190,8 @@ public sealed class OverlayTextService : IDisposable
 
         // If we have a timelapse metadata provider and a filename, prefer its cached totals/slicer
         string? providerSlicer = null;
+        double? layerHeight = null;
+        double? extrusionWidth = null;
         if (!string.IsNullOrWhiteSpace(filename) && _tlProvider != null)
         {
             try
@@ -210,9 +204,23 @@ public sealed class OverlayTextService : IDisposable
                     else if (meta.TotalLayersFromMetadata.HasValue)
                         totalLayers = meta.TotalLayersFromMetadata.Value;
                     providerSlicer = meta.Slicer;
+                    layerHeight = meta.LayerHeight;
+                    extrusionWidth = meta.ExtrusionWidth;
                 }
             }
             catch { }
+        }
+        
+        // Calculate volumetric flow client-side if Moonraker doesn't provide it
+        // Formula: volumetric_flow = speed (mm/s) × line_width (mm) × layer_height (mm)
+        if (!flowVolume.HasValue && speedMmS.HasValue && speedMmS.Value > 0)
+        {
+            // Use metadata values if available, otherwise use common defaults
+            // Typical values: 0.4mm nozzle with 0.2mm layer height and 0.4mm line width
+            var lh = layerHeight ?? 0.2;  // Default layer height
+            var ew = extrusionWidth ?? 0.4;  // Default extrusion width (nozzle diameter)
+            
+            flowVolume = speedMmS.Value * ew * lh;
         }
 
         return new OverlayData

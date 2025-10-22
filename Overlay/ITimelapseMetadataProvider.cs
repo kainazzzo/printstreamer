@@ -21,5 +21,9 @@ namespace PrintStreamer.Overlay
         public string? SavedGcodePath { get; init; }
         // Expose layer starts length for quick checks
         public int? ParsedLayerCount => TotalLayersFromGcode ?? null;
+        // Slicer settings for volumetric flow calculation
+        public double? LayerHeight { get; init; }
+        public double? FirstLayerHeight { get; init; }
+        public double? ExtrusionWidth { get; init; }
     }
 }
