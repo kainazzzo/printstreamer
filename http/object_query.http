@@ -1,0 +1,18 @@
+### Moonraker Printer Objects Query used by OverlayTextService
+### Adjust @base and @apiKey to match your setup.
+
+@base = http://192.168.1.117:7125
+@apiKey = 
+
+GET {{base}}/printer/objects/query?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,filename,info,print_duration,filament_used,total_duration&display_status=progress,speed,flow,volumetric_flow&virtual_sdcard=progress,file_position,print_duration&gcode_move=speed,speed_factor,extrude_factor
+X-Api-Key: {{apiKey}}
+
+### Notes
+### - If your Moonraker uses a different auth header (e.g., "Authorization: Bearer <token>"), replace the X-Api-Key header accordingly.
+### - The overlay reads:
+###   - Temps: extruder/heater_bed temperature,target
+###   - Status: print_stats.state, filename, info (layers), print_duration, filament_used, total_duration
+###   - Progress/Flow: display_status.progress, flow or volumetric_flow (mm^3/s)
+###   - Speed: gcode_move.speed (mm/s) with fallback to display_status.speed
+###   - Also consult virtual_sdcard.progress for reliable progress
+

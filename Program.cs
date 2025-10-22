@@ -73,6 +73,8 @@ Console.CancelKeyPress += (s, e) =>
 if (serveEnabled)
 {
 	webBuilder.WebHost.ConfigureKestrel(options => { options.ListenAnyIP(8080); });
+	// Reduce shutdown timeout to respond faster to Ctrl+C (default is 30 seconds)
+	webBuilder.Host.ConfigureHostOptions(opts => { opts.ShutdownTimeout = TimeSpan.FromSeconds(3); });
 }
 
 // Expose stream/task variables for shutdown handling

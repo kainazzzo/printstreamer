@@ -120,7 +120,7 @@ namespace PrintStreamer.Streamers
 		{
 			if (_proc != null && !_proc.HasExited)
 			{
-				Console.WriteLine("Stopping ffmpeg (graceful)...");
+				Console.WriteLine("Stopping ffmpeg...");
 				try
 				{
 					// send 'q' to request ffmpeg to quit gracefully
@@ -134,8 +134,8 @@ namespace PrintStreamer.Streamers
 				{
 					Console.WriteLine($"Warning: failed to send quit to ffmpeg stdin: {ex.Message}");
 				}
-				// wait briefly for ffmpeg to exit on its own
-				if (!_proc.WaitForExit(2000))
+				// wait briefly for ffmpeg to exit on its own (reduced to 500ms for faster shutdown)
+				if (!_proc.WaitForExit(500))
 				{
 					Console.WriteLine("ffmpeg did not exit within timeout, killing...");
 					_proc.Kill(true);

@@ -33,7 +33,7 @@ public sealed class OverlayTextService : IDisposable
         _authHeader = config.GetValue<string>("Moonraker:AuthHeader");
 
     _template = config.GetValue<string>("Overlay:Template") ??
-           "Nozzle: {nozzle:0.0}°C/{nozzleTarget:0.0}°C  |  Bed: {bed:0.0}°C/{bedTarget:0.0}°C  |  {state}  |  {progress:0}%  |  {time:HH:mm:ss}  |  {layers}  |  Speed: {speed}  |  Flow: {flow}  |  Filament: {filament}  |  Slicer: {slicer}";
+           "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} \n{progress:0}% | Spd:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
 
         var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
         if (refreshMs < 200) refreshMs = 200;
@@ -75,10 +75,11 @@ public sealed class OverlayTextService : IDisposable
 
     private async Task<OverlayData> QueryAsync(CancellationToken ct)
     {
-        // Minimal, fast Moonraker query for temps and print status
+        // Query Moonraker for temps, print status, and time estimates
     var url = _moonrakerBase + "/printer/objects/query" +
-          "?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,progress,filename,info" +
-          "&display_status=speed,flow,filament";
+        "?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,filename,info,print_duration,filament_used,total_duration" +
+        "&display_status=progress,flow,speed&virtual_sdcard=progress,file_position,print_duration" +
+        "&gcode_move=speed,speed_factor,extrude_factor";
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         if (!string.IsNullOrWhiteSpace(_apiKey))
         {
@@ -118,37 +119,56 @@ public sealed class OverlayTextService : IDisposable
                 totalLayers = tl;
         }
 
-        // Additional display_status fields (speed, flow, filament) may be in display_status
-        double? speed = null;
-        double? flow = null;
-        string? filament = null;
-        if (root.GetProperty("result").TryGetProperty("status", out var statusElem) && statusElem.ValueKind == JsonValueKind.Object)
+        // Get progress from display_status (0-1 range) and volumetric flow (mm^3/s)
+        var displayStatus = status.TryGetProperty("display_status", out var ds) ? ds : default;
+        double progress01 = TryDouble(displayStatus, "progress");
+        double? flowVolume = null; // mm^3/s from Moonraker
+        if (displayStatus.ValueKind != JsonValueKind.Undefined)
         {
-            if (statusElem.TryGetProperty("display_status", out var ds) && ds.ValueKind == JsonValueKind.Object)
+            // Prefer explicit volumetric flow if available; otherwise accept 'flow'
+            var vflow = TryDouble(displayStatus, "volumetric_flow");
+            if (!double.IsNaN(vflow)) flowVolume = vflow;
+            else
             {
-                if (ds.TryGetProperty("speed", out var sp) && sp.ValueKind == JsonValueKind.Number && sp.TryGetDouble(out var spd)) speed = spd;
-                if (ds.TryGetProperty("flow", out var fl) && fl.ValueKind == JsonValueKind.Number && fl.TryGetDouble(out var fld)) flow = fld;
-                if (ds.TryGetProperty("filament", out var fil) && fil.ValueKind == JsonValueKind.String) filament = fil.GetString();
+                var flowVal = TryDouble(displayStatus, "flow");
+                if (!double.IsNaN(flowVal)) flowVolume = flowVal;
+            }
+        }
+        
+        // Get virtual_sdcard for more reliable progress
+        var vsd = status.TryGetProperty("virtual_sdcard", out var vsdElem) ? vsdElem : default;
+        if (vsd.ValueKind != JsonValueKind.Undefined)
+        {
+            var vsdProgress = TryDouble(vsd, "progress");
+            if (!double.IsNaN(vsdProgress) && vsdProgress > 0)
+            {
+                progress01 = vsdProgress;
             }
         }
 
-        // Determine progress. Moonraker often exposes progress as either a number or an object:
-        // - progress: 0.523 (number between 0..1)
-        // - progress: { completion: 0.523 }
-        double progress01 = 0.0;
-        if (print.ValueKind != JsonValueKind.Undefined && print.TryGetProperty("progress", out var progElem))
+        // Get actual speed in mm/s and factors from gcode_move
+        var gcodeMove = status.TryGetProperty("gcode_move", out var gm) ? gm : default;
+        double? speedMmS = null;
+    double? speedFactor = null;
+        
+        if (gcodeMove.ValueKind != JsonValueKind.Undefined)
         {
-            if (progElem.ValueKind == JsonValueKind.Number && progElem.TryGetDouble(out var pnum))
-            {
-                progress01 = pnum;
-            }
-            else if (progElem.ValueKind == JsonValueKind.Object)
-            {
-                if (progElem.TryGetProperty("completion", out var comp) && comp.ValueKind == JsonValueKind.Number && comp.TryGetDouble(out var cnum))
-                {
-                    progress01 = cnum;
-                }
-            }
+            var spd = TryDouble(gcodeMove, "speed");
+            // Empirically: reported speed aligns with mm/min; convert to mm/s
+            if (!double.IsNaN(spd) && spd > 0) speedMmS = spd / 60.0;
+            
+            var spdFactor = TryDouble(gcodeMove, "speed_factor");
+            if (!double.IsNaN(spdFactor)) speedFactor = spdFactor * 100.0; // Convert to percentage
+            
+            // extrude_factor is a percentage factor; we no longer use it for display
+            // keep it available via SpeedFactor if needed elsewhere
+        }
+        // Fallback: try display_status.speed if gcode_move.speed missing
+        if ((!speedMmS.HasValue || speedMmS.Value <= 0) && displayStatus.ValueKind != JsonValueKind.Undefined)
+        {
+            var dspSpd = TryDouble(displayStatus, "speed");
+            // Convert fallback speed to mm/s as well
+            if (!double.IsNaN(dspSpd) && dspSpd > 0) speedMmS = dspSpd / 60.0;
         }
 
         int progress = 0;
@@ -162,6 +182,19 @@ public sealed class OverlayTextService : IDisposable
             progress = (int)Math.Round(progress01 * 100);
         }
         string filename = TryString(print, "filename") ?? string.Empty;
+
+        // Get print duration and filament used for ETA calculation
+        double printDuration = TryDouble(print, "print_duration");
+        double filamentUsed = TryDouble(print, "filament_used");
+
+        // Calculate ETA if progress is meaningful
+        DateTime? eta = null;
+        if (progress01 > 0.01 && !double.IsNaN(printDuration) && printDuration > 0)
+        {
+            var estimatedTotal = printDuration / progress01;
+            var remaining = estimatedTotal - printDuration;
+            eta = DateTime.Now.AddSeconds(remaining);
+        }
 
         // If we have a timelapse metadata provider and a filename, prefer its cached totals/slicer
         string? providerSlicer = null;
@@ -194,10 +227,12 @@ public sealed class OverlayTextService : IDisposable
             LayerMax = totalLayers,
             Time = DateTime.Now,
             Filename = filename,
-            Speed = speed,
-            Flow = flow,
-            Filament = filament,
-            Slicer = providerSlicer
+            Speed = speedMmS,
+            SpeedFactor = speedFactor,
+            Flow = flowVolume,
+            Filament = filamentUsed,
+            Slicer = providerSlicer,
+            ETA = eta
         };
 
         static double TryDouble(JsonElement elem, string name, double defaultValue = double.NaN)
@@ -260,7 +295,7 @@ public sealed class OverlayTextService : IDisposable
             return System.Text.RegularExpressions.Regex.Replace(
                 input,
                 @"\{" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?::([^}]+))?\}",
-                m => value.ToString(m.Groups[1].Success ? m.Groups[1].Value : "HH:mm:ss"),
+                m => value.ToString(m.Groups[1].Success ? m.Groups[1].Value : "HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
             );
         }
@@ -269,7 +304,7 @@ public sealed class OverlayTextService : IDisposable
         {
             return System.Text.RegularExpressions.Regex.Replace(
                 input,
-                @"\{" + System.Text.RegularExpressions.Regex.Escape(name) + @"\}",
+                @"\{" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?::[^}]+)?\}",
                 _ => value ?? string.Empty,
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
             );
@@ -295,8 +330,19 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceStr(s, "filename", d.Filename ?? string.Empty);
     s = ReplaceStr(s, "slicer", d.Slicer ?? string.Empty);
     s = ReplaceStr(s, "speed", d.Speed.HasValue ? d.Speed.Value.ToString("0") : "-");
-    s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "-");
-    s = ReplaceStr(s, "filament", d.Filament ?? "-");
+    s = ReplaceStr(s, "speedfactor", d.SpeedFactor.HasValue ? d.SpeedFactor.Value.ToString("0") + "%" : "-");
+    // Flow is volumetric (mm^3/s) from Moonraker display_status.flow
+    s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") + " mm^3/s" : "-");
+    s = ReplaceStr(s, "filament", d.Filament.HasValue ? (d.Filament.Value / 1000.0).ToString("0.00") : "-");
+        // ETA with time format if available
+        if (d.ETA.HasValue)
+        {
+            s = ReplaceDate(s, "eta", d.ETA.Value);
+        }
+        else
+        {
+            s = ReplaceStr(s, "eta", "-");
+        }
 
         // If the template didn't ask for layers explicitly, append them so they're always visible
     if (!System.Text.RegularExpressions.Regex.IsMatch(_template, @"\{(?:layer|layermax|layers)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
@@ -340,9 +386,11 @@ public sealed class OverlayTextService : IDisposable
         public int? LayerMax { get; init; }
         public DateTime Time { get; init; }
         public string? Filename { get; init; }
-        public double? Speed { get; init; }
-        public double? Flow { get; init; }
-        public string? Filament { get; init; }
+        public double? Speed { get; init; } // Speed in mm/s
+        public double? SpeedFactor { get; init; } // Speed factor percentage
+        public double? Flow { get; init; } // Flow/extrude factor percentage
+        public double? Filament { get; init; } // Filament used in mm
         public string? Slicer { get; init; }
+        public DateTime? ETA { get; init; }
     }
 }
