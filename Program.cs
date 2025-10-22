@@ -175,6 +175,33 @@ if (serveEnabled)
 		}
 	});
 
+	app.MapGet("/api/live/status", (HttpContext ctx) =>
+	{
+		try
+		{
+			var isLive = MoonrakerPoller.IsBroadcastActive;
+			return Results.Json(new { isLive });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { isLive = false, error = ex.Message });
+		}
+	});
+
+	app.MapPost("/api/live/stop", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var (ok, message) = await MoonrakerPoller.StopBroadcastAsync(config, ctx.RequestAborted);
+			if (ok) return Results.Json(new { success = true });
+			return Results.Json(new { success = false, error = message });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
 	app.MapPost("/api/timelapses/{name}/start", async (string name, HttpContext ctx) =>
 	{
 		try
@@ -233,319 +260,18 @@ if (serveEnabled)
 	// Enhanced test page with timelapse management
 	app.MapGet("/", async (HttpContext ctx) =>
 	{
-			ctx.Response.ContentType = "text/html; charset=utf-8";
-			var html = @"<!doctype html>
-<html>
-<head>
-	<meta charset='utf-8'/>
-	<title>PrintStreamer - Control Panel</title>
-	<style>
-		body{margin:0;font-family:sans-serif;background:#111;color:#eee} 
-		.wrap{padding:20px;max-width:1200px;margin:0 auto} 
-		.section{margin-bottom:30px;background:#222;padding:20px;border-radius:8px}
-		.stream-container{text-align:center}
-		img{display:block;max-width:100%;height:auto;border:4px solid #333;background:#000;margin:0 auto}
-		button{background:#0066cc;color:white;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;margin:5px}
-		button:hover{background:#0052a3}
-		button.danger{background:#cc0000}
-		button.danger:hover{background:#a30000}
-		button.success{background:#009900}
-		button.success:hover{background:#007700}
-		.timelapse-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px;margin-top:20px}
-		.timelapse-item{background:#333;padding:15px;border-radius:8px}
-		.timelapse-item.active{border:2px solid #0066cc}
-		.status{padding:5px 10px;border-radius:4px;font-size:0.9em}
-		.status.active{background:#009900}
-		.status.inactive{background:#666}
-		input{padding:8px;border-radius:4px;border:1px solid #666;background:#333;color:#eee;margin:5px}
-		.video-link{color:#66ccff;text-decoration:none}
-		.video-link:hover{text-decoration:underline}
-	</style>
-</head>
-<body>
-	<div class='wrap'>
-		<h1>PrintStreamer - Control Panel</h1>
-		
-		<div class='section'>
-			<h2>Live Stream Preview</h2>
-			<div class='stream-container' style='display:flex;gap:20px;align-items:flex-start'>
-				<div style='flex:1'>
-					<h3 style='margin:6px 0;font-size:1em'>Source (raw MJPEG)</h3>
-					<img id='mjpeg' src='/stream' alt='MJPEG stream' style='width:100%;height:auto;max-height:480px' />
-					<p>Direct stream URL: <a href='/stream' style='color:#66ccff'>/stream</a></p>
-				</div>
-				<div style='flex:1'>
-					<h3 style='margin:6px 0;font-size:1em'>Preview (with overlay)</h3>
-					<video id='hlsPlayer' autoplay muted playsinline style='width:100%;height:auto;max-height:480px;background:#000;border:4px solid #333'></video>
-					<div id='hlsStatus' style='margin-top:8px;color:#66ccff;font-size:0.9em'>HLS status: initializing...</div>
-					<p>Local HLS: <a href='/hls/stream.m3u8' style='color:#66ccff'>/hls/stream.m3u8</a></p>
-				</div>
-			</div>
-		</div>
-
-			<div style='margin-top:12px'>
-				<button id='goLiveBtn' class='success'>Go Live</button>
-				<span id='goLiveStatus' style='margin-left:10px;color:#66ccff'></span>
-			</div>
-
-		<div class='section'>
-			<h2>Timelapse Control</h2>
-			<div style='margin-bottom:15px'>
-				<input type='text' id='newTimelapseInput' placeholder='Timelapse name (e.g., print-job-name)' style='width:300px'>
-				<button onclick='startTimelapse()' class='success'>Start New Timelapse</button>
-				<button onclick='refreshTimelapses()'>Refresh</button>
-			</div>
-			<div id='timelapseList'></div>
-		</div>
-	</div>
-	
-	<script>
-		// Basic reconnection: reload the img if it fails
-		const img = document.getElementById('mjpeg');
-		let imgReady = false;
-		img.addEventListener('load', () => {
-			if (!imgReady) {
-				imgReady = true;
-				// Try to start HLS playback once the MJPEG source is showing a frame
-				try { startHlsIfReady(); } catch (e) { }
-			}
-		});
-		img.addEventListener('error', () => {
-			console.log('Stream image error, retrying in 2s');
-			setTimeout(() => { img.src = '/stream?ts=' + Date.now(); }, 2000);
-		});
-
-		// Timelapse management
-		async function refreshTimelapses() {
-			try {
-				const response = await fetch('/api/timelapses');
-				const timelapses = await response.json();
-				displayTimelapses(timelapses);
-			} catch (error) {
-				console.error('Failed to load timelapses:', error);
-			}
+		ctx.Response.ContentType = "text/html; charset=utf-8";
+		var htmlPath = Path.Combine(Directory.GetCurrentDirectory(), "http", "index.html");
+		if (File.Exists(htmlPath))
+		{
+			await ctx.Response.SendFileAsync(htmlPath);
 		}
-
-		function displayTimelapses(timelapses) {
-			const container = document.getElementById('timelapseList');
-			if (timelapses.length === 0) {
-				container.innerHTML = '<p>No timelapses found. Create one using the input above.</p>';
-				return;
-			}
-
-			const html = timelapses.map(t => {
-				let itemHtml = `<div class='timelapse-item ${t.isActive ? 'active' : ''}'>`;
-				itemHtml += `<h3>${t.name}</h3>`;
-				itemHtml += `<div class='status ${t.isActive ? 'active' : 'inactive'}'>${t.isActive ? 'RECORDING' : 'STOPPED'}</div>`;
-				itemHtml += `<p><strong>Frames:</strong> ${t.frameCount}</p>`;
-				itemHtml += `<p><strong>Started:</strong> ${new Date(t.startTime).toLocaleString()}</p>`;
-				if (t.lastFrameTime) {
-					itemHtml += `<p><strong>Last Frame:</strong> ${new Date(t.lastFrameTime).toLocaleString()}</p>`;
-				}
-				itemHtml += '<div>';
-				if (t.isActive) {
-					itemHtml += `<button onclick='stopTimelapse(""${t.name}"")' class='danger'>Stop Recording</button>`;
-				} else {
-					itemHtml += `<button onclick='startTimelapse(""${t.name}"")' class='success'>Create</button>`;
-				}
-				for (const video of t.videoFiles) {
-					itemHtml += ` <a href='/api/timelapses/${encodeURIComponent(t.name)}/frames/${encodeURIComponent(video)}' class='video-link' target='_blank'>📹 ${video}</a>`;
-				}
-				itemHtml += '</div></div>';
-				return itemHtml;
-			}).join('');
-			
-			container.innerHTML = `<div class='timelapse-grid'>${html}</div>`;
+		else
+		{
+			ctx.Response.StatusCode = 404;
+			await ctx.Response.WriteAsync("Control panel HTML not found.");
 		}
-
-		async function startTimelapse(name) {
-			if (!name) {
-				name = document.getElementById('newTimelapseInput').value.trim();
-				if (!name) {
-					alert('Please enter a timelapse name');
-					return;
-				}
-			}
-
-			try {
-				const response = await fetch(`/api/timelapses/${encodeURIComponent(name)}/start`, { method: 'POST' });
-				const result = await response.json();
-				if (result.success) {
-					document.getElementById('newTimelapseInput').value = '';
-					await refreshTimelapses();
-				} else {
-					alert('Failed to start timelapse: ' + (result.error || 'Unknown error'));
-				}
-			} catch (error) {
-				alert('Error starting timelapse: ' + error.message);
-			}
-		}
-
-		async function stopTimelapse(name) {
-			if (!confirm(`Stop recording '${name}' and create video?`)) return;
-
-			try {
-				const response = await fetch(`/api/timelapses/${encodeURIComponent(name)}/stop`, { method: 'POST' });
-				const result = await response.json();
-				if (result.success) {
-					await refreshTimelapses();
-					if (result.videoPath) {
-						alert('Video created successfully!');
-					}
-				} else {
-					alert('Failed to stop timelapse: ' + (result.error || 'Unknown error'));
-				}
-			} catch (error) {
-				alert('Error stopping timelapse: ' + error.message);
-			}
-		}
-
-		// Load timelapses on page load
-		refreshTimelapses();
-		
-		// Auto-refresh every 30 seconds
-		setInterval(refreshTimelapses, 30000);
-
-		// HLS preview: use hls.js when available, otherwise rely on native HLS (Safari)
-		(function(){
-			const video = document.getElementById('hlsPlayer');
-			const hlsUrl = '/hls/stream.m3u8';
-			// Load hls.js from CDN if necessary
-			function loadHls() {
-				return new Promise((resolve, reject) => {
-					if (window.Hls) return resolve(window.Hls);
-					const s = document.createElement('script');
-					s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.0/dist/hls.min.js';
-					s.onload = () => resolve(window.Hls);
-					s.onerror = () => reject(new Error('Failed to load hls.js'));
-					document.head.appendChild(s);
-				});
-			}
-
-			async function attach() {
-				// helper to update visible status
-				function hlsStatus(text) {
-					try { document.getElementById('hlsStatus').textContent = 'HLS status: ' + text; } catch (e) { }
-					console.log('[HLS] ' + text);
-				}
-
-				window.__hlsAttached = false;
-
-				// Try to fetch the manifest first so we can show a clear error if it's missing or returns the wrong content-type
-				let manifestOk = false;
-				try {
-					hlsStatus('checking manifest');
-					const resp = await fetch(hlsUrl, { cache: 'no-store' });
-					if (resp.ok) {
-						const ct = resp.headers.get('content-type') || '';
-						console.log('[HLS] manifest content-type:', ct);
-						if (ct.includes('mpegurl') || ct.includes('vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) {
-							manifestOk = true;
-						} else {
-							console.warn('[HLS] Unexpected manifest content-type:', ct);
-							// still attempt attach, but show warning
-							hlsStatus('manifest fetched (unexpected content-type)');
-							manifestOk = true;
-						}
-					} else {
-						console.warn('[HLS] manifest fetch failed:', resp.status);
-						hlsStatus('manifest fetch failed: ' + resp.status);
-					}
-				} catch (err) {
-					console.warn('[HLS] manifest fetch error', err);
-					hlsStatus('manifest fetch error');
-				}
-
-				async function attachHlsOnce() {
-					if (window.__hlsAttached) return;
-					window.__hlsAttached = true;
-					hlsStatus('attaching');
-					try {
-						if (window.Hls) {
-							const hls = new window.Hls({ liveSyncDuration: 2, maxBufferLength: 10 });
-							window.__hlsInstance = hls;
-							hls.on(window.Hls.Events.MANIFEST_PARSED, function() { hlsStatus('manifest parsed'); video.muted = true; video.play().catch(()=>{}); });
-							hls.on(window.Hls.Events.ERROR, function(event, data) { hlsStatus('error: ' + data.type + ' - ' + (data.details || data.reason || 'unknown')); console.warn('HLS error', event, data); });
-							hls.loadSource(hlsUrl);
-							hls.attachMedia(video);
-						} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-							video.src = hlsUrl;
-							video.addEventListener('loadedmetadata', function() { hlsStatus('native loaded'); video.muted = true; video.play().catch(()=>{}); });
-						} else {
-							// load hls.js then attach
-							await loadHls();
-							const hls = new window.Hls({ liveSyncDuration: 2, maxBufferLength: 10 });
-							window.__hlsInstance = hls;
-							hls.on(window.Hls.Events.MANIFEST_PARSED, function() { hlsStatus('manifest parsed'); video.muted = true; video.play().catch(()=>{}); });
-							hls.on(window.Hls.Events.ERROR, function(event, data) { hlsStatus('error: ' + data.type + ' - ' + (data.details || data.reason || 'unknown')); console.warn('HLS error', event, data); });
-							hls.loadSource(hlsUrl);
-							hls.attachMedia(video);
-						}
-					} catch (err) {
-						console.warn('Failed to attach HLS', err);
-						window.__hlsAttached = false;
-						throw err;
-					}
-				}
-
-				// If manifest looks OK, try to attach immediately. Otherwise still attempt attach but show a prominent message.
-				try {
-					if (!manifestOk) {
-						// try loading hls.js first to surface errors
-						await loadHls().catch(()=>{});
-					}
-					await attachHlsOnce();
-				} catch (err) {
-					console.warn('attach() failed, will retry in 3s', err);
-					hlsStatus('attach failed, retrying...');
-					setTimeout(() => { attach(); }, 3000);
-				}
-
-				// Periodic check to restart loading if playback hasn't started
-				setInterval(() => {
-					try {
-						if (video && video.readyState < 2) {
-							hlsStatus('waiting for data... readyState=' + video.readyState);
-							if (window.__hlsInstance && typeof window.__hlsInstance.stopLoad === 'function') {
-								window.__hlsInstance.stopLoad();
-								window.__hlsInstance.startLoad();
-							} else if (!window.__hlsAttached) {
-								attachHlsOnce().catch(()=>{});
-							}
-						} else {
-							if (!video.paused) hlsStatus('playing');
-						}
-					} catch (e) { console.warn('HLS poll err', e); }
-				}, 2500);
-
-			};
-
-			attach();
-		})();
-
-		// Go Live button handler
-		document.getElementById('goLiveBtn').addEventListener('click', async () => {
-			const status = document.getElementById('goLiveStatus');
-			status.textContent = 'Promoting to live...';
-			try {
-				const resp = await fetch('/api/live/start', { method: 'POST' });
-				const j = await resp.json();
-				if (j && j.success) {
-					status.textContent = 'Live started';
-					setTimeout(()=> status.textContent = '', 5000);
-				} else {
-					status.textContent = 'Failed: ' + (j.error || 'unknown');
-				}
-			} catch (ex) {
-				status.textContent = 'Error: ' + ex.message;
-			}
-		});
-	</script>
-</body>
-</html>";
-
-				await ctx.Response.WriteAsync(html);
-		});
+	});
 
     Console.WriteLine("Starting proxy server on http://0.0.0.0:8080/stream");
 

@@ -160,6 +160,70 @@ namespace PrintStreamer.Services
                 return (false, ex.Message);
             }
         }
+
+        /// <summary>
+        /// Stop the current live broadcast and end the YouTube stream.
+        /// Returns true on success.
+        /// </summary>
+        public static async Task<(bool ok, string? message)> StopBroadcastAsync(IConfiguration config, CancellationToken cancellationToken)
+        {
+            IStreamer? streamer;
+            CancellationTokenSource? cts;
+            YouTubeControlService? yt;
+            string? broadcastId;
+
+            lock (_streamLock)
+            {
+                streamer = _currentStreamer;
+                cts = _currentStreamerCts;
+                yt = _currentYouTubeService;
+                broadcastId = _currentBroadcastId;
+                
+                _currentStreamer = null;
+                _currentStreamerCts = null;
+                _currentYouTubeService = null;
+                _currentBroadcastId = null;
+            }
+
+            if (streamer == null)
+            {
+                return (false, "No active broadcast to stop");
+            }
+
+            try
+            {
+                // Stop the streamer
+                try { cts?.Cancel(); } catch { }
+                try { await Task.WhenAny(streamer.ExitTask, Task.Delay(5000, cancellationToken)); } catch { }
+                try { streamer.Stop(); } catch { }
+
+                // End the YouTube broadcast
+                if (yt != null && !string.IsNullOrWhiteSpace(broadcastId))
+                {
+                    try
+                    {
+                        await yt.EndBroadcastAsync(broadcastId, cancellationToken);
+                        Console.WriteLine($"[YouTube] Ended broadcast {broadcastId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[YouTube] Error ending broadcast: {ex.Message}");
+                    }
+                    finally
+                    {
+                        yt.Dispose();
+                    }
+                }
+
+                return (true, null);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[StopBroadcast] Error: {ex.Message}");
+                return (false, ex.Message);
+            }
+        }
+
         // Entry point moved from Program.cs
     public static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToken cancellationToken)
         {
@@ -875,8 +939,16 @@ namespace PrintStreamer.Services
                 Console.WriteLine($"Starting ffmpeg streamer to {(fullRtmpUrl != null ? rtmpUrl + "/***" : "HLS-only")} (fps={targetFps}, kbps={bitrateKbps})");
                 streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null);
                 
+                // Store streamer reference so it can be promoted to live later
+                var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                lock (_streamLock)
+                {
+                    _currentStreamer = streamer;
+                    _currentStreamerCts = cts;
+                }
+                
                 // Start streamer without awaiting so we can detect ingestion while it's running
-                var streamerStartTask = streamer.StartAsync(cancellationToken);
+                var streamerStartTask = streamer.StartAsync(cts.Token);
 
                 // Ensure streamer is force-stopped when cancellation is requested (extra safety)
                 using var stopOnCancel = cancellationToken.Register(() =>
@@ -925,6 +997,13 @@ namespace PrintStreamer.Services
             }
             finally
             {
+                // Clear streamer reference
+                lock (_streamLock)
+                {
+                    _currentStreamer = null;
+                    _currentStreamerCts = null;
+                }
+                
                 try { overlayService?.Dispose(); } catch { }
                 // Final thumbnail upload removed: do not capture/upload a final thumbnail automatically
                 
