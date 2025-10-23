@@ -1,0 +1,312 @@
+@inject IJSRuntime JS
+
+<div class="timelapse-card @(Timelapse.IsActive ? "active" : "")">
+    <div class="card-header">
+        <h3 class="card-title">@Timelapse.Name</h3>
+        <div class="card-actions">
+            @if (!Timelapse.IsActive && Timelapse.VideoFiles?.Count > 0)
+            {
+                <button @onclick="HandleRegenerate" class="icon-btn" title="Regenerate video">🔄</button>
+            }
+            @if (!Timelapse.IsActive)
+            {
+                <button @onclick="HandleDelete" class="icon-btn delete" title="Delete timelapse">🗑</button>
+            }
+        </div>
+    </div>
+    
+    <div class="status-badge @(Timelapse.IsActive ? "active" : "stopped")">
+        @(Timelapse.IsActive ? "RECORDING" : "STOPPED")
+    </div>
+    
+    <div class="card-info">
+        <div class="info-row">
+            <span class="info-label">Frames:</span>
+            <span class="info-value">@Timelapse.FrameCount</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Started:</span>
+            <span class="info-value">@Timelapse.StartTime.ToLocalTime().ToString("g")</span>
+        </div>
+        @if (Timelapse.LastFrameTime.HasValue)
+        {
+            <div class="info-row">
+                <span class="info-label">Last Frame:</span>
+                <span class="info-value">@Timelapse.LastFrameTime.Value.ToLocalTime().ToString("g")</span>
+            </div>
+        }
+    </div>
+    
+    <div class="card-buttons">
+        @if (Timelapse.IsActive)
+        {
+            <button @onclick="HandleStop" class="btn btn-danger btn-block">Stop Recording</button>
+        }
+        else if (Timelapse.FrameCount > 0)
+        {
+            @if (Timelapse.VideoFiles?.Count > 0)
+            {
+                @if (string.IsNullOrEmpty(Timelapse.YouTubeUrl))
+                {
+                    <button @onclick="HandleUpload" class="btn btn-primary btn-block" disabled="@IsProcessing">
+                        @(IsProcessing ? "Uploading..." : "Upload to YouTube")
+                    </button>
+                }
+            }
+            else
+            {
+                <button @onclick="HandleGenerate" class="btn btn-primary btn-block" disabled="@IsProcessing">
+                    @(IsProcessing ? "Generating..." : "Generate Video")
+                </button>
+            }
+        }
+    </div>
+    
+    @if (Timelapse.VideoFiles?.Count > 0)
+    {
+        <div class="card-links">
+            @foreach (var video in Timelapse.VideoFiles)
+            {
+                <a href="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(video)}")" 
+                   class="video-link" 
+                   target="_blank">
+                    📹 @video
+                </a>
+            }
+        </div>
+    }
+    
+    @if (!string.IsNullOrEmpty(Timelapse.YouTubeUrl))
+    {
+        <div class="card-youtube">
+            <a href="@Timelapse.YouTubeUrl" class="youtube-link" target="_blank">
+                🎬 View on YouTube
+            </a>
+        </div>
+    }
+</div>
+
+<style>
+    .timelapse-card {
+        background: #1e1e1e;
+        border-radius: 8px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        border: 1px solid #3a3a3a;
+        transition: all 0.3s ease;
+    }
+    
+    .timelapse-card.active {
+        border-color: #f00;
+        box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
+    }
+    
+    .card-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+        min-height: 28px;
+    }
+    
+    .card-title {
+        margin: 0;
+        flex: 1;
+        font-size: 1.1em;
+        font-weight: 600;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        color: #fff;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        line-height: 1.3;
+    }
+    
+    .card-actions {
+        display: flex;
+        gap: 4px;
+        flex-shrink: 0;
+        align-self: flex-start;
+    }
+    
+    .icon-btn {
+        background: #3a3a3a;
+        border: none;
+        border-radius: 6px;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-size: 1.1em;
+        transition: all 0.2s ease;
+        color: #fff;
+    }
+    
+    .icon-btn:hover {
+        background: #4a4a4a;
+        transform: scale(1.05);
+    }
+    
+    .icon-btn.delete:hover {
+        background: #dc3545;
+    }
+    
+    .status-badge {
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 0.85em;
+        font-weight: 700;
+        display: inline-block;
+        width: fit-content;
+    }
+    
+    .status-badge.active {
+        background: #f00;
+        color: #fff;
+    }
+    
+    .status-badge.stopped {
+        background: #444;
+        color: #aaa;
+    }
+    
+    .card-info {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    
+    .info-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .info-label {
+        font-weight: 600;
+        color: #aaa;
+        font-size: 0.9em;
+    }
+    
+    .info-value {
+        color: #fff;
+        font-size: 0.9em;
+        text-align: right;
+    }
+    
+    .card-buttons {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    
+    .btn {
+        padding: 10px 16px;
+        border: none;
+        border-radius: 4px;
+        font-size: 0.95em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .btn:hover:not(:disabled) {
+        filter: brightness(1.2);
+        transform: translateY(-1px);
+    }
+    
+    .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    
+    .btn-primary {
+        background: #007bff;
+        color: #fff;
+    }
+    
+    .btn-danger {
+        background: #dc3545;
+        color: #fff;
+    }
+    
+    .btn-block {
+        width: 100%;
+    }
+    
+    .card-links {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding-top: 8px;
+        border-top: 1px solid #3a3a3a;
+    }
+    
+    .video-link {
+        color: #66ccff;
+        text-decoration: none;
+        font-size: 0.9em;
+        padding: 4px 0;
+        transition: color 0.2s ease;
+    }
+    
+    .video-link:hover {
+        color: #99ddff;
+        text-decoration: underline;
+    }
+    
+    .card-youtube {
+        padding-top: 8px;
+        border-top: 1px solid #3a3a3a;
+    }
+    
+    .youtube-link {
+        color: #ff0000;
+        text-decoration: none;
+        font-size: 0.95em;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.2s ease;
+    }
+    
+    .youtube-link:hover {
+        color: #ff4444;
+        text-decoration: underline;
+    }
+</style>
+
+@code {
+    [Parameter, EditorRequired]
+    public TimelapseInfo Timelapse { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public bool IsProcessing { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnStop { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnGenerate { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnRegenerate { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnUpload { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnDelete { get; set; }
+
+    private Task HandleStop() => OnStop.InvokeAsync(Timelapse.Name);
+    private Task HandleGenerate() => OnGenerate.InvokeAsync(Timelapse.Name);
+    private Task HandleRegenerate() => OnRegenerate.InvokeAsync(Timelapse.Name);
+    private Task HandleUpload() => OnUpload.InvokeAsync(Timelapse.Name);
+    private Task HandleDelete() => OnDelete.InvokeAsync(Timelapse.Name);
+}

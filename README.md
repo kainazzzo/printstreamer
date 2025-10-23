@@ -6,7 +6,7 @@ This application runs a small web UI and a background poller by default. Configu
 
 
  By default the web UI (proxy) is served on port 8080 and the poller runs as a hosted background service.
- Control YouTube behavior with YouTube:OAuth (OAuth credentials) or YouTube:Key (manual stream key). Use YouTube:StartInServe to optionally start streaming when serving the UI.
+ Control YouTube behavior with YouTube:OAuth (OAuth credentials) or YouTube:Key (manual stream key).
 The app uses ffmpeg as the streaming engine to keep dependencies minimal and avoid reimplementing video encoding stacks.
 
 ## Quick Start

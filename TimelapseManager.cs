@@ -129,12 +129,6 @@ namespace PrintStreamer.Timelapse
 
         try
         {
-            // Update any cached layer totals on the session
-            if (session.TotalLayersFromGcode == null && totalLayers.HasValue)
-            {
-                session.TotalLayersFromGcode = totalLayers.Value;
-            }
-
             // If we have the total layers and current layer is at or past the configured threshold, finalize the timelapse
             var layerOffset = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
             if (layerOffset < 0) layerOffset = 0;
@@ -187,8 +181,7 @@ namespace PrintStreamer.Timelapse
         try
         {
             var result = await session.Service.CreateVideoAsync(videoPath, 30, CancellationToken.None);
-            // Clear cached gcode and metadata
-            session.CachedGcode = null;
+            // Clear cached metadata
             session.LayerStarts = null;
             session.MetadataRaw = null;
             session.Service.Dispose();
@@ -198,7 +191,6 @@ namespace PrintStreamer.Timelapse
         {
             Console.WriteLine($"[TimelapseManager] Failed to create video for {sessionName}: {ex.Message}");
             // Ensure cleanup
-            session.CachedGcode = null;
             session.LayerStarts = null;
             session.MetadataRaw = null;
             session.Service.Dispose();
@@ -338,12 +330,10 @@ namespace PrintStreamer.Timelapse
         {
             return new PrintStreamer.Overlay.TimelapseSessionMetadata
             {
-                TotalLayersFromGcode = session.TotalLayersFromGcode,
                 TotalLayersFromMetadata = session.TotalLayersFromMetadata,
                 RawMetadata = session.MetadataRaw,
                 Slicer = session.Slicer,
                 EstimatedSeconds = session.EstimatedSeconds,
-                SavedGcodePath = session.SavedGcodePath,
                 LayerHeight = session.LayerHeight,
                 FirstLayerHeight = session.FirstLayerHeight,
                 ExtrusionWidth = session.ExtrusionWidth
@@ -358,12 +348,10 @@ namespace PrintStreamer.Timelapse
                 var s = kv.Value;
                 return new PrintStreamer.Overlay.TimelapseSessionMetadata
                 {
-                    TotalLayersFromGcode = s.TotalLayersFromGcode,
                     TotalLayersFromMetadata = s.TotalLayersFromMetadata,
                     RawMetadata = s.MetadataRaw,
                     Slicer = s.Slicer,
                     EstimatedSeconds = s.EstimatedSeconds,
-                    SavedGcodePath = s.SavedGcodePath,
                     LayerHeight = s.LayerHeight,
                     FirstLayerHeight = s.FirstLayerHeight,
                     ExtrusionWidth = s.ExtrusionWidth
@@ -534,11 +522,8 @@ namespace PrintStreamer.Timelapse
     public DateTime StartTime { get; set; }
     public DateTime? LastCaptureTime { get; set; }
     // Cached G-code bytes (downloaded once at session start when available)
-    public byte[]? CachedGcode { get; set; }
     // Parsed byte offsets where each layer starts (zero-based layer index -> file offset)
     public long[]? LayerStarts { get; set; }
-    // Total layers inferred from parsed G-code
-    public int? TotalLayersFromGcode { get; set; }
     // Total layers as reported in file metadata (if available)
     public int? TotalLayersFromMetadata { get; set; }
     // Raw metadata JSON from Moonraker /server/files/metadata
@@ -546,8 +531,6 @@ namespace PrintStreamer.Timelapse
     // Slicer name and estimated seconds
     public string? Slicer { get; set; }
     public double? EstimatedSeconds { get; set; }
-    // Path on disk where the downloaded G-code was saved (if saved)
-    public string? SavedGcodePath { get; set; }
     // Slicer settings for volumetric flow calculation
     public double? LayerHeight { get; set; }
     public double? FirstLayerHeight { get; set; }

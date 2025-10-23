@@ -78,8 +78,8 @@ public sealed class OverlayTextService : IDisposable
         // Query Moonraker for temps, print status, and time estimates
     var url = _moonrakerBase + "/printer/objects/query" +
         "?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,filename,info,print_duration,filament_used,total_duration" +
-        "&display_status=progress,flow,speed&virtual_sdcard=progress,file_position,print_duration" +
-        "&gcode_move=speed,speed_factor,extrude_factor";
+        "&display_status=progress,flow,speed,volumetric_flow&virtual_sdcard=progress,file_position,print_duration" +
+        "&gcode_move=speed,speed_factor,extrude_factor&motion_report";
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         if (!string.IsNullOrWhiteSpace(_apiKey))
         {
@@ -108,10 +108,16 @@ public sealed class OverlayTextService : IDisposable
         double bedTarget = TryDouble(bed, "target");
 
         string state = TryString(print, "state") ?? string.Empty;
-        // Try to get layer info for more accurate progress
+        
+        // Determine if there's an active print job (state is "printing" or "paused")
+        bool isPrinting = state.Equals("printing", StringComparison.OrdinalIgnoreCase);
+        bool isPaused = state.Equals("paused", StringComparison.OrdinalIgnoreCase);
+        bool isActiveJob = isPrinting || isPaused;
+        
+        // Try to get layer info for more accurate progress (only if actively printing)
         int? currentLayer = null;
         int? totalLayers = null;
-        if (print.ValueKind != JsonValueKind.Undefined && print.TryGetProperty("info", out var infoElem))
+        if (isActiveJob && print.ValueKind != JsonValueKind.Undefined && print.TryGetProperty("info", out var infoElem))
         {
             if (infoElem.TryGetProperty("current_layer", out var clElem) && clElem.ValueKind == JsonValueKind.Number && clElem.TryGetInt32(out var cl))
                 currentLayer = cl;
@@ -125,14 +131,9 @@ public sealed class OverlayTextService : IDisposable
         double? flowVolume = null; // mm^3/s from Moonraker
         if (displayStatus.ValueKind != JsonValueKind.Undefined)
         {
-            // Prefer explicit volumetric flow if available; otherwise accept 'flow'
+            // Get volumetric_flow if available (preferred)
             var vflow = TryDouble(displayStatus, "volumetric_flow");
-            if (!double.IsNaN(vflow)) flowVolume = vflow;
-            else
-            {
-                var flowVal = TryDouble(displayStatus, "flow");
-                if (!double.IsNaN(flowVal)) flowVolume = flowVal;
-            }
+            if (!double.IsNaN(vflow) && vflow > 0) flowVolume = vflow;
         }
         
         // Get virtual_sdcard for more reliable progress
@@ -149,7 +150,8 @@ public sealed class OverlayTextService : IDisposable
         // Get actual speed in mm/s and factors from gcode_move
         var gcodeMove = status.TryGetProperty("gcode_move", out var gm) ? gm : default;
         double? speedMmS = null;
-    double? speedFactor = null;
+        double? speedFactor = null;
+        double? extrudeFactor = null;
         
         if (gcodeMove.ValueKind != JsonValueKind.Undefined)
         {
@@ -160,8 +162,8 @@ public sealed class OverlayTextService : IDisposable
             var spdFactor = TryDouble(gcodeMove, "speed_factor");
             if (!double.IsNaN(spdFactor)) speedFactor = spdFactor * 100.0; // Convert to percentage
             
-            // extrude_factor is a percentage factor; we no longer use it for display
-            // keep it available via SpeedFactor if needed elsewhere
+            var extFactor = TryDouble(gcodeMove, "extrude_factor");
+            if (!double.IsNaN(extFactor)) extrudeFactor = extFactor;
         }
         // Fallback: try display_status.speed if gcode_move.speed missing
         if ((!speedMmS.HasValue || speedMmS.Value <= 0) && displayStatus.ValueKind != JsonValueKind.Undefined)
@@ -170,18 +172,33 @@ public sealed class OverlayTextService : IDisposable
             // Convert fallback speed to mm/s as well
             if (!double.IsNaN(dspSpd) && dspSpd > 0) speedMmS = dspSpd / 60.0;
         }
+        
+        // Get motion_report for live toolhead velocity (not historical speed from gcode_move)
+        var motionReport = status.TryGetProperty("motion_report", out var mr) ? mr : default;
+        double? extruderVelocity = null;
+        double? toolheadVelocity = null;
+        if (motionReport.ValueKind != JsonValueKind.Undefined)
+        {
+            var extVel = TryDouble(motionReport, "live_extruder_velocity");
+            if (!double.IsNaN(extVel)) extruderVelocity = extVel;
+            
+            // Get actual live toolhead velocity (live_velocity in mm/s)
+            var thVel = TryDouble(motionReport, "live_velocity");
+            if (!double.IsNaN(thVel) && thVel >= 0) toolheadVelocity = thVel;
+        }
 
         // Use display_status.progress as primary source (already set from display_status or virtual_sdcard above)
-        int progress = (int)Math.Round(progress01 * 100);
+        // Only show progress when there's an active job
+        int progress = isActiveJob ? (int)Math.Round(progress01 * 100) : 0;
         string filename = TryString(print, "filename") ?? string.Empty;
 
-        // Get print duration and filament used for ETA calculation
-        double printDuration = TryDouble(print, "print_duration");
-        double filamentUsed = TryDouble(print, "filament_used");
+        // Get print duration and filament used for ETA calculation (only if actively printing)
+        double printDuration = isActiveJob ? TryDouble(print, "print_duration") : double.NaN;
+        double filamentUsed = isActiveJob ? TryDouble(print, "filament_used") : double.NaN;
 
-        // Calculate ETA if progress is meaningful
+        // Calculate ETA if progress is meaningful and job is active
         DateTime? eta = null;
-        if (progress01 > 0.01 && !double.IsNaN(printDuration) && printDuration > 0)
+        if (isActiveJob && progress01 > 0.01 && !double.IsNaN(printDuration) && printDuration > 0)
         {
             var estimatedTotal = printDuration / progress01;
             var remaining = estimatedTotal - printDuration;
@@ -189,19 +206,18 @@ public sealed class OverlayTextService : IDisposable
         }
 
         // If we have a timelapse metadata provider and a filename, prefer its cached totals/slicer
+        // Only use this when there's an active job
         string? providerSlicer = null;
         double? layerHeight = null;
         double? extrusionWidth = null;
-        if (!string.IsNullOrWhiteSpace(filename) && _tlProvider != null)
+        if (isActiveJob && !string.IsNullOrWhiteSpace(filename) && _tlProvider != null)
         {
             try
             {
                 var meta = _tlProvider.GetMetadataForFilename(filename);
                 if (meta != null)
                 {
-                    if (meta.TotalLayersFromGcode.HasValue)
-                        totalLayers = meta.TotalLayersFromGcode.Value;
-                    else if (meta.TotalLayersFromMetadata.HasValue)
+                    if (meta.TotalLayersFromMetadata.HasValue)
                         totalLayers = meta.TotalLayersFromMetadata.Value;
                     providerSlicer = meta.Slicer;
                     layerHeight = meta.LayerHeight;
@@ -211,17 +227,42 @@ public sealed class OverlayTextService : IDisposable
             catch { }
         }
         
-        // Calculate volumetric flow client-side if Moonraker doesn't provide it
-        // Formula: volumetric_flow = speed (mm/s) × line_width (mm) × layer_height (mm)
-        if (!flowVolume.HasValue && speedMmS.HasValue && speedMmS.Value > 0)
+        // Calculate volumetric flow if Klipper doesn't provide it
+        // Formula: volumetric_flow (mm³/s) = extruder_velocity (mm/s) × π × (filament_diameter/2)²
+        // Only calculate when there's an active job
+        if (isActiveJob && !flowVolume.HasValue && extruderVelocity.HasValue && extruderVelocity.Value > 0.01)
         {
-            // Use metadata values if available, otherwise use common defaults
-            // Typical values: 0.4mm nozzle with 0.2mm layer height and 0.4mm line width
-            var lh = layerHeight ?? 0.2;  // Default layer height
-            var ew = extrusionWidth ?? 0.4;  // Default extrusion width (nozzle diameter)
+            // Use 1.75mm as default filament diameter (most common)
+            // Could be made configurable if needed
+            var filDiam = 1.75;
+            var radius = filDiam / 2.0;
+            var crossSectionArea = Math.PI * radius * radius;
             
-            flowVolume = speedMmS.Value * ew * lh;
+            // Apply extrude_factor if available (flow rate multiplier from M221)
+            var flowMultiplier = extrudeFactor ?? 1.0;
+            flowVolume = extruderVelocity.Value * crossSectionArea * flowMultiplier;
         }
+        
+        // Clear flow if no active job
+        if (!isActiveJob)
+        {
+            flowVolume = null;
+        }
+
+        // For speed, use live toolhead velocity from motion_report when available
+        // Only show speed when there's an active print job AND toolhead is actually moving
+        double? displaySpeed = null;
+        if (isActiveJob && toolheadVelocity.HasValue && toolheadVelocity.Value > 0.1)
+        {
+            // Use actual live toolhead velocity (already in mm/s)
+            displaySpeed = toolheadVelocity.Value;
+        }
+        else if (isActiveJob)
+        {
+            // Job is active but toolhead not moving - show 0
+            displaySpeed = 0.0;
+        }
+        // If no active job, displaySpeed stays null and will show as "-"
 
         return new OverlayData
         {
@@ -235,7 +276,7 @@ public sealed class OverlayTextService : IDisposable
             LayerMax = totalLayers,
             Time = DateTime.Now,
             Filename = filename,
-            Speed = speedMmS,
+            Speed = displaySpeed, // Use live toolhead velocity (only when job is active)
             SpeedFactor = speedFactor,
             Flow = flowVolume,
             Filament = filamentUsed,
@@ -337,11 +378,12 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceStr(s, "state", d.State ?? string.Empty);
         s = ReplaceStr(s, "filename", d.Filename ?? string.Empty);
     s = ReplaceStr(s, "slicer", d.Slicer ?? string.Empty);
-    s = ReplaceStr(s, "speed", d.Speed.HasValue ? d.Speed.Value.ToString("0") : "-");
+    // Template contains units (e.g. "mm/s"); only insert the numeric value here to avoid duplicating units.
+    s = ReplaceStr(s, "speed", d.Speed.HasValue ? d.Speed.Value.ToString("0") : "0");
     s = ReplaceStr(s, "speedfactor", d.SpeedFactor.HasValue ? d.SpeedFactor.Value.ToString("0") + "%" : "-");
     // Flow is volumetric (mm^3/s) from Moonraker display_status.flow
-    s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") + " mm^3/s" : "-");
-    s = ReplaceStr(s, "filament", d.Filament.HasValue ? (d.Filament.Value / 1000.0).ToString("0.00") : "-");
+    s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") + " mm^3/s" : "0 mm^3/s");
+    s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") + "m" : "0.00m");
         // ETA with time format if available
         if (d.ETA.HasValue)
         {

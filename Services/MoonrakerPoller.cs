@@ -17,14 +17,7 @@ namespace PrintStreamer.Services
     // Monitor state exposed to the UI
     private static volatile bool _isWaitingForIngestion = false;
 
-    // Camera simulation flag exposed so streamers can honor simulated upstream disconnects
-    private static volatile bool _webcamInputDisabled = false;
-
-    public static bool WebcamInputDisabled
-    {
-        get => _webcamInputDisabled;
-        set => _webcamInputDisabled = value;
-    }
+    // Camera simulation and blackout logic is handled only by WebCamManager.
 
         /// <summary>
         /// Cancel the current streamer (if any) and start a new one using the provided configuration.
@@ -285,6 +278,33 @@ namespace PrintStreamer.Services
                     {
                         await yt.EndBroadcastAsync(broadcastId, cancellationToken);
                         Console.WriteLine($"[YouTube] Ended broadcast {broadcastId}");
+                        
+                        // Add the completed broadcast to the playlist
+                        try
+                        {
+                            // Wait a moment for YouTube to process the broadcast completion
+                            await Task.Delay(2000, cancellationToken);
+                            
+                            var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
+                            if (!string.IsNullOrWhiteSpace(playlistName))
+                            {
+                                Console.WriteLine($"[YouTube] Adding completed broadcast to playlist '{playlistName}'...");
+                                var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
+                                var pid = await yt.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
+                                if (!string.IsNullOrWhiteSpace(pid))
+                                {
+                                    var added = await yt.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
+                                    if (added)
+                                    {
+                                        Console.WriteLine($"[YouTube] Successfully added broadcast to playlist '{playlistName}'");
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[YouTube] Failed to add broadcast to playlist: {ex.Message}");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -508,6 +528,26 @@ namespace PrintStreamer.Services
                         var finishedJobFilename = lastJobFilename;
                         lastCompletedJobFilename = finishedJobFilename;
                         lastJobFilename = null;
+                        
+                        // Properly stop the broadcast (ends YouTube stream and cleans up)
+                        try
+                        {
+                            var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None);
+                            if (ok)
+                            {
+                                Console.WriteLine("[Watcher] Broadcast stopped successfully");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"[Watcher] Error stopping broadcast: {msg}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Watcher] Exception stopping broadcast: {ex.Message}");
+                        }
+                        
+                        // Clean up local stream references
                         if (streamCts != null)
                         {
                             try { streamCts.Cancel(); } catch { }
@@ -770,9 +810,9 @@ namespace PrintStreamer.Services
             {
                 var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
                 var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
-                bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
+                bool hasYouTubeOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
 
-                // Read source and manual key from config now (Program.cs shouldn't pass them)
+                // Read source from config
                 var source = config.GetValue<string>("Stream:Source");
                 var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
                 // Always use local proxy when web server is enabled - this ensures overlays work and provides consistency
@@ -781,9 +821,8 @@ namespace PrintStreamer.Services
                     source = "http://127.0.0.1:8080/stream";
                     Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (ensures overlay/simulation support)");
                 }
-                var manualKey = config.GetValue<string>("YouTube:Key");
 
-                // Respect new config flag: whether automatic LiveBroadcast creation is enabled
+                // Respect config flag: whether automatic LiveBroadcast creation is enabled
                 var liveBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
 
                 // Prepare overlay options early so native fallback can reuse them
@@ -822,30 +861,19 @@ namespace PrintStreamer.Services
                     return;
                 }
 
-                if (useOAuth && liveBroadcastEnabled)
+                if (hasYouTubeOAuth && liveBroadcastEnabled)
                 {
-                    Console.WriteLine("Using YouTube OAuth to create broadcast...");
+                    Console.WriteLine("[YouTube] Creating live broadcast via OAuth...");
                     ytService = new YouTubeControlService(config);
 
                     // Authenticate
                     if (!await ytService.AuthenticateAsync(cancellationToken))
                     {
-                        Console.WriteLine("Failed to authenticate with YouTube. Falling back to manual key or HLS-only.");
+                        Console.WriteLine("[YouTube] Authentication failed. Starting local HLS-only stream.");
                         ytService?.Dispose();
                         ytService = null;
-
-                        if (!string.IsNullOrWhiteSpace(manualKey))
-                        {
-                            Console.WriteLine("Falling back to manual YouTube stream key...");
-                            rtmpUrl = "rtmp://a.rtmp.youtube.com/live2";
-                            streamKey = manualKey;
-                        }
-                        else
-                        {
-                            Console.WriteLine("No manual key configured; starting local HLS preview only.");
-                            rtmpUrl = null;
-                            streamKey = null;
-                        }
+                        rtmpUrl = null;
+                        streamKey = null;
                     }
                     else
                     {
@@ -853,22 +881,11 @@ namespace PrintStreamer.Services
                         var result = await ytService.CreateLiveBroadcastAsync(cancellationToken);
                         if (result.rtmpUrl == null || result.streamKey == null)
                         {
-                            Console.WriteLine("Failed to create YouTube broadcast. Falling back to manual key or HLS-only.");
+                            Console.WriteLine("[YouTube] Failed to create broadcast. Starting local HLS-only stream.");
                             ytService?.Dispose();
                             ytService = null;
-
-                            if (!string.IsNullOrWhiteSpace(manualKey))
-                            {
-                                Console.WriteLine("Falling back to manual YouTube stream key...");
-                                rtmpUrl = "rtmp://a.rtmp.youtube.com/live2";
-                                streamKey = manualKey;
-                            }
-                            else
-                            {
-                                Console.WriteLine("No manual key configured; starting local HLS preview only.");
-                                rtmpUrl = null;
-                                streamKey = null;
-                            }
+                            rtmpUrl = null;
+                            streamKey = null;
                         }
                         else
                         {
@@ -877,7 +894,7 @@ namespace PrintStreamer.Services
                             broadcastId = result.broadcastId;
                             moonrakerFilename = result.filename;
 
-                            Console.WriteLine($"YouTube broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
+                            Console.WriteLine($"[YouTube] Broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
                             // Dump the LiveBroadcast and LiveStream resources for debugging
                             try
                             {
@@ -888,24 +905,8 @@ namespace PrintStreamer.Services
                                 Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
                             }
 
-                            // Ensure and add broadcast to playlist if configured
-                            try
-                            {
-                                var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
-                                if (!string.IsNullOrWhiteSpace(playlistName))
-                                {
-                                    var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
-                                    var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
-                                    if (!string.IsNullOrWhiteSpace(pid) && !string.IsNullOrWhiteSpace(broadcastId))
-                                    {
-                                        await ytService.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[YouTube] Failed to add broadcast to playlist: {ex.Message}");
-                            }
+                            // Note: Live broadcasts can only be added to playlists after they complete
+                            // Playlist addition happens in StopBroadcastAsync after the broadcast ends
 
                             // Upload initial thumbnail for the broadcast
                             try
@@ -989,26 +990,12 @@ namespace PrintStreamer.Services
                         }
                     }
                 }
-                else if (!string.IsNullOrWhiteSpace(manualKey))
-                {
-                    Console.WriteLine("Using manual YouTube stream key...");
-                    rtmpUrl = "rtmp://a.rtmp.youtube.com/live2";
-                    streamKey = manualKey;
-                }
                 else
                 {
-                    // If live broadcasts are disabled and no manual key is provided, proceed with HLS-only preview
-                    if (!liveBroadcastEnabled)
-                    {
-                        Console.WriteLine("YouTube live broadcast creation disabled via config (YouTube:LiveBroadcast:Enabled=false). Starting local HLS preview only.");
-                        rtmpUrl = null;
-                        streamKey = null;
-                    }
-                    else
-                    {
-                        Console.WriteLine("Error: No YouTube credentials or stream key provided.");
-                        return;
-                    }
+                    // No YouTube OAuth configured or broadcast disabled - run local HLS-only stream
+                    Console.WriteLine("[Stream] Starting local HLS-only stream (no YouTube broadcast)");
+                    rtmpUrl = null;
+                    streamKey = null;
                 }
 
                 // Start streaming with chosen implementation

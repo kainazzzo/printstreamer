@@ -13,14 +13,10 @@ namespace PrintStreamer.Overlay
 
     public sealed class TimelapseSessionMetadata
     {
-        public int? TotalLayersFromGcode { get; init; }
         public int? TotalLayersFromMetadata { get; init; }
         public JsonNode? RawMetadata { get; init; }
         public string? Slicer { get; init; }
         public double? EstimatedSeconds { get; init; }
-        public string? SavedGcodePath { get; init; }
-        // Expose layer starts length for quick checks
-        public int? ParsedLayerCount => TotalLayersFromGcode ?? null;
         // Slicer settings for volumetric flow calculation
         public double? LayerHeight { get; init; }
         public double? FirstLayerHeight { get; init; }

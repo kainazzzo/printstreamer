@@ -125,12 +125,6 @@ namespace PrintStreamer.Timelapse
 
         try
         {
-            // Update any cached layer totals on the session
-            if (session.TotalLayersFromGcode == null && totalLayers.HasValue)
-            {
-                session.TotalLayersFromGcode = totalLayers.Value;
-            }
-
             // If we have the total layers and current layer is at or past the configured threshold, stop the session
             var layerOffset = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
             if (layerOffset < 0) layerOffset = 0;
@@ -182,8 +176,7 @@ namespace PrintStreamer.Timelapse
         try
         {
             var result = await session.Service.CreateVideoAsync(videoPath, 30, CancellationToken.None);
-            // Clear cached gcode and metadata
-            session.CachedGcode = null;
+            // Clear cached metadata
             session.LayerStarts = null;
             session.MetadataRaw = null;
             session.Service.Dispose();
@@ -193,7 +186,6 @@ namespace PrintStreamer.Timelapse
         {
             Console.WriteLine($"[TimelapseManager] Failed to create video for {sessionName}: {ex.Message}");
             // Ensure cleanup
-            session.CachedGcode = null;
             session.LayerStarts = null;
             session.MetadataRaw = null;
             session.Service.Dispose();
@@ -259,12 +251,10 @@ namespace PrintStreamer.Timelapse
         {
             return new PrintStreamer.Overlay.TimelapseSessionMetadata
             {
-                TotalLayersFromGcode = session.TotalLayersFromGcode,
                 TotalLayersFromMetadata = session.TotalLayersFromMetadata,
                 RawMetadata = session.MetadataRaw,
                 Slicer = session.Slicer,
-                    EstimatedSeconds = session.EstimatedSeconds,
-                    SavedGcodePath = session.SavedGcodePath
+                    EstimatedSeconds = session.EstimatedSeconds
             };
         }
 
@@ -276,12 +266,10 @@ namespace PrintStreamer.Timelapse
                 var s = kv.Value;
                 return new PrintStreamer.Overlay.TimelapseSessionMetadata
                 {
-                    TotalLayersFromGcode = s.TotalLayersFromGcode,
                     TotalLayersFromMetadata = s.TotalLayersFromMetadata,
                     RawMetadata = s.MetadataRaw,
                     Slicer = s.Slicer,
-                    EstimatedSeconds = s.EstimatedSeconds,
-                    SavedGcodePath = s.SavedGcodePath
+                    EstimatedSeconds = s.EstimatedSeconds
                 };
             }
         }
@@ -381,30 +369,6 @@ namespace PrintStreamer.Timelapse
         return null;
     }
 
-    // Parse gcode bytes and return an array of file offsets where layer markers were found
-    private static long[] ParseGcodeLayerStarts(byte[] bytes)
-    {
-        try
-        {
-            var text = Encoding.UTF8.GetString(bytes);
-            // Mainsail / many slicers annotate layers with lines like: ";LAYER:10" or "; layer 10" or ";LAYER: 10"
-            var matches = Regex.Matches(text, @"^\s*;\s*(?:LAYER:|layer\s+)(\d+)", RegexOptions.Multiline | RegexOptions.IgnoreCase);
-            var offsets = new List<long>();
-            foreach (Match m in matches)
-            {
-                if (m.Success && int.TryParse(m.Groups[1].Value, out var layerIdx))
-                {
-                    // compute byte offset by finding the match index in the raw text
-                    var charIndex = m.Index;
-                    var byteOffset = Encoding.UTF8.GetByteCount(text.Substring(0, charIndex));
-                    offsets.Add(byteOffset);
-                }
-            }
-            return offsets.ToArray();
-        }
-        catch { return Array.Empty<long>(); }
-    }
-
     private static double? TryParseDouble(string? s)
     {
         if (string.IsNullOrWhiteSpace(s)) return null;
@@ -470,14 +434,11 @@ namespace PrintStreamer.Timelapse
     public TimelapseService Service { get; set; } = default!;
     public DateTime StartTime { get; set; }
     public DateTime? LastCaptureTime { get; set; }
-    public byte[]? CachedGcode { get; set; }
     public long[]? LayerStarts { get; set; }
-    public int? TotalLayersFromGcode { get; set; }
     public int? TotalLayersFromMetadata { get; set; }
     public JsonNode? MetadataRaw { get; set; }
     public string? Slicer { get; set; }
     public double? EstimatedSeconds { get; set; }
-    public string? SavedGcodePath { get; set; }
     public bool IsStopped { get; set; } = false;
     }
 

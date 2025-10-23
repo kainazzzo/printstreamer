@@ -93,11 +93,11 @@ internal class YouTubeControlService : IDisposable
     /// <summary>
     /// Upload a timelapse video to YouTube as a regular video (not a live stream).
     /// </summary>
-    public async Task<string?> UploadTimelapseVideoAsync(string videoFilePath, string? filename = null, CancellationToken cancellationToken = default)
+    public async Task<string?> UploadTimelapseVideoAsync(string videoFilePath, string? filename = null, CancellationToken cancellationToken = default, bool bypassUploadConfig = false)
     {
-        // Check if timelapse upload is enabled
+        // Check if timelapse upload is enabled, unless bypassing for manual UI upload
         var uploadEnabled = _config.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
-        if (!uploadEnabled)
+        if (!uploadEnabled && !bypassUploadConfig)
         {
             Console.WriteLine("Timelapse upload is disabled in configuration.");
             return null;

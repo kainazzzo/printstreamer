@@ -1,0 +1,288 @@
+@page "/timelapses"
+@using Microsoft.AspNetCore.Components.Routing
+@rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+<PageTitle>PrintStreamer - Timelapses</PageTitle>
+
+<div class="wrap">
+    <h1>Timelapses</h1>
+    <div style="margin-bottom:20px;padding:10px 0;border-bottom:1px solid #444">
+        <NavLink href="/" style="color:#66ccff;text-decoration:none;font-size:1.1em">⬅️ Back to Control Panel</NavLink>
+    </div>
+
+    <TimelapseContainer Timelapses="@timelapses" OnRefresh="@RefreshTimelapses" OnDeleteAll="@DeleteAllTimelapses">
+        @if (timelapses != null)
+        {
+            @foreach (var t in timelapses)
+            {
+                <TimelapseCard 
+                    Timelapse="@t" 
+                    IsProcessing="@processingTimelapses.Contains(t.Name)"
+                    OnStop="@StopTimelapse"
+                    OnGenerate="@GenerateTimelapse"
+                    OnRegenerate="@RegenerateTimelapse"
+                    OnUpload="@UploadTimelapse"
+                    OnDelete="@DeleteTimelapse" />
+            }
+        }
+    </TimelapseContainer>
+</div>
+
+@code {
+    private bool _jsReady = false;
+    private List<(string Message, string Type)> _pendingToasts = new();
+    private List<TimelapseInfo>? timelapses = null;
+    private HashSet<string> processingTimelapses = new();
+    private Timer? refreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshTimelapses();
+
+        refreshTimer = new Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                await RefreshTimelapses();
+                StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsReady = true;
+            if (_pendingToasts.Count > 0)
+            {
+                foreach (var (msg, type) in _pendingToasts)
+                {
+                    try { await JS.InvokeVoidAsync("showToast", msg, type); } catch { }
+                }
+                _pendingToasts.Clear();
+            }
+        }
+    }
+
+    private async Task SafeToast(string message, string type = "info")
+    {
+        if (_jsReady)
+        {
+            try { await JS.InvokeVoidAsync("showToast", message, type); } catch { }
+        }
+        else
+        {
+            _pendingToasts.Add((message, type));
+        }
+    }
+
+    private async Task RefreshTimelapses()
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            timelapses = await client.GetFromJsonAsync<List<TimelapseInfo>>("api/timelapses");
+        }
+        catch { }
+    }
+
+    private async Task StopTimelapse(string name)
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/timelapses/{Uri.EscapeDataString(name)}/stop", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Video created successfully!", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to stop timelapse: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error stopping timelapse: {ex.Message}", "error");
+        }
+    }
+
+    private async Task GenerateTimelapse(string name)
+    {
+        processingTimelapses.Add(name);
+        StateHasChanged();
+        
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/timelapses/{Uri.EscapeDataString(name)}/generate", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Video generated successfully!", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to generate video: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error generating video: {ex.Message}", "error");
+        }
+        finally
+        {
+            processingTimelapses.Remove(name);
+            StateHasChanged();
+        }
+    }
+
+    private async Task RegenerateTimelapse(string name)
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/timelapses/{Uri.EscapeDataString(name)}/generate", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Video regenerated successfully!", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to regenerate video: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error regenerating video: {ex.Message}", "error");
+        }
+    }
+
+    private async Task UploadTimelapse(string name)
+    {
+        processingTimelapses.Add(name);
+        StateHasChanged();
+        
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/timelapses/{Uri.EscapeDataString(name)}/upload", null);
+                var jsonOptions = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+                var result = await response.Content.ReadFromJsonAsync<UploadResponse>(jsonOptions);
+            
+            if (result?.Success == true)
+            {
+                await SafeToast($"Video uploaded successfully! {result.Url}", "success");
+                    await RefreshTimelapses(); // Refresh to show YouTube link
+            }
+            else
+            {
+                await SafeToast($"Failed to upload video: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error uploading video: {ex.Message}", "error");
+        }
+        finally
+        {
+            processingTimelapses.Remove(name);
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteTimelapse(string name)
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.DeleteAsync($"api/timelapses/{Uri.EscapeDataString(name)}");
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Timelapse deleted successfully", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to delete timelapse: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error deleting timelapse: {ex.Message}", "error");
+        }
+    }
+
+    private async Task DeleteAllTimelapses()
+    {
+        if (timelapses == null) return;
+        
+        var inactiveTimelapses = timelapses.Where(t => !t.IsActive).ToList();
+        if (inactiveTimelapses.Count == 0)
+        {
+            await SafeToast("No inactive timelapses to delete", "info");
+            return;
+        }
+        
+        int deleted = 0;
+        int failed = 0;
+        
+        foreach (var t in inactiveTimelapses)
+        {
+            try
+            {
+                using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+                var response = await client.DeleteAsync($"api/timelapses/{Uri.EscapeDataString(t.Name)}");
+                var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+                
+                if (result?.Success == true)
+                    deleted++;
+                else
+                    failed++;
+            }
+            catch
+            {
+                failed++;
+            }
+        }
+        
+        await RefreshTimelapses();
+        
+        if (failed == 0)
+            await SafeToast($"Successfully deleted {deleted} timelapse(s)", "success");
+        else
+            await SafeToast($"Deleted {deleted} timelapse(s), {failed} failed", "error");
+    }
+
+    public void Dispose()
+    {
+        refreshTimer?.Dispose();
+    }
+
+    private class ApiResponse
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private class UploadResponse : ApiResponse
+    {
+        public string? Url { get; set; }
+    }
+}

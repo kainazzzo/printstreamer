@@ -215,11 +215,29 @@
                     </InputSelect>
                 </div>
                 
+                <h3>Timelapse Upload Settings</h3>
                 <div class="checkbox-group">
-                    <InputCheckbox id="youtube-startinserve" @bind-Value="config.YouTube.StartInServe" />
-                    <label for="youtube-startinserve">Start Streaming on Server Start</label>
+                    <InputCheckbox id="youtube-timelapseupload-enabled" @bind-Value="config.YouTube.TimelapseUpload.Enabled" />
+                    <label for="youtube-timelapseupload-enabled">Enable Timelapse Auto-Upload</label>
                 </div>
-                <div class="help-text">Automatically begin YouTube streaming when server starts</div>
+                <div class="help-text">Automatically upload completed timelapses to YouTube</div>
+                
+                <div class="grid-2col">
+                    <div class="form-group">
+                        <label for="youtube-timelapseupload-privacy">Timelapse Privacy</label>
+                        <InputSelect id="youtube-timelapseupload-privacy" @bind-Value="config.YouTube.TimelapseUpload.Privacy">
+                            <option value="public">Public</option>
+                            <option value="unlisted">Unlisted</option>
+                            <option value="private">Private</option>
+                        </InputSelect>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="youtube-timelapseupload-categoryid">Timelapse Category ID</label>
+                        <InputText id="youtube-timelapseupload-categoryid" @bind-Value="config.YouTube.TimelapseUpload.CategoryId" />
+                        <div class="help-text">YouTube category (28 = Science & Technology)</div>
+                    </div>
+                </div>
             </div>
             
             <!-- Timelapse Settings -->
@@ -237,27 +255,11 @@
                     <div class="help-text">Time between captures (format: HH:MM:SS)</div>
                 </div>
                 
-                <div class="checkbox-group">
-                    <InputCheckbox id="timelapse-upload" @bind-Value="config.Timelapse.Upload" />
-                    <label for="timelapse-upload">Auto-Upload to YouTube</label>
-                </div>
-                <div class="help-text">Automatically upload completed timelapses to YouTube</div>
-            </div>
-            
-            <!-- Other Settings -->
-            <div class="section">
-                <h2>Other Settings</h2>
                 <div class="form-group">
-                    <label for="gcodefolder">GCode Folder</label>
-                    <InputText id="gcodefolder" @bind-Value="config.GcodeFolder" />
-                    <div class="help-text">Directory for storing GCode files</div>
+                    <label for="timelapse-lastlayeroffset">Last Layer Offset</label>
+                    <InputNumber id="timelapse-lastlayeroffset" @bind-Value="config.Timelapse.LastLayerOffset" />
+                    <div class="help-text">Number of layers before the end to stop capturing</div>
                 </div>
-                
-                <div class="checkbox-group">
-                    <InputCheckbox id="serve-enabled" @bind-Value="config.Serve.Enabled" />
-                    <label for="serve-enabled">Enable Web UI</label>
-                </div>
-                <div class="help-text">Serve the web control panel</div>
             </div>
             
             <!-- Action Buttons -->
@@ -385,7 +387,6 @@
         public OverlayConfig Overlay { get; set; } = new();
         public YouTubeConfig YouTube { get; set; } = new();
         public TimelapseConfig Timelapse { get; set; } = new();
-        public string GcodeFolder { get; set; } = "";
         public ServeConfig Serve { get; set; } = new();
     }
 
@@ -430,7 +431,7 @@
         public OAuthConfig OAuth { get; set; } = new();
         public LiveBroadcastConfig LiveBroadcast { get; set; } = new();
         public PlaylistConfig Playlist { get; set; } = new();
-        public bool StartInServe { get; set; }
+        public TimelapseUploadConfig TimelapseUpload { get; set; } = new();
     }
 
     private class OAuthConfig
@@ -454,11 +455,18 @@
         public string Privacy { get; set; } = "";
     }
 
+    private class TimelapseUploadConfig
+    {
+        public bool Enabled { get; set; }
+        public string Privacy { get; set; } = "";
+        public string CategoryId { get; set; } = "";
+    }
+
     private class TimelapseConfig
     {
         public string MainFolder { get; set; } = "";
         public string Period { get; set; } = "";
-        public bool Upload { get; set; }
+        public int LastLayerOffset { get; set; }
     }
 
     private class ServeConfig

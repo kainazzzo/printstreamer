@@ -56,8 +56,7 @@ dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
 # Or run proxy + streaming together (startYouTubeInServe via config)
 dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
   --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
-  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" \
-  --YouTube:StartInServe true
+  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 
 # Or use the background poller for automated streaming (requires Moonraker API)
 dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \

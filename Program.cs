@@ -25,6 +25,20 @@ if (args.Any(a => a == "--help" || a == "-h" || a == "/?" || a.Equals("help", St
 
 // Use the default WebApplication builder so standard configuration (appsettings.json, env, args) is loaded
 var webBuilder = WebApplication.CreateBuilder(args);
+
+// Load custom configuration file (the filename itself comes from the config we just loaded)
+// This allows user-modified settings to be persisted to a separate file
+var customConfigFile = webBuilder.Configuration.GetValue<string>("CustomConfigFile");
+if (!string.IsNullOrWhiteSpace(customConfigFile))
+{
+	var customConfigPath = Path.Combine(Directory.GetCurrentDirectory(), customConfigFile);
+	Console.WriteLine($"[Config] Loading custom configuration from: {customConfigFile}");
+	
+	// Add the custom config file to the configuration builder
+	// It will override values from appsettings.json if they exist
+	webBuilder.Configuration.AddJsonFile(customConfigFile, optional: true, reloadOnChange: true);
+}
+
 var config = webBuilder.Configuration;
 
 // Generate fallback_black.jpg at startup if it doesn't exist
@@ -78,20 +92,15 @@ webBuilder.Services.AddHttpClient();
 
 // Read configuration values
 string? source = config.GetValue<string>("Stream:Source");
-string? key = config.GetValue<string>("YouTube:Key");
-// Note: explicit support for a local service-account key file has been removed.
-// Only `youtube_token.json` (user OAuth tokens) or configured OAuth credentials are supported.
+// Only OAuth is supported for YouTube live broadcasts
 string? oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
 string? oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
-
 
 // New: allow serving the web UI by default; set Serve:Enabled=false to disable
 var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
 
-// Determine if we should use OAuth-based broadcast creation or manual stream key
-// We detect OAuth usage by presence of OAuth client credentials in config.
-bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
-// Service account support removed — only user OAuth via youtube_token.json is supported.
+// Detect OAuth configuration for YouTube live broadcast creation
+bool hasYouTubeOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
 
 // Top-level cancellation token for graceful shutdown (propagated to streamers)
 var appCts = new CancellationTokenSource();
@@ -149,25 +158,12 @@ if (serveEnabled)
 	// Resolve timelapse manager from DI (registered earlier)
 	timelapseManager = app.Services.GetRequiredService<TimelapseManager>();
 
-	// If OAuth or stream key is provided, optionally start YouTube streaming in the background when configured
-	var startYoutubeInServe = config.GetValue<bool?>("YouTube:StartInServe") ?? false;
-	if ((useOAuth || !string.IsNullOrWhiteSpace(key)) && startYoutubeInServe)
-	{
-		// Link the stream cancellation to the top-level app cancellation token
-		streamCts = CancellationTokenSource.CreateLinkedTokenSource(appCts.Token);
-		streamTask = Task.Run(async () =>
-		{
-			try
-			{
-				// StartYouTubeStreamAsync reads its configuration from IConfiguration directly
-				await MoonrakerPoller.StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: true, timelapseProvider: timelapseManager);
-			}
-			catch (Exception ex)
-			{
-				Console.WriteLine($"YouTube streaming error: {ex.Message}");
-			}
-		}, streamCts.Token);
-	}
+	// Architecture Overview:
+	// 1. WebCam Proxy (/stream) - Proxies MJPEG webcam, handles camera simulation
+	// 2. Local HLS Stream - ffmpeg reads /stream and outputs HLS (always runs when Stream:Local:Enabled=true)
+	// 3. YouTube Live Broadcast - OAuth creates broadcast, restarts ffmpeg to add RTMP output
+	
+	// Note: HLS stream will be started AFTER the web server is listening (see below)
 
 // (Local HLS preview startup will be handled in the Serve static-file block below so we only declare the variables once.)
 
@@ -225,6 +221,30 @@ if (serveEnabled)
 		Console.WriteLine($"Camera simulation: toggled -> disabled={newVal}");
 		try { PrintStreamer.Services.MoonrakerPoller.RestartCurrentStreamerWithConfig(config); } catch { }
 		return Results.Json(new { disabled = newVal });
+	});
+
+	// Config API endpoints (lightweight state)
+	app.MapGet("/api/config/state", (HttpContext ctx) =>
+	{
+		var autoBroadcastEnabled = config.GetValue<bool>("YouTube:LiveBroadcast:Enabled");
+		var autoUploadEnabled = config.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
+		return Results.Json(new { autoBroadcastEnabled, autoUploadEnabled });
+	});
+
+	app.MapPost("/api/config/auto-broadcast", (HttpContext ctx) =>
+	{
+		var enabled = ctx.Request.Query["enabled"].ToString() == "true";
+		config["YouTube:LiveBroadcast:Enabled"] = enabled.ToString();
+		Console.WriteLine($"Auto-broadcast: {(enabled ? "enabled" : "disabled")}");
+		return Results.Ok();
+	});
+
+	app.MapPost("/api/config/auto-upload", (HttpContext ctx) =>
+	{
+		var enabled = ctx.Request.Query["enabled"].ToString() == "true";
+		config["YouTube:TimelapseUpload:Enabled"] = enabled.ToString();
+		Console.WriteLine($"Auto-upload timelapses: {(enabled ? "enabled" : "disabled")}");
+		return Results.Ok();
 	});
 
 	// Timelapse API endpoints
@@ -423,7 +443,8 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
 			}
 
-			var videoId = await ytService.UploadTimelapseVideoAsync(videoPath, name, ctx.RequestAborted);
+			// Bypass upload config for manual UI uploads
+			var videoId = await ytService.UploadTimelapseVideoAsync(videoPath, name, ctx.RequestAborted, true);
 			ytService.Dispose();
 
 			if (!string.IsNullOrEmpty(videoId))
@@ -547,15 +568,19 @@ if (serveEnabled)
 						Name = config.GetValue<string>("YouTube:Playlist:Name") ?? "PrintStreamer",
 						Privacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted"
 					},
-					StartInServe = config.GetValue<bool?>("YouTube:StartInServe") ?? false
+					TimelapseUpload = new
+					{
+						Enabled = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false,
+						Privacy = config.GetValue<string>("YouTube:TimelapseUpload:Privacy") ?? "public",
+						CategoryId = config.GetValue<string>("YouTube:TimelapseUpload:CategoryId") ?? "28"
+					}
 				},
 				Timelapse = new
 				{
 					MainFolder = config.GetValue<string>("Timelapse:MainFolder") ?? "timelapse",
 					Period = config.GetValue<string>("Timelapse:Period") ?? "00:01:00",
-					Upload = config.GetValue<bool?>("Timelapse:Upload") ?? true
+					LastLayerOffset = config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1
 				},
-				GcodeFolder = config.GetValue<string>("GcodeFolder") ?? "gcode",
 				Serve = new
 				{
 					Enabled = config.GetValue<bool?>("Serve:Enabled") ?? true
@@ -592,8 +617,11 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "Invalid JSON format" });
 			}
 
-			// Read the current appsettings.json and write the new config
-			var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+			// Get the custom config file path from configuration
+			var customConfigFile = config.GetValue<string>("CustomConfigFile") ?? "appsettings.Local.json";
+			var configPath = Path.Combine(Directory.GetCurrentDirectory(), customConfigFile);
+			
+			Console.WriteLine($"[Config] Saving configuration to: {customConfigFile}");
 			
 			// Parse and re-serialize with indentation for pretty formatting
 			var jsonDoc = System.Text.Json.JsonDocument.Parse(body);
@@ -604,9 +632,9 @@ if (serveEnabled)
 			};
 			
 			var jsonString = System.Text.Json.JsonSerializer.Serialize(jsonDoc.RootElement, options);
-			await File.WriteAllTextAsync(appSettingsPath, jsonString);
+			await File.WriteAllTextAsync(configPath, jsonString);
 			
-			Console.WriteLine("[Config] Configuration saved to appsettings.json");
+			Console.WriteLine($"[Config] Configuration saved to {customConfigFile}");
 			return Results.Json(new { success = true, message = "Configuration saved. Restart required for changes to take effect." });
 		}
 		catch (Exception ex)
@@ -673,8 +701,7 @@ if (serveEnabled)
 					MainFolder = "timelapse",
 					Period = "00:01:00",
 					Upload = true
-				},
-				GcodeFolder = "gcode"
+				}
 			};
 
 			var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
@@ -707,6 +734,34 @@ if (serveEnabled)
         streamCts?.Cancel();
         timelapseManager?.Dispose();
     });
+
+	// Start local HLS stream AFTER the web server is listening (to avoid race condition)
+	lifetime.ApplicationStarted.Register(() =>
+	{
+		if (config.GetValue<bool?>("Stream:Local:Enabled") ?? false)
+		{
+			Console.WriteLine("[Stream] Web server ready, starting local HLS stream...");
+			// Give the server a moment to fully initialize
+			Task.Delay(500).ContinueWith(_ =>
+			{
+				// Link the stream cancellation to the top-level app cancellation token
+				streamCts = CancellationTokenSource.CreateLinkedTokenSource(appCts.Token);
+				streamTask = Task.Run(async () =>
+				{
+					try
+					{
+						// StartYouTubeStreamAsync will create HLS-only stream when no YouTube broadcast is active
+						// YouTube live broadcast can be started later via /api/live/start endpoint
+						await MoonrakerPoller.StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: true, timelapseProvider: timelapseManager);
+					}
+					catch (Exception ex)
+					{
+						Console.WriteLine($"Local HLS streaming error: {ex.Message}");
+					}
+				}, streamCts.Token);
+			});
+		}
+	});
 
 	// Serve local HLS output if configured
 	var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
@@ -896,33 +951,38 @@ static void PrintHelp()
 { 
 	Console.WriteLine("PrintStreamer - Stream 3D printer webcam to YouTube Live");
 	Console.WriteLine();
+	Console.WriteLine("Architecture:");
+	Console.WriteLine("  1. WebCam Proxy (/stream) - Proxies MJPEG webcam, handles camera simulation");
+	Console.WriteLine("  2. Local HLS Stream - ffmpeg reads /stream and outputs HLS segments");
+	Console.WriteLine("  3. YouTube Live Broadcast - OAuth creates broadcast, adds RTMP output to HLS stream");
+	Console.WriteLine();
 	Console.WriteLine("Configuration Methods:");
 	Console.WriteLine("  1. appsettings.json (base configuration)");
 	Console.WriteLine("  2. Environment variables (use __ for nested keys, e.g., Stream__Source)");
 	Console.WriteLine("  3. Command-line arguments (use --Key value or --Key=value)");
 	Console.WriteLine();
-	Console.WriteLine("Configuration Keys:");
-	Console.WriteLine("  (Mode option removed) The application now always polls Moonraker and serves the UI by default. Use Serve:Enabled=false to disable the UI.");
-	Console.WriteLine("  Stream:Source                     - MJPEG URL (required)");
-	Console.WriteLine("  YouTube:Key                       - Manual stream key (optional)");
-	Console.WriteLine("  YouTube:OAuth:ClientId            - OAuth client ID (optional)");
-	Console.WriteLine("  YouTube:OAuth:ClientSecret        - OAuth client secret (optional)");
+	Console.WriteLine("Required Configuration:");
+	Console.WriteLine("  Stream:Source                     - MJPEG webcam URL (required)");
+	Console.WriteLine("  Stream:Local:Enabled              - Enable local HLS stream (true/false)");
+	Console.WriteLine();
+	Console.WriteLine("YouTube Live Broadcast (Optional):");
+	Console.WriteLine("  YouTube:OAuth:ClientId            - OAuth client ID for YouTube API");
+	Console.WriteLine("  YouTube:OAuth:ClientSecret        - OAuth client secret for YouTube API");
+	Console.WriteLine("  YouTube:LiveBroadcast:Enabled     - Enable automatic broadcast creation (true/false)");
+	Console.WriteLine();
+	Console.WriteLine("Note: YouTube live broadcasts require OAuth. Use /api/live/start endpoint to go live.");
 	Console.WriteLine();
 	Console.WriteLine("Examples:");
 	Console.WriteLine();
 	Console.WriteLine("  # Run with defaults from appsettings.json");
 	Console.WriteLine("  dotnet run");
 	Console.WriteLine();
-	Console.WriteLine("  # Set multiple options on command-line");
+	Console.WriteLine("  # Set source on command-line");
 	Console.WriteLine("  dotnet run -- --Stream:Source \"http://printer/webcam/?action=stream\"");
 	Console.WriteLine();
 	Console.WriteLine("  # Use environment variables");
 	Console.WriteLine("  export Stream__Source=\"http://printer/webcam/?action=stream\"");
 	Console.WriteLine("  dotnet run");
-	Console.WriteLine();
-	Console.WriteLine("  # Mix config file, env vars, and command-line");
-	Console.WriteLine("  # (Command-line > Env vars > appsettings.json)");
-	Console.WriteLine("  dotnet run -- --YouTube:Key \"your-key\"");
 	Console.WriteLine();
 	Console.WriteLine("See README.md for complete documentation.");
 	Console.WriteLine();

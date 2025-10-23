@@ -36,7 +36,7 @@ if [[ ! -f "$REPO_ROOT/appsettings.Home.json" ]]; then
 fi
 
 # Create bind mount folders if missing
-mkdir -p "$REPO_ROOT/timelapse" "$REPO_ROOT/gcode" "$REPO_ROOT/tokens"
+mkdir -p "$REPO_ROOT/timelapse" "$REPO_ROOT/tokens"
 
 # Build the image if it doesn't exist locally
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
@@ -76,7 +76,6 @@ docker run ${DOCKER_INTERACTIVE_FLAGS} \
   -e "ASPNETCORE_ENVIRONMENT=Home" \
   -v "$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro" \
   -v "$HOST_DATA_DIR/timelapse:/app/timelapse" \
-  -v "$HOST_DATA_DIR/gcode:/app/gcode" \
   -v "$HOST_DATA_DIR/tokens:/app/tokens" \
   -v "${HOST_DATA_DIR}:/usr/local/share/data" \
   "${IMAGE_NAME}"

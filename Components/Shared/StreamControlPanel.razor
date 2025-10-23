@@ -1,0 +1,380 @@
+@inject NavigationManager Nav
+
+<div class="control-panel">
+    <!-- Control Buttons with Status -->
+    <div class="controls">
+        <!-- Camera Toggle Button -->
+                <!-- Camera Toggle Button -->
+        <button class="btn @(CameraEnabled ? "btn-danger" : "btn-success")" @onclick="OnToggleCamera"
+                @onmouseover="OnCameraMouseOver"
+                @onmouseout="OnCameraMouseOut">
+            @if (CameraHover)
+            {
+                <span class="icon">📹</span>
+                <span class="btn-label">
+                    <span class="btn-title">Source</span>
+                    <span class="btn-status">@(CameraEnabled ? "Turn Off" : "Turn On")</span>
+                </span>
+            }
+            else
+            {
+                <span class="icon">📹</span>
+                <span class="btn-label">
+                    <span class="btn-title">Source</span>
+                    <span class="btn-status">@(CameraEnabled ? "ON" : "OFF")</span>
+                </span>
+            }
+        </button>
+
+        <!-- Go Live / Stop Live Button -->
+        <button class="btn @(IsLive ? "btn-danger" : "btn-success")" 
+                @onclick="@(IsLive ? OnStopLive : OnGoLive)" 
+                disabled="@(!IsLive && (!IsStreamPlaying || IsGoingLive))"
+                @onmouseover="OnLiveMouseOver"
+                @onmouseout="OnLiveMouseOut">
+            @if (IsGoingLive)
+            {
+                <span class="spinner"></span>
+                <span class="btn-label">
+                    <span class="btn-title">Live</span>
+                    <span class="btn-status">Going Live...</span>
+                </span>
+            }
+            else if (IsLive)
+            {
+                <span class="pulse-dot"></span>
+                @if (LiveHover)
+                {
+                    <span class="icon">🔴</span>
+                    <span class="btn-label">
+                        <span class="btn-title">Live</span>
+                        <span class="btn-status">Stop Live</span>
+                    </span>
+                }
+                else
+                {
+                    <span class="icon">🔴</span>
+                    <span class="btn-label">
+                        <span class="btn-title">Live</span>
+                        <span class="btn-status">Live - Stop</span>
+                    </span>
+                }
+            }
+            else
+            {
+                @if (LiveHover)
+                {
+                    <span class="icon">🛜</span>
+                    <span class="btn-label">
+                        <span class="btn-title">Live</span>
+                        <span class="btn-status">Go Live</span>
+                    </span>
+                }
+                else
+                {
+                    <span class="icon">🛜</span>
+                    <span class="btn-label">
+                        <span class="btn-title">Live</span>
+                        <span class="btn-status">Off Air</span>
+                    </span>
+                }
+            }
+        </button>
+        
+        <!-- Auto Broadcast Toggle Button -->
+        <button class="btn @(AutoBroadcastEnabled ? "btn-danger" : "btn-success")" 
+                @onclick="ToggleAutoBroadcast"
+                title="@(AutoBroadcastEnabled ? "Disable auto-broadcast" : "Enable auto-broadcast on print start")"
+                @onmouseover="OnAutoBroadcastMouseOver"
+                @onmouseout="OnAutoBroadcastMouseOut">
+            @if (AutoBroadcastHover)
+            {
+                <span class="icon">🔴</span>
+                <span class="btn-label">
+                    <span class="btn-title">Auto-Broadcast</span>
+                    <span class="btn-status">@(AutoBroadcastEnabled ? "Disable" : "Enable")</span>
+                </span>
+            }
+            else
+            {
+                <span class="icon">🔴</span>
+                <span class="btn-label">
+                    <span class="btn-title">Auto-Broadcast</span>
+                    <span class="btn-status">@(AutoBroadcastEnabled ? "ON" : "OFF")</span>
+                </span>
+            }
+        </button>
+        
+        <!-- Auto Upload Toggle Button -->
+        <button class="btn @(AutoUploadEnabled ? "btn-danger" : "btn-success")" 
+                @onclick="ToggleAutoUpload"
+                title="@(AutoUploadEnabled ? "Disable auto-upload" : "Enable auto-upload timelapses to YouTube")"
+                @onmouseover="OnAutoUploadMouseOver"
+                @onmouseout="OnAutoUploadMouseOut">
+            @if (AutoUploadHover)
+            {
+                <span class="icon">🕝</span>
+                <span class="btn-label">
+                    <span class="btn-title">Auto-Upload</span>
+                    <span class="btn-status">@(AutoUploadEnabled ? "Disable" : "Enable")</span>
+                </span>
+            }
+            else
+            {
+                <span class="icon">🕝</span>
+                <span class="btn-label">
+                    <span class="btn-title">Auto-Upload</span>
+                    <span class="btn-status">@(AutoUploadEnabled ? "ON" : "OFF")</span>
+                </span>
+            }
+        </button>
+    </div>
+    
+    <!-- Status Message -->
+    @if (!string.IsNullOrEmpty(StatusMessage))
+    {
+        <div class="status-message">
+            <span style="color:#66ccff">@StatusMessage</span>
+        </div>
+    }
+    
+    <!-- Broadcast URL -->
+    @if (!string.IsNullOrEmpty(BroadcastId))
+    {
+        <div class="broadcast-url">
+            <strong>Live URL:</strong> 
+            <a href="@($"https://www.youtube.com/watch?v={BroadcastId}")" 
+               target="_blank" 
+               style="color:#66ccff;text-decoration:underline">
+                @($"https://www.youtube.com/watch?v={BroadcastId}")
+            </a>
+        </div>
+    }
+</div>
+
+<style>
+    .control-panel {
+        margin-top: 2rem;
+        margin-bottom: 12rem;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        /* center the control panel horizontally within its container */
+        align-items: center;
+    }
+    
+    .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        /* ensure the button group is centered when it doesn't span full width */
+        justify-content: center;
+    }
+    
+    .btn {
+        /* set a fixed width for all control buttons to prevent layout shift */
+    --control-btn-width: 16rem; /* adjustable: change this value to tweak width */
+        width: var(--control-btn-width);
+        padding: 8px 12px;
+        border: none;
+        border-radius: 4px;
+        font-size: 0.95em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        justify-content: center; /* center icon + label inside fixed-width button */
+        /* base background can be overridden per-state via --btn-bg */
+        background: var(--btn-bg, #555);
+        color: #fff;
+        -webkit-appearance: none; /* prevent platform-native blue on some browsers */
+        appearance: none;
+        -webkit-tap-highlight-color: transparent; /* mobile tap highlight */
+    }
+    
+    /* highlight on hover without moving the button
+       show the opposite (toggle) color as an outer glow to indicate the action */
+    .btn:hover:not(:disabled) {
+        filter: none;
+        transform: none;
+        /* ensure base color stays visible */
+        background: var(--btn-bg) !important;
+        color: #fff !important;
+        -webkit-tap-highlight-color: transparent;
+        /* much stronger, wider glow using the button's own glow color */
+        box-shadow: 0 24px 80px rgba(0,0,0,0.36), 0 0 64px var(--btn-glow, rgba(255,255,255,0.22));
+        /* add a subtle colored ring to make the highlight obvious */
+        border: 2px solid rgba(255,255,255,0.04);
+        outline: 0;
+    }
+
+    /* keyboard focus styling */
+    /* keep keyboard focus indicator but prevent browser default blue for mouse focus */
+    .btn:focus {
+        outline: none;
+    }
+
+    .btn:focus-visible {
+        box-shadow: 0 6px 20px rgba(0,0,0,0.22), 0 0 18px var(--btn-glow, rgba(255,255,255,0.10)) inset;
+        outline: 3px solid var(--btn-glow, rgba(102,204,255,0.20));
+    }
+
+    /* pressed/depress animation */
+    .btn:active:not(:disabled) {
+        transform: translateY(2px) scale(0.995);
+        box-shadow: 0 3px 8px rgba(0,0,0,0.35) inset, 0 2px 6px rgba(0,0,0,0.25);
+        transition: transform 80ms ease, box-shadow 80ms ease;
+    }
+    
+    .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    
+    .btn-success {
+        --btn-bg: #28a745;
+        /* glow uses the same hue as the button (green) - increased alpha for visibility */
+        --btn-glow: rgba(40,167,69,0.48);
+        background: var(--btn-bg);
+    }
+
+    .btn-danger {
+        --btn-bg: #dc3545;
+        /* glow uses the same hue as the button (red) - increased alpha for visibility */
+        --btn-glow: rgba(220,53,69,0.48);
+        background: var(--btn-bg);
+    }
+    
+    .icon {
+        font-size: 1.5em;
+    }
+    
+    /* Two-line label: title above status */
+    .btn-label {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-width: 8ch; /* reserve enough space for longer labels */
+        max-width: 18ch;
+        line-height: 1.05;
+    }
+
+    .btn-title {
+        font-size: 0.85em;
+        opacity: 0.9;
+        margin-bottom: 2px;
+    }
+
+    .btn-status {
+        font-size: 1.05em;
+        font-weight: 800;
+        line-height: 1;
+    }
+    
+    .pulse-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        background: #fff;
+        border-radius: 50%;
+        animation: pulse 1.5s infinite;
+    }
+    
+    @@keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+    }
+    
+    .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid #fff;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+    
+    @@keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    
+    .status-message, .broadcast-url {
+        padding: 8px 0;
+    }
+</style>
+
+@code {
+    [Parameter] public bool IsLive { get; set; }
+    [Parameter] public bool IsStreamPlaying { get; set; }
+    [Parameter] public bool IsGoingLive { get; set; }
+    [Parameter] public bool StreamerRunning { get; set; }
+    [Parameter] public bool WaitingForIngestion { get; set; }
+    [Parameter] public bool CameraEnabled { get; set; }
+    [Parameter] public bool AutoBroadcastEnabled { get; set; }
+    [Parameter] public bool AutoUploadEnabled { get; set; }
+    [Parameter] public string? BroadcastId { get; set; }
+    [Parameter] public string? StatusMessage { get; set; }
+    
+    [Parameter] public EventCallback OnGoLive { get; set; }
+    [Parameter] public EventCallback OnStopLive { get; set; }
+    [Parameter] public EventCallback OnToggleCamera { get; set; }
+    [Parameter] public EventCallback<bool> OnAutoUploadChanged { get; set; }
+    [Parameter] public EventCallback<bool> OnAutoBroadcastChanged { get; set; }
+    
+    private bool CameraHover = false;
+    private bool LiveHover = false;
+    private bool AutoBroadcastHover = false;
+    private bool AutoUploadHover = false;
+    
+    private void OnCameraMouseOver() => CameraHover = true;
+    private void OnCameraMouseOut() => CameraHover = false;
+    private void OnLiveMouseOver() => LiveHover = true;
+    private void OnLiveMouseOut() => LiveHover = false;
+    private void OnAutoBroadcastMouseOver() => AutoBroadcastHover = true;
+    private void OnAutoBroadcastMouseOut() => AutoBroadcastHover = false;
+    private void OnAutoUploadMouseOver() => AutoUploadHover = true;
+    private void OnAutoUploadMouseOut() => AutoUploadHover = false;
+    
+    private async Task ToggleAutoBroadcast()
+    {
+        try
+        {
+            var newValue = !AutoBroadcastEnabled;
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/config/auto-broadcast?enabled={newValue}", null);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                await OnAutoBroadcastChanged.InvokeAsync(newValue);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling auto-broadcast: {ex.Message}");
+        }
+    }
+    
+    private async Task ToggleAutoUpload()
+    {
+        try
+        {
+            var newValue = !AutoUploadEnabled;
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/config/auto-upload?enabled={newValue}", null);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                await OnAutoUploadChanged.InvokeAsync(newValue);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling auto-upload: {ex.Message}");
+        }
+    }
+}

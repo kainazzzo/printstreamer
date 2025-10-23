@@ -1,0 +1,11 @@
+<div class="section">
+    <h2>Live Stream Preview</h2>
+    <div class="stream-container" style="display:flex;gap:20px;align-items:flex-start">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+}

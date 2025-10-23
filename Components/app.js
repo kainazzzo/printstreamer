@@ -269,3 +269,6 @@ setInterval(() => {
 // Expose functions for Blazor
 window.attachHls = attachHls;
 window.detachHls = cleanup;
+window.getStreamPlayingStatus = function() {
+    return isStreamPlaying;
+};
