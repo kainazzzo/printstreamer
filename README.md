@@ -6,7 +6,6 @@ This application runs a small web UI and a background poller by default. Configu
 
 
  By default the web UI (proxy) is served on port 8080 and the poller runs as a hosted background service.
- Use Stream__UseNativeStreamer=false to disable the web UI when running in headless environments.
  Control YouTube behavior with YouTube:OAuth (OAuth credentials) or YouTube:Key (manual stream key). Use YouTube:StartInServe to optionally start streaming when serving the UI.
 The app uses ffmpeg as the streaming engine to keep dependencies minimal and avoid reimplementing video encoding stacks.
 
@@ -57,8 +56,7 @@ Configuration is loaded from `appsettings.json`, environment variables, or comma
 ```json
 {
   "Stream": {
-    "Source": "http://192.168.1.117/webcam/?action=stream&octoAppPortOverride=80&cacheBust=1759967901624",
-    "UseNativeStreamer": false
+    "Source": "http://192.168.1.117/webcam/?action=stream&octoAppPortOverride=80&cacheBust=1759967901624"
   },
   "YouTube": {
     "OAuth": {
@@ -88,7 +86,6 @@ Configuration is loaded from `appsettings.json`, environment variables, or comma
 Use double-underscores (`__`) for hierarchical keys:
 ```bash
 export Stream__Source="http://printer.local/webcam/?action=stream"
-export Stream__UseNativeStreamer=false
 export YouTube__OAuth__ClientId="xxx.apps.googleusercontent.com"
 export YouTube__OAuth__ClientSecret="GOCSPX-xxx"
 export Moonraker__ApiUrl="http://moonraker.local:7125"
@@ -108,7 +105,6 @@ export Stream__Source="http://printer.local/webcam/?action=stream"
  - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Technical deep-dive and configuration system.
 - **[DOCKER_RELEASE.md](./DOCKER_RELEASE.md)** — Secure Docker build, secrets, and deployment best practices.
 - **[PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md)** — Features, security, and development workflow.
-- **[NATIVE_STREAMER.md](./NATIVE_STREAMER.md)** — Native .NET streamer details and advanced features.
 - **[STREAMER_EXAMPLES.md](./STREAMER_EXAMPLES.md)** — Usage patterns and real-world scenarios.
 
 ---
@@ -134,7 +130,7 @@ export Stream__Source="http://printer.local/webcam/?action=stream"
 
 - Troubleshooting: See [QUICKSTART.md](./QUICKSTART.md#quick-troubleshooting)
 - Security: See [PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md#security-notes)
-- Advanced: See [NATIVE_STREAMER.md](./NATIVE_STREAMER.md) and [STREAMER_EXAMPLES.md](./STREAMER_EXAMPLES.md)
+- Advanced: See [STREAMER_EXAMPLES.md](./STREAMER_EXAMPLES.md)
 
 ---
 

@@ -1,0 +1,24 @@
+@namespace PrintStreamer
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="/Components/app.css" />
+    <title>PrintStreamer</title>
+    <HeadOutlet />
+</head>
+<body>
+    <Router AppAssembly="@typeof(Program).Assembly">
+        <Found Context="routeData">
+            <RouteView RouteData="@routeData" />
+        </Found>
+        <NotFound>
+            <p>Sorry, there's nothing at this address.</p>
+        </NotFound>
+    </Router>
+    <script src="/Components/app.js"></script>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

@@ -17,7 +17,6 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 
 ### Advanced Topics
-6. **[NATIVE_STREAMER.md](NATIVE_STREAMER.md)** — Experimental native streamer, architecture, frame extraction, overlays
 7. **[STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)** — Usage patterns, real-world scenarios, code examples
 ### Full Documentation List
 
@@ -26,7 +25,6 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 - [DOCKER_RELEASE.md](DOCKER_RELEASE.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)
-- [NATIVE_STREAMER.md](NATIVE_STREAMER.md)
 - [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
 
 ## 🎯 Quick Navigation
@@ -38,9 +36,6 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 #### Understand How It Works
 → Read [ARCHITECTURE.md](ARCHITECTURE.md)
-
-#### Add Custom Features
-→ Check [NATIVE_STREAMER.md](NATIVE_STREAMER.md)
 
 #### See Examples
 → Browse [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
@@ -58,8 +53,7 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 |------|---------|
 | `Program.cs` | Main entry point, orchestration |
 | `YouTubeService.cs` | OAuth2 + YouTube API integration |
-| `FfmpegStreamer.cs` | FFmpeg-based streamer (default) |
-| `MjpegToRtmpStreamer.cs` | Native .NET streamer (advanced) |
+| `FfmpegStreamer.cs` | FFmpeg-based streamer |
 | `IStreamer.cs` | Common streamer interface |
 
 ### Configuration
@@ -84,9 +78,8 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 ### For Developers
 1. [ARCHITECTURE.md](ARCHITECTURE.md) - System design
-2. [NATIVE_STREAMER.md](NATIVE_STREAMER.md) - Experimental native streamer
-3. [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) - Development workflow
-4. [DOCKER_RELEASE.md](DOCKER_RELEASE.md) - Docker and secrets
+2. [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) - Development workflow
+3. [DOCKER_RELEASE.md](DOCKER_RELEASE.md) - Docker and secrets
 
 ### For DevOps
 1. [DOCKER_RELEASE.md](DOCKER_RELEASE.md) - Secure Docker deployment
@@ -106,9 +99,8 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 - OAuth Flow: [ARCHITECTURE.md#authentication-flow](ARCHITECTURE.md#authentication-flow)
 
 ### Streaming Options
-- Comparison: [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
+- Examples: [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
 - FFmpeg Details: [ARCHITECTURE.md#ffmpegstreamer](ARCHITECTURE.md#3-ffmpegstreamercs)
-- Native Details: [NATIVE_STREAMER.md](NATIVE_STREAMER.md)
 
 ### Docker
 - Quick Start: [QUICKSTART.md#use-case-4](QUICKSTART.md#use-case-4-run-in-docker)
@@ -118,7 +110,6 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 ### Troubleshooting
 - Common Issues: [QUICKSTART.md#troubleshooting](QUICKSTART.md#troubleshooting)
 - Detailed: [PROJECT_SUMMARY.md#troubleshooting](PROJECT_SUMMARY.md#troubleshooting)
-- Native Streamer: [NATIVE_STREAMER.md#troubleshooting](NATIVE_STREAMER.md#troubleshooting)
 
 ## 🎓 Learning Path
 
@@ -137,18 +128,14 @@ Try it yourself!
 ```
 ARCHITECTURE.md (Overview + Components)
     ↓
-NATIVE_STREAMER.md (Architecture section)
-    ↓
 STREAMER_EXAMPLES.md (All scenarios)
     ↓
-Experiment with native streamer
+Explore configuration options
 ```
 
 ### Advanced Path
 ```
 ARCHITECTURE.md (Complete)
-    ↓
-NATIVE_STREAMER.md (Complete)
     ↓
 Source code exploration
     ↓
@@ -177,7 +164,6 @@ docker run -p 8080:8080 \
 ### Configuration Keys
 ```
 Stream:Source              # MJPEG URL
-Stream:UseNativeStreamer   # true/false
 YouTube:Key                # Manual stream key
 YouTube:OAuth:ClientId     # OAuth client ID
 YouTube:OAuth:ClientSecret # OAuth client secret
@@ -194,13 +180,11 @@ https://console.cloud.google.com  # Google Cloud Console
 
 ## 📊 Feature Matrix
 
-| Feature | FFmpeg Streamer | Native Streamer | Docs |
-|---------|----------------|-----------------|------|
-| Basic Streaming | ✅ | ✅ | [README.md](README.md) |
-| Low Resource | ✅ | ⚠️ | [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md) |
-| Frame Access | ❌ | ✅ | [NATIVE_STREAMER.md](NATIVE_STREAMER.md) |
-| Overlays | ❌ | 🔜 | [NATIVE_STREAMER.md#frame-overlays](NATIVE_STREAMER.md#1-frame-overlays) |
-| Motion Detection | ❌ | 🔜 | [NATIVE_STREAMER.md#motion-detection](NATIVE_STREAMER.md#2-motion-detection) |
+| Feature | FFmpeg Streamer | Docs |
+|---------|----------------|------|
+| Basic Streaming | ✅ | [README.md](README.md) |
+| Low Resource | ✅ | [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md) |
+| Hardware Acceleration | ✅ | [ARCHITECTURE.md](ARCHITECTURE.md) |
 
 Legend: ✅ Supported | ⚠️ With caveats | ❌ Not supported | 🔜 Planned
 

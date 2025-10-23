@@ -182,10 +182,6 @@ namespace PrintStreamer.Streamers
 	// We'll add a lavfi anullsrc input and map it as the audio input.
 		var addSilentAudio = isHttpSource || srcArg.StartsWith("/dev/") == false;
 
-		// When using an HTTP MJPEG source, also provide a synthetic black video input as a background so
-		// the overlay can always render frames even if the camera feed temporarily stops.
-		var provideBlackBackground = isHttpSource;
-
 	// ffmpeg logging: allow overriding via env var to hide benign errors
 	string logLevel = System.Environment.GetEnvironmentVariable("FFMPEG_LOGLEVEL") ?? "error";
 	switch (logLevel.ToLowerInvariant())
@@ -204,23 +200,11 @@ namespace PrintStreamer.Streamers
 	string audioMap = "";
 		if (addSilentAudio)
 		{
-			// When HTTP source: inputs will be either:
-			// - [0] synthetic black background (lavfi)
-			// - [1] HTTP MJPEG source (reconnect-enabled)
-			// - [2] synthetic silent audio (lavfi anullsrc)
+			// Add reconnect logic for HTTP sources and add a silent audio track
 			var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
-
-			if (provideBlackBackground)
-			{
-				inputArgs = $"{baseFlags} -f lavfi -i color=s=640x480:c=black -fflags +genpts {reconnectArgs} -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
-				// audio is the third input
-				audioMap = "-map 2:a:0";
-			}
-			else
-			{
-				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
-				audioMap = "-map 1:a:0";
-			}
+			inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
+			// audio is the second input
+			audioMap = "-map 1:a:0";
 			audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
 		}
 		else
@@ -299,22 +283,8 @@ namespace PrintStreamer.Streamers
 	var needsSplit = !string.IsNullOrWhiteSpace(hlsArgs) && !string.IsNullOrWhiteSpace(rtmpUrl);
 	string filterComplex;
 
-	// Build the starting label for the video inputs. When a synthetic black background was provided
-	// the input order is: [0] = black background, [1] = camera source. We need to overlay camera onto
-	// the black background first, then apply the rest of the vfChain (format/scale/drawbox/drawtext).
-	string videoInputStart;
-	if (provideBlackBackground)
-	{
-		// overlay camera ([1:v]) onto background ([0:v]) and then continue the chain
-		// overlay=shortest=1 ensures the composite follows the shorter stream end (camera), but
-		// drawtext/drawbox will still render on the background when camera is missing frames.
-		videoInputStart = "[0:v][1:v]overlay=shortest=1,";
-	}
-	else
-	{
-		// single input chain starting from the primary video input
-		videoInputStart = "[0:v]";
-	}
+	// The video input starts from the primary video input [0:v]
+	string videoInputStart = "[0:v]";
 
 	if (needsSplit)
 	{

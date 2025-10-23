@@ -1,0 +1,468 @@
+@page "/config"
+@rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@using System.Text.Json
+
+<PageTitle>PrintStreamer - Configuration</PageTitle>
+
+<div class="wrap">
+    <div class="nav">
+        <NavLink href="/">← Back to Control Panel</NavLink>
+    </div>
+    
+    <h1>Configuration</h1>
+    
+    @if (config == null)
+    {
+        <p>Loading configuration...</p>
+    }
+    else
+    {
+        <EditForm Model="@config" OnValidSubmit="SaveConfig">
+            <!-- Stream Settings -->
+            <div class="section">
+                <h2>Stream Settings</h2>
+                <div class="form-group">
+                    <label for="stream-source">Source (MJPEG URL)</label>
+                    <InputText id="stream-source" @bind-Value="config.Stream.Source" placeholder="http://192.168.1.2/webcam/?action=stream" />
+                    <div class="help-text">MJPEG stream URL from your 3D printer camera (ffmpeg will stream from local proxy for overlays/YouTube)</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="stream-targetfps">Target FPS</label>
+                    <InputNumber id="stream-targetfps" @bind-Value="config.Stream.TargetFps" />
+                    <div class="help-text">Target frames per second for YouTube stream</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="stream-bitratekbps">Bitrate (Kbps)</label>
+                    <InputNumber id="stream-bitratekbps" @bind-Value="config.Stream.BitrateKbps" />
+                    <div class="help-text">Video bitrate in kilobits per second</div>
+                </div>
+                
+                <h3>Local HLS Preview</h3>
+                <div class="checkbox-group">
+                    <InputCheckbox id="stream-local-enabled" @bind-Value="config.Stream.Local.Enabled" />
+                    <label for="stream-local-enabled">Enable Local HLS</label>
+                </div>
+                <div class="help-text">Generate local HLS stream for preview</div>
+                
+                <div class="form-group">
+                    <label for="stream-local-hlsfolder">HLS Folder</label>
+                    <InputText id="stream-local-hlsfolder" @bind-Value="config.Stream.Local.HlsFolder" />
+                    <div class="help-text">Directory for HLS output files</div>
+                </div>
+            </div>
+            
+            <!-- Moonraker Settings -->
+            <div class="section">
+                <h2>Moonraker Settings</h2>
+                <div class="form-group">
+                    <label for="moonraker-baseurl">Base URL</label>
+                    <InputText id="moonraker-baseurl" @bind-Value="config.Moonraker.BaseUrl" placeholder="http://192.168.1.2:7125/" />
+                    <div class="help-text">Moonraker API base URL (leave empty to disable)</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="moonraker-apikey">API Key</label>
+                    <InputText type="password" id="moonraker-apikey" @bind-Value="config.Moonraker.ApiKey" />
+                    <div class="help-text">Optional API key for Moonraker authentication</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="moonraker-authheader">Auth Header</label>
+                    <InputText id="moonraker-authheader" @bind-Value="config.Moonraker.AuthHeader" />
+                    <div class="help-text">HTTP header name for API key</div>
+                </div>
+            </div>
+            
+            <!-- Overlay Settings -->
+            <div class="section">
+                <h2>Overlay Settings</h2>
+                <div class="checkbox-group">
+                    <InputCheckbox id="overlay-enabled" @bind-Value="config.Overlay.Enabled" />
+                    <label for="overlay-enabled">Enable Overlay</label>
+                </div>
+                <div class="help-text">Show printer status overlay on stream</div>
+                
+                <div class="form-group">
+                    <label for="overlay-refreshms">Refresh Interval (ms)</label>
+                    <InputNumber id="overlay-refreshms" @bind-Value="config.Overlay.RefreshMs" />
+                    <div class="help-text">How often to update overlay text</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="overlay-template">Template</label>
+                    <InputTextArea id="overlay-template" @bind-Value="config.Overlay.Template" rows="3" />
+                    <div class="help-text">Template for overlay text. Available variables: {'{'}nozzle{'}'}, {'{'}bed{'}'}, {'{'}progress{'}'}, {'{'}speed{'}'}, {'{'}flow{'}'}, {'{'}filament{'}'}, {'{'}eta{'}'}, {'{'}layers{'}'}</div>
+                </div>
+                
+                <div class="grid-2col">
+                    <div class="form-group">
+                        <label for="overlay-fontfile">Font File</label>
+                        <InputText id="overlay-fontfile" @bind-Value="config.Overlay.FontFile" />
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="overlay-fontsize">Font Size</label>
+                        <InputNumber id="overlay-fontsize" @bind-Value="config.Overlay.FontSize" />
+                    </div>
+                </div>
+                
+                <div class="grid-2col">
+                    <div class="form-group">
+                        <label for="overlay-fontcolor">Font Color</label>
+                        <InputText id="overlay-fontcolor" @bind-Value="config.Overlay.FontColor" />
+                        <div class="help-text">Color name or hex (e.g., white, #FFFFFF)</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="overlay-boxcolor">Box Color</label>
+                        <InputText id="overlay-boxcolor" @bind-Value="config.Overlay.BoxColor" />
+                        <div class="help-text">Background color with opacity (e.g., black@0.4)</div>
+                    </div>
+                </div>
+                
+                <div class="grid-2col">
+                    <div class="form-group">
+                        <label for="overlay-x">X Position</label>
+                        <InputText id="overlay-x" @bind-Value="config.Overlay.X" />
+                        <div class="help-text">X coordinate expression (e.g., (w-tw)-20 for right)</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="overlay-y">Y Position</label>
+                        <InputText id="overlay-y" @bind-Value="config.Overlay.Y" />
+                        <div class="help-text">Y coordinate expression or number</div>
+                    </div>
+                </div>
+                
+                <div class="checkbox-group">
+                    <InputCheckbox id="overlay-box" @bind-Value="config.Overlay.Box" />
+                    <label for="overlay-box">Show Background Box</label>
+                </div>
+                
+                <div class="form-group">
+                    <label for="overlay-boxborderw">Box Border Width</label>
+                    <InputNumber id="overlay-boxborderw" @bind-Value="config.Overlay.BoxBorderW" />
+                </div>
+            </div>
+            
+            <!-- YouTube Settings -->
+            <div class="section">
+                <h2>YouTube Settings</h2>
+                <div class="grid-2col">
+                    <div class="form-group">
+                        <label for="youtube-oauth-clientid">OAuth Client ID</label>
+                        <InputText id="youtube-oauth-clientid" @bind-Value="config.YouTube.OAuth.ClientId" />
+                        <div class="help-text">Google OAuth 2.0 Client ID</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="youtube-oauth-clientsecret">OAuth Client Secret</label>
+                        <InputText type="password" id="youtube-oauth-clientsecret" @bind-Value="config.YouTube.OAuth.ClientSecret" />
+                        <div class="help-text">Google OAuth 2.0 Client Secret</div>
+                    </div>
+                </div>
+                
+                <h3>Live Broadcast Settings</h3>
+                <div class="checkbox-group">
+                    <InputCheckbox id="youtube-livebroadcast-enabled" @bind-Value="config.YouTube.LiveBroadcast.Enabled" />
+                    <label for="youtube-livebroadcast-enabled">Enable Auto-Broadcast Creation</label>
+                </div>
+                <div class="help-text">Automatically create YouTube broadcasts when streaming</div>
+                
+                <div class="form-group">
+                    <label for="youtube-livebroadcast-title">Broadcast Title</label>
+                    <InputText id="youtube-livebroadcast-title" @bind-Value="config.YouTube.LiveBroadcast.Title" />
+                </div>
+                
+                <div class="form-group">
+                    <label for="youtube-livebroadcast-description">Broadcast Description</label>
+                    <InputTextArea id="youtube-livebroadcast-description" @bind-Value="config.YouTube.LiveBroadcast.Description" rows="3" />
+                </div>
+                
+                <div class="grid-2col">
+                    <div class="form-group">
+                        <label for="youtube-livebroadcast-privacy">Privacy</label>
+                        <InputSelect id="youtube-livebroadcast-privacy" @bind-Value="config.YouTube.LiveBroadcast.Privacy">
+                            <option value="public">Public</option>
+                            <option value="unlisted">Unlisted</option>
+                            <option value="private">Private</option>
+                        </InputSelect>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="youtube-livebroadcast-categoryid">Category ID</label>
+                        <InputText id="youtube-livebroadcast-categoryid" @bind-Value="config.YouTube.LiveBroadcast.CategoryId" />
+                        <div class="help-text">YouTube category (28 = Science & Technology)</div>
+                    </div>
+                </div>
+                
+                <h3>Playlist Settings</h3>
+                <div class="form-group">
+                    <label for="youtube-playlist-name">Playlist Name</label>
+                    <InputText id="youtube-playlist-name" @bind-Value="config.YouTube.Playlist.Name" />
+                </div>
+                
+                <div class="form-group">
+                    <label for="youtube-playlist-privacy">Playlist Privacy</label>
+                    <InputSelect id="youtube-playlist-privacy" @bind-Value="config.YouTube.Playlist.Privacy">
+                        <option value="public">Public</option>
+                        <option value="unlisted">Unlisted</option>
+                        <option value="private">Private</option>
+                    </InputSelect>
+                </div>
+                
+                <div class="checkbox-group">
+                    <InputCheckbox id="youtube-startinserve" @bind-Value="config.YouTube.StartInServe" />
+                    <label for="youtube-startinserve">Start Streaming on Server Start</label>
+                </div>
+                <div class="help-text">Automatically begin YouTube streaming when server starts</div>
+            </div>
+            
+            <!-- Timelapse Settings -->
+            <div class="section">
+                <h2>Timelapse Settings</h2>
+                <div class="form-group">
+                    <label for="timelapse-mainfolder">Main Folder</label>
+                    <InputText id="timelapse-mainfolder" @bind-Value="config.Timelapse.MainFolder" />
+                    <div class="help-text">Directory for storing timelapse frames</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="timelapse-period">Capture Period</label>
+                    <InputText id="timelapse-period" @bind-Value="config.Timelapse.Period" />
+                    <div class="help-text">Time between captures (format: HH:MM:SS)</div>
+                </div>
+                
+                <div class="checkbox-group">
+                    <InputCheckbox id="timelapse-upload" @bind-Value="config.Timelapse.Upload" />
+                    <label for="timelapse-upload">Auto-Upload to YouTube</label>
+                </div>
+                <div class="help-text">Automatically upload completed timelapses to YouTube</div>
+            </div>
+            
+            <!-- Other Settings -->
+            <div class="section">
+                <h2>Other Settings</h2>
+                <div class="form-group">
+                    <label for="gcodefolder">GCode Folder</label>
+                    <InputText id="gcodefolder" @bind-Value="config.GcodeFolder" />
+                    <div class="help-text">Directory for storing GCode files</div>
+                </div>
+                
+                <div class="checkbox-group">
+                    <InputCheckbox id="serve-enabled" @bind-Value="config.Serve.Enabled" />
+                    <label for="serve-enabled">Enable Web UI</label>
+                </div>
+                <div class="help-text">Serve the web control panel</div>
+            </div>
+            
+            <!-- Action Buttons -->
+            <div class="section">
+                <div class="button-group">
+                    <button type="submit" class="success">Save Configuration</button>
+                    <button type="button" @onclick="() => LoadConfig(true)">Reload</button>
+                    <button type="button" class="danger" @onclick="ResetToDefaults">Reset to Defaults</button>
+                </div>
+            </div>
+        </EditForm>
+    }
+</div>
+
+<div id="toast-container"></div>
+
+@code {
+    private bool _jsReady = false;
+    private List<(string Message, string Type)> _pendingToasts = new();
+    private AppConfig? config;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadConfig();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsReady = true;
+            // Flush any queued toasts from prerender phase
+            if (_pendingToasts.Count > 0)
+            {
+                foreach (var (msg, type) in _pendingToasts)
+                {
+                    try { await JS.InvokeVoidAsync("showToast", msg, type); } catch { }
+                }
+                _pendingToasts.Clear();
+            }
+        }
+    }
+
+    private async Task SafeToast(string message, string type = "info")
+    {
+        if (_jsReady)
+        {
+            try { await JS.InvokeVoidAsync("showToast", message, type); } catch { }
+        }
+        else
+        {
+            _pendingToasts.Add((message, type));
+        }
+    }
+
+    private async Task LoadConfig(bool showToast = false)
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            config = await client.GetFromJsonAsync<AppConfig>("api/config");
+            
+            if (showToast)
+            {
+                await SafeToast("Configuration reloaded", "success");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error loading configuration: {ex.Message}", "error");
+        }
+    }
+
+    private async Task SaveConfig()
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsJsonAsync("api/config", config);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                await SafeToast("Configuration saved successfully! Restart may be required for some changes to take effect.", "success");
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                await SafeToast($"Failed to save configuration: {error}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error saving configuration: {ex.Message}", "error");
+        }
+    }
+
+    private async Task ResetToDefaults()
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync("api/config/reset", null);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadConfig();
+                await SafeToast("Configuration reset to defaults", "success");
+            }
+            else
+            {
+                await SafeToast("Failed to reset configuration", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error resetting configuration: {ex.Message}", "error");
+        }
+    }
+
+    // Configuration model classes
+    private class AppConfig
+    {
+        public StreamConfig Stream { get; set; } = new();
+        public MoonrakerConfig Moonraker { get; set; } = new();
+        public OverlayConfig Overlay { get; set; } = new();
+        public YouTubeConfig YouTube { get; set; } = new();
+        public TimelapseConfig Timelapse { get; set; } = new();
+        public string GcodeFolder { get; set; } = "";
+        public ServeConfig Serve { get; set; } = new();
+    }
+
+    private class StreamConfig
+    {
+        public string Source { get; set; } = "";
+        public int TargetFps { get; set; }
+        public int BitrateKbps { get; set; }
+        public LocalStreamConfig Local { get; set; } = new();
+    }
+
+    private class LocalStreamConfig
+    {
+        public bool Enabled { get; set; }
+        public string HlsFolder { get; set; } = "";
+    }
+
+    private class MoonrakerConfig
+    {
+        public string BaseUrl { get; set; } = "";
+        public string ApiKey { get; set; } = "";
+        public string AuthHeader { get; set; } = "";
+    }
+
+    private class OverlayConfig
+    {
+        public bool Enabled { get; set; }
+        public int RefreshMs { get; set; }
+        public string Template { get; set; } = "";
+        public string FontFile { get; set; } = "";
+        public int FontSize { get; set; }
+        public string FontColor { get; set; } = "";
+        public string BoxColor { get; set; } = "";
+        public string X { get; set; } = "";
+        public string Y { get; set; } = "";
+        public bool Box { get; set; }
+        public int BoxBorderW { get; set; }
+    }
+
+    private class YouTubeConfig
+    {
+        public OAuthConfig OAuth { get; set; } = new();
+        public LiveBroadcastConfig LiveBroadcast { get; set; } = new();
+        public PlaylistConfig Playlist { get; set; } = new();
+        public bool StartInServe { get; set; }
+    }
+
+    private class OAuthConfig
+    {
+        public string ClientId { get; set; } = "";
+        public string ClientSecret { get; set; } = "";
+    }
+
+    private class LiveBroadcastConfig
+    {
+        public bool Enabled { get; set; }
+        public string Title { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string Privacy { get; set; } = "";
+        public string CategoryId { get; set; } = "";
+    }
+
+    private class PlaylistConfig
+    {
+        public string Name { get; set; } = "";
+        public string Privacy { get; set; } = "";
+    }
+
+    private class TimelapseConfig
+    {
+        public string MainFolder { get; set; } = "";
+        public string Period { get; set; } = "";
+        public bool Upload { get; set; }
+    }
+
+    private class ServeConfig
+    {
+        public bool Enabled { get; set; }
+    }
+}

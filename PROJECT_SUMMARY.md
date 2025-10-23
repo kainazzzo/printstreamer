@@ -5,7 +5,7 @@
 A complete .NET 8.0 application for streaming 3D printer webcams to YouTube Live with:
 - ✅ Automated YouTube broadcast creation via OAuth2
 - ✅ MJPEG proxy server for local testing
-- ✅ Two streaming implementations (FFmpeg & Native .NET)
+- ✅ FFmpeg streaming implementation
 - ✅ Docker containerization
 - ✅ Flexible configuration system
 - ✅ Production-ready error handling
@@ -17,7 +17,6 @@ printstreamer/
 ├── Program.cs                    # Main entry point, orchestration
 ├── YouTubeControlService.cs    # OAuth2 + YouTube API integration (control-plane)
 ├── FfmpegStreamer.cs            # FFmpeg-based streamer (default)
-├── MjpegToRtmpStreamer.cs       # Native .NET streamer (advanced)
 ├── MjpegReader.cs               # Diagnostic MJPEG inspector
 ├── IStreamer.cs                 # Common streamer interface
 ├── appsettings.json             # Configuration
@@ -27,7 +26,6 @@ printstreamer/
 └── docs/
     ├── README.md               # User guide
     ├── ARCHITECTURE.md         # Technical architecture
-    ├── NATIVE_STREAMER.md      # Native streamer deep-dive
     └── STREAMER_EXAMPLES.md    # Usage examples
 ```
 
@@ -39,18 +37,12 @@ printstreamer/
 - **Stream Binding**: Automatic RTMP stream creation and binding
 - **Token Persistence**: Refresh tokens saved to `youtube_tokens/`
 
-### 2. Dual Streaming Modes
-**FFmpeg Streamer** (Default):
+### 2. FFmpeg Streaming
+**FFmpeg Streamer**:
 - External ffmpeg process
 - Low resource usage
 - Hardware acceleration support
 - Battle-tested reliability
-
-**Native .NET Streamer** (Advanced):
-- Frame-level access
-- Custom processing pipeline
-- Overlay support (future)
-- Motion detection (future)
 
 ### 3. MJPEG Proxy Server
 - ASP.NET Core on port 8080
@@ -86,8 +78,7 @@ printstreamer/
 ```json
 {
   "Stream": {
-    "Source": "http://printer.local/webcam/?action=stream",
-    "UseNativeStreamer": false
+    "Source": "http://printer.local/webcam/?action=stream"
   },
   "YouTube": {
     "Key": "",
@@ -115,7 +106,6 @@ printstreamer/
 ```bash
 # Stream configuration
 export Stream__Source="http://printer.local/webcam/?action=stream"
-export Stream__UseNativeStreamer=false
 
 # YouTube configuration
 export YouTube__Key="your-stream-key"
@@ -124,6 +114,10 @@ export YouTube__OAuth__ClientSecret="GOCSPX-xxx"
 
 # Operation flags
 export Stream__Source="http://printer.local/webcam/?action=stream"
+```
+
+## 📈 Architecture Highlights
+
 ```
 
 ## 🎬 Usage Examples
@@ -156,12 +150,6 @@ docker run -p 8080:8080 \
   printstreamer:latest
 ```
 
-### 5. Native Streamer
-```bash
-export Stream__UseNativeStreamer=true
-dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream"
-```
-
 ## 📈 Architecture Highlights
 
 ### Data Flow (Serve + Stream)
@@ -190,13 +178,8 @@ dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream"
 ### Class Hierarchy
 ```
 IStreamer (interface)
-├── FfmpegStreamer
-│   └── Spawns ffmpeg process
-└── MjpegToRtmpStreamer
-    ├── MjpegFrameExtractor
-    │   └── Parses MJPEG boundaries
-    └── RtmpConnection
-        └── Pipes to ffmpeg for encoding
+└── FfmpegStreamer
+    └── Spawns ffmpeg process
 ```
 
 ## 🔐 Security Notes
@@ -296,7 +279,6 @@ ffmpeg -version
 | [DOCKER_RELEASE.md](DOCKER_RELEASE.md) | Secure Docker build, secrets, and deployment best practices |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Technical deep-dive, component details |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | Features, technologies, workflow, roadmap |
-| [NATIVE_STREAMER.md](NATIVE_STREAMER.md) | Experimental native streamer, architecture, frame extraction, overlays |
 | [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md) | Usage patterns, real-world scenarios, code examples |
 | [DOCS_INDEX.md](DOCS_INDEX.md) | Documentation index and navigation |
 
@@ -308,7 +290,6 @@ ffmpeg -version
 - [x] YouTube OAuth integration
 - [x] Broadcast management
 - [x] Docker support
-- [x] Native streamer implementation
 
 ### Phase 2: Enhanced Features (📋 Planned)
 - [ ] Frame overlays (text, graphics)
@@ -342,11 +323,11 @@ ffmpeg -version
 3. Update `Program.cs` streamer selection
 4. Document in README
 
-### Adding Frame Processing
-1. Modify `MjpegToRtmpStreamer.SendFrameAsync`
-2. Add NuGet package (e.g., SixLabors.ImageSharp)
-3. Process frame before sending to RTMP
-4. Add configuration options
+### Extending Functionality
+1. Add new services to `Program.cs`
+2. Follow existing patterns for dependency injection
+3. Add configuration options as needed
+4. Update documentation
 
 ### Testing Changes
 ```bash

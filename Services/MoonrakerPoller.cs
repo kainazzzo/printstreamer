@@ -101,11 +101,14 @@ namespace PrintStreamer.Services
                 return (false, "OAuth client credentials not configured", null);
             }
 
-            lock (_streamLock)
+            // In some flows the local HLS streamer may be restarting (e.g., camera toggle or prior stop).
+            // Give it a short grace period to appear; if still null, we'll start a fresh encoder below.
+            if (_currentStreamer == null)
             {
-                if (_currentStreamer == null)
+                var waitUntil = DateTime.UtcNow.AddSeconds(3);
+                while (_currentStreamer == null && DateTime.UtcNow < waitUntil)
                 {
-                    return (false, "No running encoder to promote", null);
+                    try { await Task.Delay(100, cancellationToken); } catch { break; }
                 }
             }
 
@@ -128,7 +131,7 @@ namespace PrintStreamer.Services
             var newKey = res.streamKey;
             var newBroadcastId = res.broadcastId;
 
-            // Restart streamer: cancel current, then start a new one with RTMP+HLS
+            // Restart streamer if one is running: cancel current, then start a new one with RTMP+HLS
             IStreamer? old; CancellationTokenSource? oldCts;
             lock (_streamLock)
             {
@@ -140,10 +143,13 @@ namespace PrintStreamer.Services
 
             try
             {
-                // Stop the old streamer
-                try { oldCts?.Cancel(); } catch { }
-                try { await Task.WhenAny(old?.ExitTask ?? Task.CompletedTask, Task.Delay(5000, cancellationToken)); } catch { }
-                try { old?.Stop(); } catch { }
+                // Stop the old streamer if it exists
+                if (old != null)
+                {
+                    try { oldCts?.Cancel(); } catch { }
+                    try { await Task.WhenAny(old.ExitTask, Task.Delay(5000, cancellationToken)); } catch { }
+                    try { old.Stop(); } catch { }
+                }
             }
             catch { }
 
@@ -176,19 +182,12 @@ namespace PrintStreamer.Services
                 }
 
                 var source = config.GetValue<string>("Stream:Source");
-                var useLocalProxy = config.GetValue<bool?>("Stream:UseLocalProxy") ?? false;
                 var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
-                if (useLocalProxy && serveEnabled)
+                // Always use local proxy when web server is enabled - this ensures overlays work and provides consistency
+                if (serveEnabled)
                 {
                     source = "http://127.0.0.1:8080/stream";
-                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (Stream:UseLocalProxy=true)");
-                }
-                // If camera simulation is active, force the local proxy as the source so the new ffmpeg
-                // streamer will see the server's fallback frames.
-                if (PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled && serveEnabled)
-                {
-                    source = "http://127.0.0.1:8080/stream";
-                    Console.WriteLine("[Stream] Camera simulation active - forcing local proxy as ffmpeg source");
+                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (ensures overlay/simulation support)");
                 }
                 if (string.IsNullOrWhiteSpace(source))
                 {
@@ -775,21 +774,12 @@ namespace PrintStreamer.Services
 
                 // Read source and manual key from config now (Program.cs shouldn't pass them)
                 var source = config.GetValue<string>("Stream:Source");
-                // Optionally prefer the local proxy stream (useful for the overlay to run even when webcam upstream is flaky)
-                var useLocalProxy = config.GetValue<bool?>("Stream:UseLocalProxy") ?? false;
                 var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
-                if (useLocalProxy && serveEnabled)
-                {
-                    // Use local server's /stream endpoint as input for ffmpeg
-                    source = "http://127.0.0.1:8080/stream";
-                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (Stream:UseLocalProxy=true)");
-                }
-                // If camera simulation is active (camera intentionally disabled), force the local proxy as the source
-                // so the ffmpeg process will see the server fallback frames instead of connecting to the real camera.
-                if (PrintStreamer.Services.MoonrakerPoller.WebcamInputDisabled && serveEnabled)
+                // Always use local proxy when web server is enabled - this ensures overlays work and provides consistency
+                if (serveEnabled)
                 {
                     source = "http://127.0.0.1:8080/stream";
-                    Console.WriteLine("[Stream] Camera simulation active - forcing local proxy as ffmpeg source");
+                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (ensures overlay/simulation support)");
                 }
                 var manualKey = config.GetValue<string>("YouTube:Key");
 

@@ -172,11 +172,11 @@ sudo kill -9 <PID>
 ### Want to Learn More?
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) for technical details
 - See [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md) for advanced usage
-- Check [NATIVE_STREAMER.md](NATIVE_STREAMER.md) for frame processing
+
 
 ### Want to Customize?
 - Change video quality: Edit `FfmpegStreamer.cs` encoding args
-- Add overlays: Use native streamer + SixLabors.ImageSharp
+
 - Change port: Edit `Program.cs` line 82: `options.ListenAnyIP(8080)`
 
 ### Want to Deploy?

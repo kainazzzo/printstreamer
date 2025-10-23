@@ -1,0 +1,506 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset='utf-8'/>
+	<title>PrintStreamer - Configuration</title>
+	<style>
+		body{margin:0;font-family:sans-serif;background:#111;color:#eee} 
+		.wrap{padding:20px;max-width:1200px;margin:0 auto} 
+		.section{margin-bottom:30px;background:#222;padding:20px;border-radius:8px}
+		h1{margin:0 0 20px 0}
+		h2{margin:0 0 15px 0;color:#66ccff;border-bottom:1px solid #444;padding-bottom:8px}
+		h3{margin:20px 0 10px 0;color:#88ccdd;font-size:1.1em}
+		.form-group{margin-bottom:20px}
+		label{display:block;margin-bottom:5px;color:#aaa;font-size:0.9em}
+		input[type="text"],
+		input[type="number"],
+		input[type="password"],
+		textarea,
+		select{
+			width:100%;
+			padding:10px;
+			border-radius:4px;
+			border:1px solid #666;
+			background:#333;
+			color:#eee;
+			font-family:monospace;
+			font-size:0.95em;
+			box-sizing:border-box;
+		}
+		input[type="checkbox"]{
+			width:20px;
+			height:20px;
+			margin-right:8px;
+			vertical-align:middle;
+		}
+		textarea{
+			min-height:80px;
+			font-family:monospace;
+			resize:vertical;
+		}
+		.checkbox-group{
+			display:flex;
+			align-items:center;
+			margin-bottom:15px;
+		}
+		.checkbox-group label{
+			margin:0;
+			display:inline;
+		}
+		button{background:#0066cc;color:white;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;margin:5px;font-size:1em}
+		button:hover{background:#0052a3}
+		button.success{background:#009900}
+		button.success:hover{background:#007700}
+		button.danger{background:#cc0000}
+		button.danger:hover{background:#a30000}
+		button:disabled{background:#666;cursor:not-allowed;opacity:0.5}
+		.button-group{display:flex;gap:10px;margin-top:20px}
+		.help-text{font-size:0.85em;color:#999;margin-top:4px;font-style:italic}
+		.nav{margin-bottom:20px;padding:10px 0;border-bottom:1px solid #444}
+		.nav a{color:#66ccff;text-decoration:none;margin-right:20px;font-size:1.1em}
+		.nav a:hover{text-decoration:underline}
+		#toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:10px;max-width:400px}
+		.toast{background:#333;color:#eee;padding:15px 20px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.5);display:flex;align-items:center;gap:10px;animation:slideIn 0.3s ease-out}
+		.toast.success{border-left:4px solid #009900}
+		.toast.error{border-left:4px solid #cc0000}
+		.toast.info{border-left:4px solid #0066cc}
+		@keyframes slideIn{from{transform:translateX(400px);opacity:0}to{transform:translateX(0);opacity:1}}
+		@keyframes slideOut{from{transform:translateX(0);opacity:1}to{transform:translateX(400px);opacity:0}}
+		.grid-2col{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+		@media(max-width:768px){
+			.grid-2col{grid-template-columns:1fr}
+		}
+	</style>
+</head>
+<body>
+	<div class='wrap'>
+		<div class='nav'>
+			<a href='/'>← Back to Control Panel</a>
+		</div>
+		
+		<h1>Configuration</h1>
+		
+		<form id='configForm'>
+			<!-- Stream Settings -->
+			<div class='section'>
+				<h2>Stream Settings</h2>
+				<div class='form-group'>
+					<label for='stream-source'>Source (MJPEG URL)</label>
+					<input type='text' id='stream-source' name='Stream.Source' placeholder='http://192.168.1.2/webcam/?action=stream' required />
+					<div class='help-text'>MJPEG stream URL from your 3D printer camera (ffmpeg will stream from local proxy for overlays/YouTube)</div>
+				</div>
+				
+				<div class='form-group'>
+					<label for='stream-targetfps'>Target FPS</label>
+					<input type='number' id='stream-targetfps' name='Stream.TargetFps' min='1' max='60' value='6' />
+					<div class='help-text'>Target frames per second for YouTube stream</div>
+				</div>
+				
+				<div class='form-group'>
+					<label for='stream-bitratekbps'>Bitrate (Kbps)</label>
+					<input type='number' id='stream-bitratekbps' name='Stream.BitrateKbps' min='100' max='10000' value='800' />
+					<div class='help-text'>Video bitrate in kilobits per second</div>
+				</div>
+				
+				<h3>Local HLS Preview</h3>
+				<div class='checkbox-group'>
+					<input type='checkbox' id='stream-local-enabled' name='Stream.Local.Enabled' />
+					<label for='stream-local-enabled'>Enable Local HLS</label>
+				</div>
+				<div class='help-text'>Generate local HLS stream for preview</div>
+				
+				<div class='form-group'>
+					<label for='stream-local-hlsfolder'>HLS Folder</label>
+					<input type='text' id='stream-local-hlsfolder' name='Stream.Local.HlsFolder' value='hls' />
+					<div class='help-text'>Directory for HLS output files</div>
+				</div>
+			</div>
+			
+			<!-- Moonraker Settings -->
+			<div class='section'>
+				<h2>Moonraker Settings</h2>
+				<div class='form-group'>
+					<label for='moonraker-baseurl'>Base URL</label>
+					<input type='text' id='moonraker-baseurl' name='Moonraker.BaseUrl' placeholder='http://192.168.1.2:7125/' />
+					<div class='help-text'>Moonraker API base URL (leave empty to disable)</div>
+				</div>
+				
+				<div class='form-group'>
+					<label for='moonraker-apikey'>API Key</label>
+					<input type='password' id='moonraker-apikey' name='Moonraker.ApiKey' />
+					<div class='help-text'>Optional API key for Moonraker authentication</div>
+				</div>
+				
+				<div class='form-group'>
+					<label for='moonraker-authheader'>Auth Header</label>
+					<input type='text' id='moonraker-authheader' name='Moonraker.AuthHeader' value='X-Api-Key' />
+					<div class='help-text'>HTTP header name for API key</div>
+				</div>
+			</div>
+			
+			<!-- Overlay Settings -->
+			<div class='section'>
+				<h2>Overlay Settings</h2>
+				<div class='checkbox-group'>
+					<input type='checkbox' id='overlay-enabled' name='Overlay.Enabled' />
+					<label for='overlay-enabled'>Enable Overlay</label>
+				</div>
+				<div class='help-text'>Show printer status overlay on stream</div>
+				
+				<div class='form-group'>
+					<label for='overlay-refreshms'>Refresh Interval (ms)</label>
+					<input type='number' id='overlay-refreshms' name='Overlay.RefreshMs' min='100' max='5000' value='500' />
+					<div class='help-text'>How often to update overlay text</div>
+				</div>
+				
+				<div class='form-group'>
+					<label for='overlay-template'>Template</label>
+					<textarea id='overlay-template' name='Overlay.Template' rows='3'></textarea>
+					<div class='help-text'>Template for overlay text. Available variables: {nozzle}, {bed}, {progress}, {speed}, {flow}, {filament}, {eta}, {layers}</div>
+				</div>
+				
+				<div class='grid-2col'>
+					<div class='form-group'>
+						<label for='overlay-fontfile'>Font File</label>
+						<input type='text' id='overlay-fontfile' name='Overlay.FontFile' value='/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf' />
+					</div>
+					
+					<div class='form-group'>
+						<label for='overlay-fontsize'>Font Size</label>
+						<input type='number' id='overlay-fontsize' name='Overlay.FontSize' min='8' max='72' value='16' />
+					</div>
+				</div>
+				
+				<div class='grid-2col'>
+					<div class='form-group'>
+						<label for='overlay-fontcolor'>Font Color</label>
+						<input type='text' id='overlay-fontcolor' name='Overlay.FontColor' value='white' />
+						<div class='help-text'>Color name or hex (e.g., white, #FFFFFF)</div>
+					</div>
+					
+					<div class='form-group'>
+						<label for='overlay-boxcolor'>Box Color</label>
+						<input type='text' id='overlay-boxcolor' name='Overlay.BoxColor' value='black@0.4' />
+						<div class='help-text'>Background color with opacity (e.g., black@0.4)</div>
+					</div>
+				</div>
+				
+				<div class='grid-2col'>
+					<div class='form-group'>
+						<label for='overlay-x'>X Position</label>
+						<input type='text' id='overlay-x' name='Overlay.X' value='(w-tw)-20' />
+						<div class='help-text'>X coordinate expression (e.g., (w-tw)-20 for right)</div>
+					</div>
+					
+					<div class='form-group'>
+						<label for='overlay-y'>Y Position</label>
+						<input type='text' id='overlay-y' name='Overlay.Y' value='20' />
+						<div class='help-text'>Y coordinate expression or number</div>
+					</div>
+				</div>
+				
+				<div class='checkbox-group'>
+					<input type='checkbox' id='overlay-box' name='Overlay.Box' checked />
+					<label for='overlay-box'>Show Background Box</label>
+				</div>
+				
+				<div class='form-group'>
+					<label for='overlay-boxborderw'>Box Border Width</label>
+					<input type='number' id='overlay-boxborderw' name='Overlay.BoxBorderW' min='0' max='50' value='8' />
+				</div>
+			</div>
+			
+			<!-- YouTube Settings -->
+			<div class='section'>
+				<h2>YouTube Settings</h2>
+				<div class='grid-2col'>
+					<div class='form-group'>
+						<label for='youtube-oauth-clientid'>OAuth Client ID</label>
+						<input type='text' id='youtube-oauth-clientid' name='YouTube.OAuth.ClientId' />
+						<div class='help-text'>Google OAuth 2.0 Client ID</div>
+					</div>
+					
+					<div class='form-group'>
+						<label for='youtube-oauth-clientsecret'>OAuth Client Secret</label>
+						<input type='password' id='youtube-oauth-clientsecret' name='YouTube.OAuth.ClientSecret' />
+						<div class='help-text'>Google OAuth 2.0 Client Secret</div>
+					</div>
+				</div>
+				
+				<h3>Live Broadcast Settings</h3>
+				<div class='checkbox-group'>
+					<input type='checkbox' id='youtube-livebroadcast-enabled' name='YouTube.LiveBroadcast.Enabled' checked />
+					<label for='youtube-livebroadcast-enabled'>Enable Auto-Broadcast Creation</label>
+				</div>
+				<div class='help-text'>Automatically create YouTube broadcasts when streaming</div>
+				
+				<div class='form-group'>
+					<label for='youtube-livebroadcast-title'>Broadcast Title</label>
+					<input type='text' id='youtube-livebroadcast-title' name='YouTube.LiveBroadcast.Title' value='3D Printer Live Stream' />
+				</div>
+				
+				<div class='form-group'>
+					<label for='youtube-livebroadcast-description'>Broadcast Description</label>
+					<textarea id='youtube-livebroadcast-description' name='YouTube.LiveBroadcast.Description' rows='3'></textarea>
+				</div>
+				
+				<div class='grid-2col'>
+					<div class='form-group'>
+						<label for='youtube-livebroadcast-privacy'>Privacy</label>
+						<select id='youtube-livebroadcast-privacy' name='YouTube.LiveBroadcast.Privacy'>
+							<option value='public'>Public</option>
+							<option value='unlisted' selected>Unlisted</option>
+							<option value='private'>Private</option>
+						</select>
+					</div>
+					
+					<div class='form-group'>
+						<label for='youtube-livebroadcast-categoryid'>Category ID</label>
+						<input type='text' id='youtube-livebroadcast-categoryid' name='YouTube.LiveBroadcast.CategoryId' value='28' />
+						<div class='help-text'>YouTube category (28 = Science & Technology)</div>
+					</div>
+				</div>
+				
+				<h3>Playlist Settings</h3>
+				<div class='form-group'>
+					<label for='youtube-playlist-name'>Playlist Name</label>
+					<input type='text' id='youtube-playlist-name' name='YouTube.Playlist.Name' value='PrintStreamer' />
+				</div>
+				
+				<div class='form-group'>
+					<label for='youtube-playlist-privacy'>Playlist Privacy</label>
+					<select id='youtube-playlist-privacy' name='YouTube.Playlist.Privacy'>
+						<option value='public'>Public</option>
+						<option value='unlisted' selected>Unlisted</option>
+						<option value='private'>Private</option>
+					</select>
+				</div>
+				
+				<div class='checkbox-group'>
+					<input type='checkbox' id='youtube-startinserve' name='YouTube.StartInServe' />
+					<label for='youtube-startinserve'>Start Streaming on Server Start</label>
+				</div>
+				<div class='help-text'>Automatically begin YouTube streaming when server starts</div>
+			</div>
+			
+			<!-- Timelapse Settings -->
+			<div class='section'>
+				<h2>Timelapse Settings</h2>
+				<div class='form-group'>
+					<label for='timelapse-mainfolder'>Main Folder</label>
+					<input type='text' id='timelapse-mainfolder' name='Timelapse.MainFolder' value='timelapse' />
+					<div class='help-text'>Directory for storing timelapse frames</div>
+				</div>
+				
+				<div class='form-group'>
+					<label for='timelapse-period'>Capture Period</label>
+					<input type='text' id='timelapse-period' name='Timelapse.Period' value='00:01:00' />
+					<div class='help-text'>Time between captures (format: HH:MM:SS)</div>
+				</div>
+				
+				<div class='checkbox-group'>
+					<input type='checkbox' id='timelapse-upload' name='Timelapse.Upload' checked />
+					<label for='timelapse-upload'>Auto-Upload to YouTube</label>
+				</div>
+				<div class='help-text'>Automatically upload completed timelapses to YouTube</div>
+			</div>
+			
+			<!-- Other Settings -->
+			<div class='section'>
+				<h2>Other Settings</h2>
+				<div class='form-group'>
+					<label for='gcodefolder'>GCode Folder</label>
+					<input type='text' id='gcodefolder' name='GcodeFolder' value='gcode' />
+					<div class='help-text'>Directory for storing GCode files</div>
+				</div>
+				
+				<div class='checkbox-group'>
+					<input type='checkbox' id='serve-enabled' name='Serve.Enabled' checked />
+					<label for='serve-enabled'>Enable Web UI</label>
+				</div>
+				<div class='help-text'>Serve the web control panel</div>
+			</div>
+			
+			<!-- Action Buttons -->
+			<div class='section'>
+				<div class='button-group'>
+					<button type='submit' class='success'>Save Configuration</button>
+					<button type='button' onclick='loadConfig(true)'>Reload</button>
+					<button type='button' class='danger' onclick='resetToDefaults()'>Reset to Defaults</button>
+				</div>
+			</div>
+		</form>
+	</div>
+	
+	<div id='toast-container'></div>
+	
+	<script>
+		// Toast notification system
+		function showToast(message, type = 'info') {
+			const container = document.getElementById('toast-container');
+			const toast = document.createElement('div');
+			toast.className = `toast ${type}`;
+			
+			const icon = type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ';
+			toast.innerHTML = `<span style='font-size:1.2em'>${icon}</span><span>${message}</span>`;
+			
+			container.appendChild(toast);
+			
+			setTimeout(() => {
+				toast.style.animation = 'slideOut 0.3s ease-in forwards';
+				setTimeout(() => toast.remove(), 300);
+			}, 4000);
+		}
+		
+		// Load configuration from server
+		async function loadConfig(showSuccessToast = false) {
+			try {
+				const response = await fetch('/api/config');
+				if (!response.ok) {
+					throw new Error('Failed to load configuration');
+				}
+				const config = await response.json();
+				console.log('Received config from server:', config);
+				populateForm(config);
+				if (showSuccessToast) {
+					showToast('Configuration reloaded', 'success');
+				}
+			} catch (error) {
+				console.error('Error loading configuration:', error);
+				showToast('Error loading configuration: ' + error.message, 'error');
+			}
+		}
+		
+		// Populate form with configuration data
+		function populateForm(config) {
+			console.log('Populating form with config:', config);
+			
+			// Flatten nested config object
+			const flatConfig = flattenObject(config);
+			console.log('Flattened config:', flatConfig);
+			
+			// Set form values
+			for (const [key, value] of Object.entries(flatConfig)) {
+				const input = document.querySelector(`[name="${key}"]`);
+				if (input) {
+					if (input.type === 'checkbox') {
+						input.checked = value === true || value === 'true';
+					} else if (value !== null && value !== undefined) {
+						input.value = value;
+					}
+					console.log(`Set ${key} = ${value}`);
+				} else {
+					console.log(`No input found for ${key}`);
+				}
+			}
+		}
+		
+		// Flatten nested object for form population
+		function flattenObject(obj, prefix = '') {
+			const result = {};
+			for (const key in obj) {
+				const newKey = prefix ? `${prefix}.${key}` : key;
+				if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
+					Object.assign(result, flattenObject(obj[key], newKey));
+				} else {
+					result[newKey] = obj[key];
+				}
+			}
+			return result;
+		}
+		
+		// Unflatten form data to nested object
+		function unflattenObject(flat) {
+			const result = {};
+			for (const key in flat) {
+				const parts = key.split('.');
+				let current = result;
+				for (let i = 0; i < parts.length - 1; i++) {
+					if (!current[parts[i]]) {
+						current[parts[i]] = {};
+					}
+					current = current[parts[i]];
+				}
+				current[parts[parts.length - 1]] = flat[key];
+			}
+			return result;
+		}
+		
+		// Get form data
+		function getFormData() {
+			const formData = new FormData(document.getElementById('configForm'));
+			const data = {};
+			
+			// Get all inputs including checkboxes
+			const inputs = document.querySelectorAll('#configForm input, #configForm select, #configForm textarea');
+			inputs.forEach(input => {
+				if (input.name) {
+					if (input.type === 'checkbox') {
+						data[input.name] = input.checked;
+					} else if (input.type === 'number') {
+						const val = input.value.trim();
+						data[input.name] = val === '' ? null : parseFloat(val);
+					} else {
+						data[input.name] = input.value;
+					}
+				}
+			});
+			
+			return unflattenObject(data);
+		}
+		
+		// Save configuration
+		async function saveConfig(e) {
+			e.preventDefault();
+			
+			try {
+				const config = getFormData();
+				
+				const response = await fetch('/api/config', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify(config)
+				});
+				
+				if (!response.ok) {
+					const error = await response.json();
+					throw new Error(error.error || 'Failed to save configuration');
+				}
+				
+				const result = await response.json();
+				showToast('Configuration saved successfully! Restart may be required for some changes to take effect.', 'success');
+			} catch (error) {
+				showToast('Error saving configuration: ' + error.message, 'error');
+			}
+		}
+		
+		// Reset to defaults
+		async function resetToDefaults() {
+			if (!confirm('Reset all settings to defaults? This cannot be undone.')) {
+				return;
+			}
+			
+			try {
+				const response = await fetch('/api/config/reset', {
+					method: 'POST'
+				});
+				
+				if (!response.ok) {
+					throw new Error('Failed to reset configuration');
+				}
+				
+				await loadConfig();
+				showToast('Configuration reset to defaults', 'success');
+			} catch (error) {
+				showToast('Error resetting configuration: ' + error.message, 'error');
+			}
+		}
+		
+		// Initialize
+		document.getElementById('configForm').addEventListener('submit', saveConfig);
+		loadConfig();
+	</script>
+</body>
+</html>

@@ -1,0 +1,568 @@
+@page "/"
+@rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())
+@inject IJSRuntime JS
+
+<PageTitle>PrintStreamer - Control Panel</PageTitle>
+
+<div class="wrap">
+    <h1>PrintStreamer - Control Panel</h1>
+    
+    <div style="margin-bottom:20px;padding:10px 0;border-bottom:1px solid #444">
+        <NavLink href="/config" style="color:#66ccff;text-decoration:none;font-size:1.1em">⚙️ Configuration</NavLink>
+    </div>
+    
+    <div class="section">
+        <h2>Live Stream Preview</h2>
+        <div class="stream-container" style="display:flex;gap:20px;align-items:flex-start">
+            <div style="flex:1;display:flex;flex-direction:column">
+                <h3 style="margin:6px 0;font-size:1em">Source (raw MJPEG)</h3>
+                <div style="width:100%;background:#000;border:4px solid #333;display:flex;align-items:center;justify-content:center">
+                    <img id="mjpeg" src="/stream" alt="MJPEG stream" style="width:100%;height:auto;max-height:480px;display:block" />
+                </div>
+                <p>Direct stream URL: <a href="/stream" style="color:#66ccff">/stream</a></p>
+                <p>Fallback image: <a href="/fallback_black.jpg" style="color:#66ccff" target="_blank">/fallback_black.jpg</a></p>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column">
+                <h3 style="margin:6px 0;font-size:1em">Preview (with overlay)</h3>
+                <div id="hlsContainer" style="width:100%;background:#000;border:4px solid #333;display:flex;align-items:center;justify-content:center">
+                    <video id="hlsPlayer" autoplay muted playsinline style="width:100%;height:auto;max-height:480px;display:block"></video>
+                </div>
+                <div id="hlsStatus" style="margin-top:8px;color:#66ccff;font-size:0.9em">HLS status: initializing...</div>
+                <p>Local HLS: <a href="/hls/stream.m3u8" style="color:#66ccff">/hls/stream.m3u8</a></p>
+            </div>
+        </div>
+    </div>
+
+    <div style="margin-top:12px">
+        <button id="goLiveBtn" class="success" style="display:@(isLive ? "none" : "inline-block")" @onclick="GoLive" disabled="@(!isStreamPlaying)">Go Live</button>
+        <button id="stopLiveBtn" class="danger" style="display:@(isLive ? "inline-block" : "none")" @onclick="StopLive">Stop Live</button>
+        <button id="cameraToggleBtn" style="margin-left:8px" @onclick="ToggleCamera">@cameraButtonText</button>
+        
+        @if (isLive)
+        {
+            <span id="liveIndicator" style="margin-left:10px;padding:5px 10px;border-radius:4px">
+                <span style="display:inline-block;width:10px;height:10px;background:#f00;border-radius:50%;margin-right:5px;animation:pulse 1.5s infinite"></span>
+                LIVE
+            </span>
+        }
+        
+        @if (!isLive && (streamerRunning || waitingForIngestion))
+        {
+            <span id="waitingIndicator" style="margin-left:10px;padding:5px 10px;border-radius:4px;background:#ffa500;color:#111;font-weight:600">
+                @(waitingForIngestion ? "Waiting for camera / ingestion (will auto-go-live)" : "Preview running (not live)")
+            </span>
+        }
+        
+        @if (!string.IsNullOrEmpty(statusMessage))
+        {
+            <span style="margin-left:10px;color:#66ccff">@statusMessage</span>
+        }
+        
+        @if (!string.IsNullOrEmpty(broadcastId))
+        {
+            <div style="margin-top:10px">
+                <strong>Live URL:</strong> <a href="@($"https://www.youtube.com/watch?v={broadcastId}")" target="_blank" style="color:#66ccff;text-decoration:underline">@($"https://www.youtube.com/watch?v={broadcastId}")</a>
+            </div>
+        }
+    </div>
+
+    <div class="section">
+        <h2>Timelapse Control</h2>
+        <div style="margin-bottom:15px">
+            <button @onclick="RefreshTimelapses">Refresh</button>
+            <button @onclick="DeleteAllTimelapses" class="danger">Delete All</button>
+        </div>
+        <div id="timelapseList">
+            @if (timelapses == null)
+            {
+                <p>Loading timelapses...</p>
+            }
+            else if (timelapses.Count == 0)
+            {
+                <p>No timelapses found.</p>
+            }
+            else
+            {
+                <div class="timelapse-grid">
+                    @foreach (var t in timelapses)
+                    {
+                        <div class="timelapse-item @(t.IsActive ? "active" : "")">
+                            @if (!t.IsActive)
+                            {
+                                <button @onclick="() => DeleteTimelapse(t.Name)" class="delete-btn" title="Delete timelapse">🗑️</button>
+                            }
+                            
+                            <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
+                                <h3 style="margin:0;flex:1;word-wrap:break-word;overflow-wrap:break-word">@t.Name</h3>
+                                @if (!t.IsActive && t.VideoFiles?.Count > 0)
+                                {
+                                    <button @onclick="() => RegenerateTimelapse(t.Name)" class="regenerate-btn" title="Regenerate video" style="flex-shrink:0">🔄</button>
+                                }
+                            </div>
+                            
+                            <div class="status @(t.IsActive ? "active" : "inactive")">@(t.IsActive ? "RECORDING" : "STOPPED")</div>
+                            
+                            <p style="margin:8px 0"><strong>Frames:</strong> @t.FrameCount</p>
+                            <p style="margin:8px 0"><strong>Started:</strong> @t.StartTime.ToLocalTime().ToString("g")</p>
+                            @if (t.LastFrameTime.HasValue)
+                            {
+                                <p style="margin:8px 0"><strong>Last Frame:</strong> @t.LastFrameTime.Value.ToLocalTime().ToString("g")</p>
+                            }
+                            
+                            <div class="timelapse-actions" style="margin-top:15px">
+                                @if (t.IsActive)
+                                {
+                                    <button @onclick="() => StopTimelapse(t.Name)" class="danger">Stop Recording</button>
+                                }
+                                else if (t.FrameCount > 0)
+                                {
+                                    @if (t.VideoFiles?.Count > 0)
+                                    {
+                                        @if (string.IsNullOrEmpty(t.YouTubeUrl))
+                                        {
+                                            <button @onclick="() => UploadTimelapse(t.Name)" disabled="@processingTimelapses.Contains(t.Name)">
+                                                @(processingTimelapses.Contains(t.Name) ? "Uploading..." : "Upload to YouTube")
+                                            </button>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <button @onclick="() => GenerateTimelapse(t.Name)" disabled="@processingTimelapses.Contains(t.Name)">
+                                            @(processingTimelapses.Contains(t.Name) ? "Generating..." : "Generate Video")
+                                        </button>
+                                    }
+                                }
+                                
+                                @if (t.VideoFiles?.Count > 0)
+                                {
+                                    @foreach (var video in t.VideoFiles)
+                                    {
+                                        <a href="@($"/api/timelapses/{Uri.EscapeDataString(t.Name)}/frames/{Uri.EscapeDataString(video)}")" class="video-link" target="_blank">📹 @video</a>
+                                    }
+                                }
+                            </div>
+                            
+                            @if (!string.IsNullOrEmpty(t.YouTubeUrl))
+                            {
+                                <div style="margin-top:10px;padding-top:10px;border-top:1px solid #555">
+                                    <a href="@t.YouTubeUrl" class="video-link" target="_blank" style="font-size:0.9em">🎬 View on YouTube</a>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<div id="toast-container"></div>
+
+@code {
+    private bool _jsReady = false;
+    private List<(string Message, string Type)> _pendingToasts = new();
+    private bool isLive = false;
+    private bool isStreamPlaying = false;
+    private bool streamerRunning = false;
+    private bool waitingForIngestion = false;
+    private string? broadcastId = null;
+    private string? statusMessage = null;
+    private string cameraButtonText = "Toggle Camera (Sim)";
+    private List<TimelapseInfo>? timelapses = null;
+    private HashSet<string> processingTimelapses = new();
+    private Timer? refreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CheckLiveStatus();
+        await RefreshTimelapses();
+        await RefreshCameraState();
+        
+        // Setup periodic refresh
+        refreshTimer = new Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                await CheckLiveStatus();
+                await RefreshTimelapses();
+            });
+            StateHasChanged();
+        }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsReady = true;
+            if (_pendingToasts.Count > 0)
+            {
+                foreach (var (msg, type) in _pendingToasts)
+                {
+                    try { await JS.InvokeVoidAsync("showToast", msg, type); } catch { }
+                }
+                _pendingToasts.Clear();
+            }
+            // Initialize HLS player and MJPEG stream monitoring
+            await JS.InvokeVoidAsync("initializeStreams");
+        }
+    }
+
+    private async Task SafeToast(string message, string type = "info")
+    {
+        if (_jsReady)
+        {
+            try { await JS.InvokeVoidAsync("showToast", message, type); } catch { }
+        }
+        else
+        {
+            _pendingToasts.Add((message, type));
+        }
+    }
+
+    private async Task CheckLiveStatus()
+    {
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.GetFromJsonAsync<LiveStatusResponse>("/api/live/status");
+            if (response != null)
+            {
+                isLive = response.IsLive;
+                broadcastId = response.BroadcastId;
+                streamerRunning = response.StreamerRunning;
+                waitingForIngestion = response.WaitingForIngestion;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to check live status: {ex.Message}");
+        }
+    }
+
+    private async Task GoLive()
+    {
+        statusMessage = "Starting live broadcast...";
+        StateHasChanged();
+        
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.PostAsync("/api/live/start", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                statusMessage = "Live broadcast started!";
+                await CheckLiveStatus();
+                await Task.Delay(5000);
+                statusMessage = null;
+            }
+            else
+            {
+                statusMessage = $"Failed: {result?.Error ?? "unknown"}";
+            }
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+        }
+        
+        StateHasChanged();
+    }
+
+    private async Task StopLive()
+    {
+        statusMessage = "Stopping live broadcast...";
+        StateHasChanged();
+        
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.PostAsync("/api/live/stop", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                statusMessage = "Live broadcast stopped";
+                await CheckLiveStatus();
+                await Task.Delay(5000);
+                statusMessage = null;
+            }
+            else
+            {
+                statusMessage = $"Failed to stop: {result?.Error ?? "unknown"}";
+            }
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+        }
+        
+        StateHasChanged();
+    }
+
+    private async Task ToggleCamera()
+    {
+        try
+        {
+            using var client = new HttpClient();
+            await client.PostAsync("/api/camera/toggle", null);
+            await RefreshCameraState();
+            await JS.InvokeVoidAsync("reloadStreams");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling camera: {ex.Message}");
+        }
+    }
+
+    private async Task RefreshCameraState()
+    {
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.GetFromJsonAsync<CameraStateResponse>("/api/camera");
+            if (response != null)
+            {
+                cameraButtonText = response.Disabled 
+                    ? "Camera: OFF (click to enable)" 
+                    : "Camera: ON (click to disable)";
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to query camera state: {ex.Message}");
+        }
+    }
+
+    private async Task RefreshTimelapses()
+    {
+        try
+        {
+            using var client = new HttpClient();
+            timelapses = await client.GetFromJsonAsync<List<TimelapseInfo>>("/api/timelapses");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load timelapses: {ex.Message}");
+        }
+    }
+
+    private async Task StopTimelapse(string name)
+    {
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.PostAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/stop", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Video created successfully!", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to stop timelapse: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error stopping timelapse: {ex.Message}", "error");
+        }
+    }
+
+    private async Task GenerateTimelapse(string name)
+    {
+        processingTimelapses.Add(name);
+        StateHasChanged();
+        
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.PostAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/generate", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Video generated successfully!", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to generate video: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error generating video: {ex.Message}", "error");
+        }
+        finally
+        {
+            processingTimelapses.Remove(name);
+            StateHasChanged();
+        }
+    }
+
+    private async Task RegenerateTimelapse(string name)
+    {
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.PostAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/generate", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Video regenerated successfully!", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to regenerate video: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error regenerating video: {ex.Message}", "error");
+        }
+    }
+
+    private async Task UploadTimelapse(string name)
+    {
+        processingTimelapses.Add(name);
+        StateHasChanged();
+        
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.PostAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/upload", null);
+            var result = await response.Content.ReadFromJsonAsync<UploadResponse>();
+            
+            if (result?.Success == true)
+            {
+                await SafeToast($"Video uploaded successfully! {result.Url}", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to upload video: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error uploading video: {ex.Message}", "error");
+        }
+        finally
+        {
+            processingTimelapses.Remove(name);
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteTimelapse(string name)
+    {
+        try
+        {
+            using var client = new HttpClient();
+            var response = await client.DeleteAsync($"/api/timelapses/{Uri.EscapeDataString(name)}");
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success == true)
+            {
+                await RefreshTimelapses();
+                await SafeToast("Timelapse deleted successfully", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to delete timelapse: {result?.Error ?? "unknown"}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error deleting timelapse: {ex.Message}", "error");
+        }
+    }
+
+    private async Task DeleteAllTimelapses()
+    {
+        if (timelapses == null) return;
+        
+        var inactiveTimelapses = timelapses.Where(t => !t.IsActive).ToList();
+        if (inactiveTimelapses.Count == 0)
+        {
+            await JS.InvokeVoidAsync("showToast", "No inactive timelapses to delete", "info");
+            return;
+        }
+        
+        int deleted = 0;
+        int failed = 0;
+        
+        foreach (var t in inactiveTimelapses)
+        {
+            try
+            {
+                using var client = new HttpClient();
+                var response = await client.DeleteAsync($"/api/timelapses/{Uri.EscapeDataString(t.Name)}");
+                var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+                
+                if (result?.Success == true)
+                    deleted++;
+                else
+                    failed++;
+            }
+            catch
+            {
+                failed++;
+            }
+        }
+        
+        await RefreshTimelapses();
+        
+        if (failed == 0)
+            await SafeToast($"Successfully deleted {deleted} timelapse(s)", "success");
+        else
+            await SafeToast($"Deleted {deleted} timelapse(s), {failed} failed", "error");
+    }
+
+    public void Dispose()
+    {
+        refreshTimer?.Dispose();
+    }
+
+    // Response models
+    private class LiveStatusResponse
+    {
+        public bool IsLive { get; set; }
+        public string? BroadcastId { get; set; }
+        public bool StreamerRunning { get; set; }
+        public bool WaitingForIngestion { get; set; }
+    }
+
+    private class ApiResponse
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private class UploadResponse : ApiResponse
+    {
+        public string? Url { get; set; }
+    }
+
+    private class CameraStateResponse
+    {
+        public bool Disabled { get; set; }
+    }
+
+    private class TimelapseInfo
+    {
+        public string Name { get; set; } = "";
+        public bool IsActive { get; set; }
+        public int FrameCount { get; set; }
+        public DateTime StartTime { get; set; }
+        public DateTime? LastFrameTime { get; set; }
+        public List<string>? VideoFiles { get; set; }
+        public string? YouTubeUrl { get; set; }
+    }
+}
