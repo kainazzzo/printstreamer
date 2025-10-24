@@ -47,6 +47,10 @@
     private HashSet<string> processingTimelapses = new();
     private Timer? refreshTimer;
     private Timer? _streamStatusTimer;
+    private Timer? _liveStatusTimer;
+    private bool _liveTimerFast = false;
+    private static readonly TimeSpan _liveFastInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan _liveSlowInterval = TimeSpan.FromSeconds(30);
 
     protected override async Task OnInitializedAsync()
     {
@@ -55,12 +59,11 @@
         await RefreshCameraState();
         await RefreshConfigState();
 
-        // Setup periodic refresh
+        // Setup periodic refresh for non-live data (timelapse list)
         refreshTimer = new Timer(async _ =>
         {
             await InvokeAsync(async () =>
     {
-            await CheckLiveStatus();
             await RefreshTimelapses();
             StateHasChanged();
         });
@@ -91,6 +94,16 @@
                 await CheckStreamStatus();
             });
             }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(2));
+
+            // Start adaptive live-status polling so the Live button flips without manual refresh
+            _liveStatusTimer = new Timer(async _ =>
+            {
+                await InvokeAsync(async () =>
+    {
+                    await CheckLiveStatus();
+                });
+            }, null, TimeSpan.FromSeconds(1), _liveSlowInterval);
+            UpdateLiveStatusTimer();
         }
     }
 
@@ -145,6 +158,7 @@
                 broadcastId = response.BroadcastId;
                 streamerRunning = response.StreamerRunning;
                 waitingForIngestion = response.WaitingForIngestion;
+                UpdateLiveStatusTimer();
             }
         }
         catch (HttpRequestException)
@@ -299,6 +313,7 @@
         autoBroadcastEnabled = enabled;
         StateHasChanged();
         await SafeToast($"Auto-broadcast {(enabled ? "enabled" : "disabled")}", "success");
+        await RefreshConfigState();
     }
 
     private async Task OnAutoUploadChanged(bool enabled)
@@ -306,6 +321,7 @@
         autoUploadEnabled = enabled;
         StateHasChanged();
         await SafeToast($"Auto-upload {(enabled ? "enabled" : "disabled")}", "success");
+        await RefreshConfigState();
     }
 
     private async Task RefreshTimelapses()
@@ -514,6 +530,7 @@
     {
         refreshTimer?.Dispose();
         _streamStatusTimer?.Dispose();
+        _liveStatusTimer?.Dispose();
     }
 
     // Response models
@@ -545,5 +562,22 @@
     {
         public bool AutoBroadcastEnabled { get; set; }
         public bool AutoUploadEnabled { get; set; }
+    }
+
+    // Adjust live-status polling frequency: fast while going live, slow when stable
+    private void UpdateLiveStatusTimer()
+    {
+        try
+        {
+            if (_liveStatusTimer == null) return;
+            var needFast = waitingForIngestion || (!isLive && streamerRunning);
+            if (needFast != _liveTimerFast)
+            {
+                _liveTimerFast = needFast;
+                var interval = needFast ? _liveFastInterval : _liveSlowInterval;
+                _liveStatusTimer.Change(TimeSpan.FromMilliseconds(500), interval);
+            }
+        }
+        catch { }
     }
 }

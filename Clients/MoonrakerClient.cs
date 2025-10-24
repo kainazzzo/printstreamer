@@ -24,6 +24,13 @@ internal static class MoonrakerClient
         // Tool temperature for tool 0 (nullable struct to match usage patterns)
         public ToolTemp? Tool0Temp { get; set; }
 
+        // Filament info (if available)
+        public string? FilamentType { get; set; }
+        public string? FilamentColor { get; set; }
+        public string? FilamentBrand { get; set; }
+        public double? FilamentUsedMm { get; set; }
+        public double? FilamentTotalMm { get; set; }
+
         // Sensors and their measurements (friendly name + measurements map)
         public System.Collections.Generic.List<SensorInfo>? Sensors { get; set; }
 
@@ -95,6 +102,13 @@ internal static class MoonrakerClient
                             {
                                 try { info.Remaining = TimeSpan.FromSeconds(remainingSec.Value); } catch { }
                             }
+
+                            // Filament info extraction (common keys: filament_type, filament_color, filament_brand, filament_used_mm, filament_total_mm)
+                            info.FilamentType = infoObj["filament_type"]?.ToString() ?? infoObj["FILAMENT_TYPE"]?.ToString();
+                            info.FilamentColor = infoObj["filament_color"]?.ToString() ?? infoObj["FILAMENT_COLOR"]?.ToString();
+                            info.FilamentBrand = infoObj["filament_brand"]?.ToString() ?? infoObj["FILAMENT_BRAND"]?.ToString();
+                            info.FilamentUsedMm = TryGetDouble(infoObj["filament_used_mm"] ?? infoObj["FILAMENT_USED_MM"]);
+                            info.FilamentTotalMm = TryGetDouble(infoObj["filament_total_mm"] ?? infoObj["FILAMENT_TOTAL_MM"]);
                         }
 
                         // Fallback: if progress percent not provided but layers are, compute approx

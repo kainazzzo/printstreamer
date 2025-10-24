@@ -233,18 +233,29 @@ if (serveEnabled)
 
 	app.MapPost("/api/config/auto-broadcast", (HttpContext ctx) =>
 	{
-		var enabled = ctx.Request.Query["enabled"].ToString() == "true";
+		var raw = ctx.Request.Query["enabled"].ToString();
+		bool enabled;
+		if (!bool.TryParse(raw, out enabled))
+		{
+			// Accept "1"/"0" as well for robustness
+			enabled = raw == "1";
+		}
 		config["YouTube:LiveBroadcast:Enabled"] = enabled.ToString();
 		Console.WriteLine($"Auto-broadcast: {(enabled ? "enabled" : "disabled")}");
-		return Results.Ok();
+		return Results.Json(new { success = true, enabled });
 	});
 
 	app.MapPost("/api/config/auto-upload", (HttpContext ctx) =>
 	{
-		var enabled = ctx.Request.Query["enabled"].ToString() == "true";
+		var raw = ctx.Request.Query["enabled"].ToString();
+		bool enabled;
+		if (!bool.TryParse(raw, out enabled))
+		{
+			enabled = raw == "1";
+		}
 		config["YouTube:TimelapseUpload:Enabled"] = enabled.ToString();
 		Console.WriteLine($"Auto-upload timelapses: {(enabled ? "enabled" : "disabled")}");
-		return Results.Ok();
+		return Results.Json(new { success = true, enabled });
 	});
 
 	// Timelapse API endpoints
@@ -750,9 +761,8 @@ if (serveEnabled)
 				{
 					try
 					{
-						// StartYouTubeStreamAsync will create HLS-only stream when no YouTube broadcast is active
-						// YouTube live broadcast can be started later via /api/live/start endpoint
-						await MoonrakerPoller.StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: true, timelapseProvider: timelapseManager);
+						// Start an HLS-only preview stream. Prevent YouTube broadcast creation from this path.
+						await MoonrakerPoller.StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: true, timelapseProvider: timelapseManager, allowYouTube: false);
 					}
 					catch (Exception ex)
 					{

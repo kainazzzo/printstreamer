@@ -57,7 +57,7 @@ namespace PrintStreamer.Services
                     {
                         try
                         {
-                            await StartYouTubeStreamAsync(config, cts.Token, enableTimelapse: false, timelapseProvider: null);
+                            await StartYouTubeStreamAsync(config, cts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: false);
                         }
                         catch (OperationCanceledException) { }
                         catch (Exception ex)
@@ -427,7 +427,7 @@ namespace PrintStreamer.Services
                             try
                             {
                                 // In polling mode, disable internal timelapse in streaming path to avoid duplicate uploads
-                                await StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: false, timelapseProvider: null);
+                                await StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: true);
                             }
                             catch (Exception ex)
                             {
@@ -793,7 +793,7 @@ namespace PrintStreamer.Services
         }
 
         // Stream helper moved from Program.cs
-        public static async Task StartYouTubeStreamAsync(IConfiguration config, CancellationToken cancellationToken, bool enableTimelapse = true, ITimelapseMetadataProvider? timelapseProvider = null)
+    public static async Task StartYouTubeStreamAsync(IConfiguration config, CancellationToken cancellationToken, bool enableTimelapse = true, ITimelapseMetadataProvider? timelapseProvider = null, bool allowYouTube = true)
         {
             string? rtmpUrl = null;
             string? streamKey = null;
@@ -806,8 +806,25 @@ namespace PrintStreamer.Services
             IStreamer? streamer = null;
             OverlayTextService? overlayService = null;
 
+            // Ensure only ONE streamer is running at any time. If a streamer exists, stop it first.
             try
             {
+                IStreamer? existing;
+                CancellationTokenSource? existingCts;
+                lock (_streamLock)
+                {
+                    existing = _currentStreamer;
+                    existingCts = _currentStreamerCts;
+                    _currentStreamer = null;
+                    _currentStreamerCts = null;
+                }
+                if (existing != null)
+                {
+                    try { existingCts?.Cancel(); } catch { }
+                    try { await Task.WhenAny(existing.ExitTask, Task.Delay(3000, cancellationToken)); } catch { }
+                    try { existing.Stop(); } catch { }
+                }
+
                 var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
                 var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
                 bool hasYouTubeOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
@@ -823,7 +840,7 @@ namespace PrintStreamer.Services
                 }
 
                 // Respect config flag: whether automatic LiveBroadcast creation is enabled
-                var liveBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
+                var liveBroadcastEnabled = allowYouTube && (config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true);
 
                 // Prepare overlay options early so native fallback can reuse them
                 FfmpegOverlayOptions? overlayOptions = null;
@@ -895,6 +912,16 @@ namespace PrintStreamer.Services
                             moonrakerFilename = result.filename;
 
                             Console.WriteLine($"[YouTube] Broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
+                            // Publish broadcast state so UI/status endpoint reflects we're live/going live
+                            try
+                            {
+                                lock (_streamLock)
+                                {
+                                    _currentYouTubeService = ytService;
+                                    _currentBroadcastId = broadcastId;
+                                }
+                            }
+                            catch { }
                             // Dump the LiveBroadcast and LiveStream resources for debugging
                             try
                             {
@@ -1248,6 +1275,14 @@ namespace PrintStreamer.Services
                     catch (Exception ex)
                     {
                         Console.WriteLine($"Failed to end broadcast: {ex.Message}");
+                    }
+                    finally
+                    {
+                        lock (_streamLock)
+                        {
+                            _currentBroadcastId = null;
+                            _currentYouTubeService = null;
+                        }
                     }
                 }
 
