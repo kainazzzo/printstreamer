@@ -939,7 +939,7 @@ internal class YouTubeControlService : IDisposable
                 description = appAttribution;
             }
 
-            // Try to augment the title with the currently printing file name from Moonraker (but do not change description beyond static attribution)
+            // Try to augment the title with the currently printing file name from Moonraker and collect details for description
             try
             {
                 // Allow explicit Moonraker base URL in config (e.g. http://192.168.1.117:7125/)
@@ -970,6 +970,32 @@ internal class YouTubeControlService : IDisposable
                         if (!string.IsNullOrWhiteSpace(cleanFilename))
                         {
                             title = $"{title} - {cleanFilename}";
+                        }
+                    }
+
+                    // Append details (temps + filament) into the description, if available
+                    if (info != null)
+                    {
+                        var detailsList = new System.Collections.Generic.List<string>();
+                        if (info.BedTempActual.HasValue || info.BedTempTarget.HasValue)
+                            detailsList.Add($"Bed: {info.BedTempActual?.ToString("F1") ?? "n/a"}°C / {info.BedTempTarget?.ToString("F1") ?? "n/a"}°C");
+                        if (info.Tool0Temp.HasValue)
+                        {
+                            var t = info.Tool0Temp.Value;
+                            detailsList.Add($"Nozzle: {t.Actual?.ToString("F1") ?? "n/a"}°C / {t.Target?.ToString("F1") ?? "n/a"}°C");
+                        }
+                        if (!string.IsNullOrWhiteSpace(info.FilamentType) || !string.IsNullOrWhiteSpace(info.FilamentColor) || !string.IsNullOrWhiteSpace(info.FilamentBrand))
+                        {
+                            var fil = $"Filament: {info.FilamentBrand ?? ""} {info.FilamentType ?? ""} {info.FilamentColor ?? ""}".Trim();
+                            detailsList.Add(fil);
+                        }
+                        if (info.FilamentUsedMm.HasValue || info.FilamentTotalMm.HasValue)
+                        {
+                            detailsList.Add($"Filament Used: {info.FilamentUsedMm?.ToString("F0") ?? "n/a"}mm / {info.FilamentTotalMm?.ToString("F0") ?? "n/a"}mm");
+                        }
+                        if (detailsList.Count > 0)
+                        {
+                            description += "\n\n" + string.Join("\n", detailsList);
                         }
                     }
                 }

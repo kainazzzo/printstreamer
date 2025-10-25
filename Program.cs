@@ -595,6 +595,11 @@ if (serveEnabled)
 				Serve = new
 				{
 					Enabled = config.GetValue<bool?>("Serve:Enabled") ?? true
+				},
+				PrinterUI = new
+				{
+					MainsailUrl = config.GetValue<string>("PrinterUI:MainsailUrl") ?? "http://192.168.1.117/mainsail",
+					FluiddUrl = config.GetValue<string>("PrinterUI:FluiddUrl") ?? "http://192.168.1.117/fluid"
 				}
 			};
 			return Results.Json(currentConfig);

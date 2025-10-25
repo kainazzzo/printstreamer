@@ -57,6 +57,14 @@ namespace PrintStreamer.Services
 
         public async Task HandleStreamRequest(HttpContext ctx)
         {
+            // Support one-shot snapshot via /stream?action=snapshot
+            var action = ctx.Request.Query["action"].ToString();
+            if (string.Equals(action, "snapshot", StringComparison.OrdinalIgnoreCase))
+            {
+                await HandleSnapshotRequest(ctx);
+                return;
+            }
+
             var clientId = Guid.NewGuid();
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
             _activeClients[clientId] = linkedCts;
@@ -109,6 +117,126 @@ namespace PrintStreamer.Services
             }
         }
 
+        private async Task HandleSnapshotRequest(HttpContext ctx)
+        {
+            try
+            {
+                var source = _config.GetValue<string>("Stream:Source");
+
+                // If disabled, return the fallback black JPEG immediately
+                if (_disabled)
+                {
+                    await WriteJpegAsync(ctx, _blackJpeg);
+                    return;
+                }
+
+                // 1) Try upstream snapshot endpoint if available by swapping/adding action=snapshot
+                if (Uri.TryCreate(source, UriKind.Absolute, out var srcUri))
+                {
+                    var ub = new UriBuilder(srcUri);
+                    var query = System.Web.HttpUtility.ParseQueryString(ub.Query);
+                    // Prefer explicit snapshot action
+                    query.Set("action", "snapshot");
+                    ub.Query = query.ToString();
+                    var snapshotUrl = ub.Uri;
+
+                    try
+                    {
+                        using var req = new HttpRequestMessage(HttpMethod.Get, snapshotUrl);
+                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        using var resp = await _httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                        if (resp.IsSuccessStatusCode)
+                        {
+                            var ct = resp.Content.Headers.ContentType?.MediaType ?? "image/jpeg";
+                            if (ct.Contains("jpeg") || ct.Contains("jpg") || ct.Contains("image"))
+                            {
+                                var bytes = await resp.Content.ReadAsByteArrayAsync();
+                                await WriteJpegAsync(ctx, bytes);
+                                return;
+                            }
+                        }
+                    }
+                    catch { /* fall through to MJPEG parse */ }
+                }
+
+                // 2) Fallback: open MJPEG stream and extract first JPEG frame by SOI/EOI markers
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Get, source);
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                    using var resp = await _httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                    resp.EnsureSuccessStatusCode();
+
+                    using var s = await resp.Content.ReadAsStreamAsync(cts.Token);
+                    var frame = await ReadSingleJpegFromStreamAsync(s, cts.Token);
+                    if (frame != null)
+                    {
+                        await WriteJpegAsync(ctx, frame);
+                        return;
+                    }
+                }
+                catch { /* ignored */ }
+
+                // 3) Final fallback: return black JPEG
+                await WriteJpegAsync(ctx, _blackJpeg);
+            }
+            catch
+            {
+                if (!ctx.Response.HasStarted)
+                {
+                    ctx.Response.StatusCode = 500;
+                }
+            }
+        }
+
+        private static async Task WriteJpegAsync(HttpContext ctx, byte[] bytes)
+        {
+            ctx.Response.StatusCode = 200;
+            ctx.Response.ContentType = "image/jpeg";
+            ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+            ctx.Response.Headers["Pragma"] = "no-cache";
+            await ctx.Response.Body.WriteAsync(bytes, 0, bytes.Length);
+        }
+
+        private static async Task<byte[]?> ReadSingleJpegFromStreamAsync(Stream stream, CancellationToken ct)
+        {
+            // Read chunks until we find a full JPEG bounded by SOI (FFD8) and EOI (FFD9)
+            var buffer = new byte[64 * 1024];
+            using var ms = new MemoryStream();
+            int bytesRead;
+            var foundSoi = false;
+            int prev = -1;
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+            {
+                for (int i = 0; i < bytesRead; i++)
+                {
+                    var b = buffer[i];
+                    // Check for SOI marker 0xFF 0xD8
+                    if (!foundSoi && prev == 0xFF && b == 0xD8)
+                    {
+                        foundSoi = true;
+                        ms.SetLength(0);
+                        ms.WriteByte(0xFF);
+                        ms.WriteByte(0xD8);
+                        prev = -1;
+                        continue;
+                    }
+
+                    if (foundSoi)
+                    {
+                        ms.WriteByte(b);
+                        // Check for EOI marker 0xFF 0xD9
+                        if (prev == 0xFF && b == 0xD9)
+                        {
+                            return ms.ToArray();
+                        }
+                    }
+
+                    prev = b;
+                }
+            }
+            return null;
+        }
         private async Task ServeBlackFallback(HttpContext ctx, bool probeUpstream = false)
         {
             try

@@ -64,16 +64,26 @@
     
     @if (Timelapse.VideoFiles?.Count > 0)
     {
-        <div class="card-links">
-            @foreach (var video in Timelapse.VideoFiles)
-            {
-                <a href="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(video)}")" 
-                   class="video-link" 
-                   target="_blank">
-                    📹 @video
-                </a>
-            }
+        <div class="card-video">
+            <video controls preload="metadata" class="mini-player">
+                <source src="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(Timelapse.VideoFiles[0])}")" type="video/mp4">
+                Your browser does not support the video tag.
+            </video>
         </div>
+        
+        @if (Timelapse.VideoFiles.Count > 1)
+        {
+            <div class="card-links">
+                @foreach (var video in Timelapse.VideoFiles)
+                {
+                    <a href="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(video)}")" 
+                       class="video-link" 
+                       target="_blank">
+                        📹 @video
+                    </a>
+                }
+            </div>
+        }
     }
     
     @if (!string.IsNullOrEmpty(Timelapse.YouTubeUrl))
@@ -237,6 +247,18 @@
     
     .btn-block {
         width: 100%;
+    }
+    
+    .card-video {
+        padding-top: 8px;
+        border-top: 1px solid #3a3a3a;
+    }
+    
+    .mini-player {
+        width: 100%;
+        border-radius: 4px;
+        background: #000;
+        max-height: 300px;
     }
     
     .card-links {

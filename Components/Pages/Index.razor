@@ -10,22 +10,38 @@
 
     <div style="margin-bottom:20px;padding:10px 0;border-bottom:1px solid #444">
         <NavLink href="/config" style="color:#66ccff;text-decoration:none;font-size:1.1em">⚙️ Configuration</NavLink>
-        <NavLink href="/timelapses" style="color:#66ccff;text-decoration:none;font-size:1.1em">🖼️ Manage Timelapses</NavLink>
+        <NavLink href="/timelapses" style="color:#66ccff;text-decoration:none;font-size:1.1em;margin-left:12px">🖼️ Manage Timelapses</NavLink>
+        <NavLink href="/console" style="color:#66ccff;text-decoration:none;font-size:1.1em;margin-left:12px">💻 Console</NavLink>
     </div>
     <div style="margin-top:20px">
 
     </div>
+
+        <StreamControlPanel IsLive="@isLive" IsStreamPlaying="@isStreamPlaying" IsGoingLive="@isGoingLive"
+        StreamerRunning="@streamerRunning" WaitingForIngestion="@waitingForIngestion" CameraEnabled="@(!cameraDisabled)"
+        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" BroadcastId="@broadcastId"
+        StatusMessage="@statusMessage" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
+        OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" />
 
     <StreamContainer>
         <MjpegFeed />
         <HlsFeed />
     </StreamContainer>
 
-    <StreamControlPanel IsLive="@isLive" IsStreamPlaying="@isStreamPlaying" IsGoingLive="@isGoingLive"
-        StreamerRunning="@streamerRunning" WaitingForIngestion="@waitingForIngestion" CameraEnabled="@(!cameraDisabled)"
-        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" BroadcastId="@broadcastId"
-        StatusMessage="@statusMessage" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
-        OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" />
+    @if (!string.IsNullOrWhiteSpace(broadcastId))
+    {
+        <div style="margin-top:20px">
+            <h2 style="margin-bottom:10px">YouTube Live Stream</h2>
+            <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:100%;background:#000;border-radius:8px">
+                <iframe 
+                    src="https://www.youtube.com/embed/@broadcastId?autoplay=0&modestbranding=1" 
+                    style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowfullscreen>
+                </iframe>
+            </div>
+        </div>
+    }
 </div>
 
 <div id="toast-container"></div>
@@ -49,7 +65,7 @@
     private Timer? _streamStatusTimer;
     private Timer? _liveStatusTimer;
     private bool _liveTimerFast = false;
-    private static readonly TimeSpan _liveFastInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan _liveFastInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan _liveSlowInterval = TimeSpan.FromSeconds(30);
 
     protected override async Task OnInitializedAsync()
@@ -169,9 +185,9 @@
         {
             // Silently ignore cancellation (happens during shutdown)
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Failed to check live status: {ex.Message}");
+            // Silently ignore errors during live status check
         }
     }
 
@@ -251,9 +267,9 @@
             await RefreshCameraState();
             await SafeJsCall("reloadStreams");
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Error toggling camera: {ex.Message}");
+            // Silently ignore camera toggle errors
         }
     }
 
@@ -276,9 +292,9 @@
         {
             // Silently ignore cancellation (happens during shutdown)
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Failed to query camera state: {ex.Message}");
+            // Silently ignore camera state query errors
         }
     }
 
@@ -302,9 +318,9 @@
         {
             // Silently ignore cancellation (happens during shutdown)
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Failed to query config state: {ex.Message}");
+            // Silently ignore config state query errors
         }
     }
 
@@ -339,9 +355,9 @@
         {
             // Silently ignore cancellation (happens during shutdown)
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Failed to load timelapses: {ex.Message}");
+            // Silently ignore timelapse load errors
         }
     }
 

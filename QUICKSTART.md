@@ -130,6 +130,31 @@ SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}
 
 These lines let the printer update `print_stats` (accessible at `/printer/objects/query?print_stats`) with the current and total layer counts so PrintStreamer can track progress without downloading G-code files.
 
+### Filament details in YouTube descriptions
+To include filament brand/type/color and used/total length in your live/timelapse descriptions, configure your slicer (OrcaSlicer/PrusaSlicer) to emit additional `SET_PRINT_STATS_INFO` lines so Moonraker exposes them under `print_stats.info`. Add the following to your slicer:
+
+- In "machine start" G-code (start of print):
+
+```
+SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count] \
+  FILAMENT_TYPE=[filament_type] \
+  FILAMENT_BRAND=[filament_vendor] \
+  FILAMENT_COLOR=[filament_colour] \
+  FILAMENT_TOTAL_MM=[filament_total]
+```
+
+- In "before layer change" (or layer change script):
+
+```
+SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1} FILAMENT_USED_MM=[filament_used]
+```
+
+Notes:
+- Variable names come from OrcaSlicer/PrusaSlicer. If your profile uses `filament_brand` instead of `filament_vendor`, substitute accordingly.
+- For multi-material prints, use indexed variables (e.g., `[filament_type[0]]`) or pick the active tool’s index.
+- PrintStreamer reads both lowercase and uppercase keys (e.g., `filament_color` or `FILAMENT_COLOR`). The examples above match what the app expects.
+- If you don’t emit these lines, Moonraker’s `print_stats.info` won’t contain filament details and the description will omit them.
+
 
 ### Problem: "Error: Stream:Source is required"
 **Fix**: Pass the source as a runtime switch:
