@@ -1,9 +1,10 @@
-# printstreamer
+# PrintStreamer
 
 Stream your 3D printer webcam to YouTube Live with automated broadcast creation and MJPEG proxy server.
 
 This application runs a small web UI and a background poller by default. Configure behavior at runtime using configuration keys (appsettings.json, environment variables, or command-line arguments).
 
+![PrintStreamer](image.png)
 
  By default the web UI (proxy) is served on port 8080 and the poller runs as a hosted background service.
  Control YouTube behavior with YouTube:OAuth (OAuth credentials) or YouTube:Key (manual stream key).
