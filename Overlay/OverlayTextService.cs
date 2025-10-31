@@ -16,6 +16,7 @@ public sealed class OverlayTextService : IDisposable
     private readonly string _template;
     private readonly TimeSpan _interval;
     private readonly string _textFilePath;
+    private readonly string _textFileDir;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loopTask;
     // Optional provider to get cached timelapse metadata (filename -> session data)
@@ -39,9 +40,10 @@ public sealed class OverlayTextService : IDisposable
         if (refreshMs < 200) refreshMs = 200;
         _interval = TimeSpan.FromMilliseconds(refreshMs);
 
-        var workDir = Path.Combine(Directory.GetCurrentDirectory(), "overlay");
-        Directory.CreateDirectory(workDir);
-        _textFilePath = Path.Combine(workDir, "overlay.txt");
+    // Fix the path to a stable absolute location based on construction-time CWD
+    _textFileDir = Path.Combine(Directory.GetCurrentDirectory(), "overlay");
+    Directory.CreateDirectory(_textFileDir);
+    _textFilePath = Path.Combine(_textFileDir, "overlay.txt");
     }
 
     public void Start()
@@ -53,7 +55,7 @@ public sealed class OverlayTextService : IDisposable
     private async Task RunAsync(CancellationToken ct)
     {
         // Ensure file exists with placeholder
-        try { await SafeWriteAsync(Render(new OverlayData()), ct); } catch { }
+    try { await SafeWriteAsync(Render(new OverlayData()), ct); } catch { }
 
         while (!ct.IsCancellationRequested)
         {
@@ -407,11 +409,16 @@ public sealed class OverlayTextService : IDisposable
         return s.Replace("\r", string.Empty);
     }
 
-    private static async Task SafeWriteAsync(string content, CancellationToken ct)
+    private async Task SafeWriteAsync(string content, CancellationToken ct)
     {
-        var dir = Path.Combine(Directory.GetCurrentDirectory(), "overlay");
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, "overlay.txt");
+        // Always write to the same absolute file path computed at construction time
+        try
+        {
+            Directory.CreateDirectory(_textFileDir);
+        }
+        catch { }
+
+        var path = _textFilePath;
         var tmp = path + ".tmp";
         await File.WriteAllTextAsync(tmp, content, Encoding.UTF8, ct);
         File.Move(tmp, path, overwrite: true);

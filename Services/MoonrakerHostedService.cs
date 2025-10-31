@@ -2,21 +2,19 @@ namespace PrintStreamer.Services
 {
     public class MoonrakerHostedService : IHostedService, IDisposable
     {
-        private readonly IConfiguration _config;
+        private readonly MoonrakerPollerService _pollerService;
         private readonly ILogger<MoonrakerHostedService> _logger;
         private Task? _executingTask;
         private CancellationTokenSource? _cts;
 
-        public MoonrakerHostedService(IConfiguration config, ILogger<MoonrakerHostedService> logger)
+        public MoonrakerHostedService(MoonrakerPollerService pollerService, ILogger<MoonrakerHostedService> logger)
         {
-            _config = config ?? throw new ArgumentNullException(nameof(config));
+            _pollerService = pollerService ?? throw new ArgumentNullException(nameof(pollerService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         public Task StartAsync(CancellationToken cancellationToken)
         {
-            // Always start the poller as part of the host lifecycle. The app now always polls Moonraker
-            // and serves the UI (serving can be disabled via Serve:Enabled).
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var token = _cts.Token;
             _executingTask = Task.Run(async () =>
@@ -24,7 +22,7 @@ namespace PrintStreamer.Services
                 try
                 {
                     _logger.LogInformation("MoonrakerHostedService starting poller");
-                    await MoonrakerPoller.PollAndStreamJobsAsync(_config, token);
+                    await _pollerService.StartPollingAsync(token);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -36,7 +34,6 @@ namespace PrintStreamer.Services
                 }
             }, token);
 
-            // don't block StartAsync; return completed
             return Task.CompletedTask;
         }
 

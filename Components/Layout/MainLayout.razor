@@ -1,3 +1,5 @@
+
+@using printstreamer.Components.Shared
 @inherits LayoutComponentBase
 
 <PageTitle>PrintStreamer</PageTitle>
@@ -11,13 +13,23 @@
     .nav a.active { color: #fff; font-weight: bold; background: rgba(102,204,255,0.04); }
 </style>
 
+
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
 <div class="wrap">
     <div class="nav">
         <NavLink href="/">Control Panel</NavLink>
-    <NavLink href="/config">Configuration</NavLink>
-    <NavLink href="/console">Console</NavLink>
-    <NavLink href="/timelapses">Timelapses</NavLink>
+        <NavLink href="/config">Configuration</NavLink>
+        <NavLink href="/console">Console</NavLink>
+        <NavLink href="/timelapses">Timelapses</NavLink>
     </div>
-    
+
+    <PrinterUiIframes @rendermode="@(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())" />
+
     @Body
 </div>
+
+@code {
+    // The persistent iframe stack is now in a child component for clarity
+}

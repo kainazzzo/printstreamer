@@ -82,8 +82,10 @@ if (!File.Exists(fallbackImagePath))
 // Register application services
 webBuilder.Services.AddSingleton<TimelapseManager>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.WebCamManager>();
+webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamService>();
+webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamOrchestrator>();
+webBuilder.Services.AddSingleton<PrintStreamer.Services.MoonrakerPollerService>();
 webBuilder.Services.AddHostedService<PrintStreamer.Services.MoonrakerHostedService>();
-// YouTubeControlService and other services are created on-demand inside poller/start methods
 
 // Add Blazor Server services
 webBuilder.Services.AddRazorComponents()
@@ -143,6 +145,8 @@ app.UseAntiforgery();
 
 if (serveEnabled)
 {
+	// Enable WebSocket support (required for Mainsail/Fluidd)
+	app.UseWebSockets();
 	// Start ASP.NET Core minimal server to proxy the MJPEG source to clients on /stream
 	if (string.IsNullOrWhiteSpace(source))
 	{
@@ -193,35 +197,235 @@ if (serveEnabled)
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-	app.MapPost("/api/camera/on", (HttpContext ctx) =>
+	app.MapPost("/api/camera/on", async (HttpContext ctx) =>
 	{
 		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
+		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
 		webcamManager.SetDisabled(false);
 		Console.WriteLine("Camera simulation: enabled (camera on)");
-		// Restart streamer so ffmpeg picks up the new upstream availability
-		try { PrintStreamer.Services.MoonrakerPoller.RestartCurrentStreamerWithConfig(config); } catch { }
+		// Restart stream if one is active so ffmpeg picks up the new upstream availability
+		if (streamService.IsStreaming)
+		{
+			try
+			{
+				await streamService.StopStreamAsync();
+				await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Failed to restart stream: {ex.Message}");
+			}
+		}
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-	app.MapPost("/api/camera/off", (HttpContext ctx) =>
+	app.MapPost("/api/camera/off", async (HttpContext ctx) =>
 	{
 		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
+		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
 		webcamManager.SetDisabled(true);
 		Console.WriteLine("Camera simulation: disabled (camera off)");
-		// Restart streamer so ffmpeg will read from the local proxy and therefore see the fallback frames
-		try { PrintStreamer.Services.MoonrakerPoller.RestartCurrentStreamerWithConfig(config); } catch { }
+		// Restart stream if one is active so ffmpeg will read from the local proxy and therefore see the fallback frames
+		if (streamService.IsStreaming)
+		{
+			try
+			{
+				await streamService.StopStreamAsync();
+				await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Failed to restart stream: {ex.Message}");
+			}
+		}
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-	app.MapPost("/api/camera/toggle", (HttpContext ctx) =>
+	app.MapPost("/api/camera/toggle", async (HttpContext ctx) =>
 	{
 		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
+		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
 		webcamManager.Toggle();
 		var newVal = webcamManager.IsDisabled;
 		Console.WriteLine($"Camera simulation: toggled -> disabled={newVal}");
-		try { PrintStreamer.Services.MoonrakerPoller.RestartCurrentStreamerWithConfig(config); } catch { }
+		// Restart stream if one is active
+		if (streamService.IsStreaming)
+		{
+			try
+			{
+				await streamService.StopStreamAsync();
+				await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Failed to restart stream: {ex.Message}");
+			}
+		}
 		return Results.Json(new { disabled = newVal });
 	});
+
+	// Reverse proxy for Mainsail/Fluidd to bypass X-Frame-Options and same-origin issues
+	app.MapGet("/proxy/mainsail/{**path}", async (HttpContext ctx, string? path) =>
+	{
+		var target = config.GetValue<string>("PrinterUI:MainsailUrl");
+		Console.WriteLine($"[Proxy] GET /proxy/mainsail/{path ?? ""} -> target={target ?? "NOT CONFIGURED"}");
+		if (string.IsNullOrWhiteSpace(target))
+		{
+			ctx.Response.StatusCode = 404;
+			await ctx.Response.WriteAsync("Mainsail URL not configured");
+			return;
+		}
+		await ProxyUtil.ProxyRequest(ctx, target, path ?? "");
+	});
+
+	app.MapGet("/proxy/fluidd/{**path}", async (HttpContext ctx, string? path) =>
+	{
+		var target = config.GetValue<string>("PrinterUI:FluiddUrl");
+		Console.WriteLine($"[Proxy] GET /proxy/fluidd/{path ?? ""} -> target={target ?? "NOT CONFIGURED"}");
+		if (string.IsNullOrWhiteSpace(target))
+		{
+			ctx.Response.StatusCode = 404;
+			await ctx.Response.WriteAsync("Fluidd URL not configured");
+			return;
+		}
+		await ProxyUtil.ProxyRequest(ctx, target, path ?? "");
+	});
+
+	// Also handle root without trailing catch-all
+	app.MapGet("/proxy/mainsail", async (HttpContext ctx) =>
+	{
+		var target = config.GetValue<string>("PrinterUI:MainsailUrl");
+		if (string.IsNullOrWhiteSpace(target)) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("Mainsail URL not configured"); return; }
+		Console.WriteLine($"[Proxy] GET /proxy/mainsail -> {target}");
+		await ProxyUtil.ProxyRequest(ctx, target, "");
+	});
+
+	app.MapGet("/proxy/fluidd", async (HttpContext ctx) =>
+	{
+		var target = config.GetValue<string>("PrinterUI:FluiddUrl");
+		if (string.IsNullOrWhiteSpace(target)) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("Fluidd URL not configured"); return; }
+		Console.WriteLine($"[Proxy] GET /proxy/fluidd -> {target}");
+		await ProxyUtil.ProxyRequest(ctx, target, "");
+	});
+
+	// Support absolute-root asset paths emitted by the apps (e.g., /mainsail/assets/...)
+	app.MapMethods("/mainsail/{**path}", new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, async (HttpContext ctx, string? path) =>
+	{
+		var target = config.GetValue<string>("PrinterUI:MainsailUrl");
+		Console.WriteLine($"[Proxy] {ctx.Request.Method} /mainsail/{path ?? ""} -> target={target ?? "NOT CONFIGURED"}");
+		if (string.IsNullOrWhiteSpace(target)) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("Mainsail URL not configured"); return; }
+		await ProxyUtil.ProxyRequest(ctx, target, path ?? "");
+	});
+
+	app.MapMethods("/fluidd/{**path}", new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, async (HttpContext ctx, string? path) =>
+	{
+		var target = config.GetValue<string>("PrinterUI:FluiddUrl");
+		if (string.IsNullOrWhiteSpace(target)) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("Fluidd URL not configured"); return; }
+		await ProxyUtil.ProxyRequest(ctx, target, path ?? "");
+	});
+
+	// Same-origin Moonraker HTTP proxy endpoints + WebSocket tunnel
+	string? moonrakerBase = config.GetValue<string>("Moonraker:BaseUrl");
+	if (!string.IsNullOrWhiteSpace(moonrakerBase))
+	{
+		var httpMethods = new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" };
+		app.MapMethods("/printer/{**path}", httpMethods, async (HttpContext ctx, string? path) =>
+		{
+			await ProxyUtil.ProxyRequest(ctx, moonrakerBase!, "printer/" + (path ?? string.Empty));
+		});
+		app.MapMethods("/api/{**path}", httpMethods, async (HttpContext ctx, string? path) =>
+		{
+			await ProxyUtil.ProxyRequest(ctx, moonrakerBase!, "api/" + (path ?? string.Empty));
+		});
+		app.MapMethods("/server/{**path}", httpMethods, async (HttpContext ctx, string? path) =>
+		{
+			await ProxyUtil.ProxyRequest(ctx, moonrakerBase!, "server/" + (path ?? string.Empty));
+		});
+		app.MapMethods("/machine/{**path}", httpMethods, async (HttpContext ctx, string? path) =>
+		{
+			await ProxyUtil.ProxyRequest(ctx, moonrakerBase!, "machine/" + (path ?? string.Empty));
+		});
+		app.MapMethods("/access/{**path}", httpMethods, async (HttpContext ctx, string? path) =>
+		{
+			await ProxyUtil.ProxyRequest(ctx, moonrakerBase!, "access/" + (path ?? string.Empty));
+		});
+
+		// WebSocket tunnel for Moonraker at /websocket
+		app.Map("/websocket", async (HttpContext ctx) =>
+		{
+			if (!ctx.WebSockets.IsWebSocketRequest)
+			{
+				ctx.Response.StatusCode = 400;
+				await ctx.Response.WriteAsync("Expected WebSocket request");
+				return;
+			}
+
+			// Build upstream ws(s):// URL from configured Moonraker:BaseUrl and preserve query (e.g., token=...)
+			var ub = new UriBuilder(moonrakerBase!);
+			if (string.Equals(ub.Scheme, "http", StringComparison.OrdinalIgnoreCase)) ub.Scheme = "ws";
+			else if (string.Equals(ub.Scheme, "https", StringComparison.OrdinalIgnoreCase)) ub.Scheme = "wss";
+			ub.Path = ub.Path.TrimEnd('/') + "/websocket";
+			// Carry through query string (tokens etc.)
+			var qs = ctx.Request.QueryString.HasValue ? ctx.Request.QueryString.Value : null;
+			if (!string.IsNullOrEmpty(qs)) ub.Query = qs!.TrimStart('?');
+			var upstreamUri = ub.Uri;
+
+			using var upstream = new System.Net.WebSockets.ClientWebSocket();
+			upstream.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+			// Propagate selected headers (auth, cookies, origin). Skip WS handshake headers.
+			string[] skipHeaders = new[]
+			{
+				"Connection","Upgrade","Sec-WebSocket-Key","Sec-WebSocket-Version","Sec-WebSocket-Extensions","Sec-WebSocket-Protocol","Host"
+			};
+			foreach (var h in ctx.Request.Headers)
+			{
+				if (Array.Exists(skipHeaders, k => k.Equals(h.Key, StringComparison.OrdinalIgnoreCase)))
+					continue;
+				try { upstream.Options.SetRequestHeader(h.Key, h.Value); } catch { }
+			}
+			// Add subprotocols properly (if any requested by client)
+			if (ctx.Request.Headers.TryGetValue("Sec-WebSocket-Protocol", out var protocols))
+			{
+				foreach (var proto in protocols)
+				{
+					if (proto == null) continue;
+					foreach (var p in proto.Split(',', StringSplitOptions.RemoveEmptyEntries))
+					{
+						var trimmed = p.Trim();
+						if (!string.IsNullOrEmpty(trimmed))
+						{
+							try { upstream.Options.AddSubProtocol(trimmed); } catch { }
+						}
+					}
+				}
+			}
+
+			Console.WriteLine($"[WS Proxy] Connecting upstream {upstreamUri} (Origin={ctx.Request.Headers["Origin"]})");
+			try
+			{
+				await upstream.ConnectAsync(upstreamUri, ctx.RequestAborted);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"[WS Proxy] Upstream connect failed: {ex.Message} [{upstreamUri}]");
+				// Do NOT accept the downstream socket if upstream failed; return 502 instead
+				ctx.Response.StatusCode = 502;
+				await ctx.Response.WriteAsync("Upstream websocket connect failed");
+				return;
+			}
+
+			// Only accept downstream after upstream is connected to avoid starting the response prematurely
+			Console.WriteLine("[WS Proxy] Upstream connected, accepting downstream...");
+			using var downstream = await ctx.WebSockets.AcceptWebSocketAsync();
+
+			var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+			var pump1 = ProxyUtil.PumpWebSocket(downstream, upstream, cts.Token);
+			var pump2 = ProxyUtil.PumpWebSocket(upstream, downstream, cts.Token);
+			await Task.WhenAny(pump1, pump2);
+			cts.Cancel();
+			Console.WriteLine("[WS Proxy] Tunnel closed");
+		});
+	}
 
 	// Config API endpoints (lightweight state)
 	app.MapGet("/api/config/state", (HttpContext ctx) =>
@@ -270,7 +474,8 @@ if (serveEnabled)
 	{
 		try
 		{
-			var (ok, message, broadcastId) = await MoonrakerPoller.StartBroadcastAsync(config, ctx.RequestAborted);
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			var (ok, message, broadcastId) = await orchestrator.StartBroadcastAsync(ctx.RequestAborted);
 			if (ok) return Results.Json(new { success = true, broadcastId });
 			return Results.Json(new { success = false, error = message });
 		}
@@ -284,15 +489,31 @@ if (serveEnabled)
 	{
 		try
 		{
-			var isLive = MoonrakerPoller.IsBroadcastActive;
-			var broadcastId = MoonrakerPoller.CurrentBroadcastId;
-			var streamerRunning = MoonrakerPoller.IsStreamerRunning;
-			var waitingForIngestion = MoonrakerPoller.IsWaitingForIngestion;
-			return Results.Json(new { isLive, broadcastId, streamerRunning, waitingForIngestion });
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			var isLive = orchestrator.IsBroadcastActive;
+			var broadcastId = orchestrator.CurrentBroadcastId;
+			var streamerRunning = orchestrator.IsStreaming;
+			var waitingForIngestion = orchestrator.IsWaitingForIngestion;
+
+			// Check if HLS manifest exists
+			var hlsFolder = ctx.RequestServices.GetRequiredService<IConfiguration>().GetValue<string>("Stream:Local:HlsFolder") ?? "hls";
+			var hlsManifest = Path.Combine(Directory.GetCurrentDirectory(), hlsFolder, "stream.m3u8");
+			var hlsAvailable = File.Exists(hlsManifest);
+
+			// Kick a background self-heal if HLS is missing but streaming is expected
+			if (!hlsAvailable && (streamerRunning || isLive))
+			{
+				_ = Task.Run(async () =>
+				{
+					try { await orchestrator.EnsureStreamingHealthyAsync(true, CancellationToken.None); } catch { }
+				});
+			}
+
+			return Results.Json(new { isLive, broadcastId, streamerRunning, waitingForIngestion, hlsAvailable });
 		}
 		catch (Exception ex)
 		{
-			return Results.Json(new { isLive = false, broadcastId = (string?)null, streamerRunning = false, waitingForIngestion = false, error = ex.Message });
+			return Results.Json(new { isLive = false, broadcastId = (string?)null, streamerRunning = false, waitingForIngestion = false, hlsAvailable = false, error = ex.Message });
 		}
 	});
 
@@ -300,9 +521,25 @@ if (serveEnabled)
 	{
 		try
 		{
-			var (ok, message) = await MoonrakerPoller.StopBroadcastAsync(config, ctx.RequestAborted);
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			var (ok, message) = await orchestrator.StopBroadcastAsync(ctx.RequestAborted);
 			if (ok) return Results.Json(new { success = true });
 			return Results.Json(new { success = false, error = message });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// Manual repair endpoint: ensure HLS/stream health and recover broadcast if possible
+	app.MapPost("/api/live/repair", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			var ok = await orchestrator.EnsureStreamingHealthyAsync(true, ctx.RequestAborted);
+			return Results.Json(new { success = ok });
 		}
 		catch (Exception ex)
 		{
@@ -756,24 +993,23 @@ if (serveEnabled)
 	{
 		if (config.GetValue<bool?>("Stream:Local:Enabled") ?? false)
 		{
-			Console.WriteLine("[Stream] Web server ready, starting local HLS stream...");
-			// Give the server a moment to fully initialize
-			Task.Delay(500).ContinueWith(_ =>
+			Console.WriteLine("[Stream] Web server ready, starting local HLS preview stream...");
+			// Start a local HLS-only stream on startup for preview
+			Task.Delay(500).ContinueWith(async _ =>
 			{
-				// Link the stream cancellation to the top-level app cancellation token
-				streamCts = CancellationTokenSource.CreateLinkedTokenSource(appCts.Token);
-				streamTask = Task.Run(async () =>
+				try
 				{
-					try
+					var streamService = app.Services.GetRequiredService<StreamService>();
+					if (!streamService.IsStreaming)
 					{
-						// Start an HLS-only preview stream. Prevent YouTube broadcast creation from this path.
-						await MoonrakerPoller.StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: true, timelapseProvider: timelapseManager, allowYouTube: false);
+						Console.WriteLine("[Stream] Starting local HLS preview stream");
+						await streamService.StartStreamAsync(null, null, CancellationToken.None);
 					}
-					catch (Exception ex)
-					{
-						Console.WriteLine($"Local HLS streaming error: {ex.Message}");
-					}
-				}, streamCts.Token);
+				}
+				catch (Exception ex)
+				{
+					Console.WriteLine($"[Stream] Failed to start local preview: {ex.Message}");
+				}
 			});
 		}
 	});
@@ -949,6 +1185,8 @@ if (serveEnabled)
 // Start the host so IHostedService instances (MoonrakerHostedService) are started in all modes
 await app.RunAsync();
 
+// (ProxyUtil helper defined at top of file)
+
 // If serve UI was enabled, wait for the background stream task (if any) to complete and clean up
 if (serveEnabled)
 {
@@ -1001,4 +1239,263 @@ static void PrintHelp()
 	Console.WriteLine();
 	Console.WriteLine("See README.md for complete documentation.");
 	Console.WriteLine();
+}
+
+
+// Proxy utilities must be declared before top-level statements
+internal static class ProxyUtil
+{
+	internal static readonly HttpClient Client = new HttpClient
+	{
+		Timeout = TimeSpan.FromSeconds(60)
+	};
+
+	internal static async Task ProxyRequest(HttpContext ctx, string targetBase, string path)
+	{
+		try
+		{
+			var targetUrl = targetBase.TrimEnd('/') + "/" + path.TrimStart('/');
+			if (!string.IsNullOrWhiteSpace(ctx.Request.QueryString.Value))
+			{
+				targetUrl += ctx.Request.QueryString.Value;
+			}
+			
+			// Log Moonraker API calls for debugging
+			if (path.StartsWith("printer/") || path.StartsWith("api/") || path.StartsWith("server/") || path.StartsWith("machine/") || path.StartsWith("access/"))
+			{
+				Console.WriteLine($"[Moonraker Proxy] {ctx.Request.Method} {targetUrl}");
+			}
+
+			using var forward = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), targetUrl);
+
+			// Copy headers (except Host, Transfer-Encoding)
+			foreach (var header in ctx.Request.Headers)
+			{
+				var key = header.Key;
+				if (key.Equals("Host", StringComparison.OrdinalIgnoreCase) || key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)) continue;
+				if (!forward.Headers.TryAddWithoutValidation(key, header.Value.ToArray()))
+				{
+					// Some headers belong to content
+					if (forward.Content == null) forward.Content = new StreamContent(ctx.Request.Body);
+					try { forward.Content.Headers.TryAddWithoutValidation(key, header.Value.ToArray()); } catch { }
+				}
+			}
+
+			// If request has a body and content wasn't set yet, set it
+			if (forward.Content == null && (ctx.Request.ContentLength ?? 0) > 0)
+			{
+				forward.Content = new StreamContent(ctx.Request.Body);
+			}
+
+			var response = await Client.SendAsync(forward, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
+
+			// Copy response headers, removing frame-blocking ones
+			ctx.Response.StatusCode = (int)response.StatusCode;
+			
+			// Log errors for debugging  
+			if ((int)response.StatusCode >= 400)
+			{
+				Console.WriteLine($"[Proxy] {response.StatusCode} from {targetUrl}");
+			}
+			
+			foreach (var header in response.Headers)
+			{
+				if (header.Key.Equals("X-Frame-Options", StringComparison.OrdinalIgnoreCase)) continue;
+				if (header.Key.Equals("Content-Security-Policy", StringComparison.OrdinalIgnoreCase)) continue;
+				if (header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)) continue;
+				if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) continue; // we'll manage body length
+				try { ctx.Response.Headers[header.Key] = header.Value.ToArray(); } catch { }
+			}
+			foreach (var header in response.Content.Headers)
+			{
+				if (header.Key.Equals("Content-Security-Policy", StringComparison.OrdinalIgnoreCase)) continue;
+				if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
+				try { ctx.Response.Headers[header.Key] = header.Value.ToArray(); } catch { }
+			}
+			
+			// Add CORS headers for Mainsail/Fluidd API calls
+			ctx.Response.Headers["Access-Control-Allow-Origin"] = "*";
+			ctx.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
+			ctx.Response.Headers["Access-Control-Allow-Headers"] = "*";
+
+			// Handle HEAD and Not Modified without writing body
+			if (string.Equals(ctx.Request.Method, "HEAD", StringComparison.OrdinalIgnoreCase) || (int)response.StatusCode == 304 || (int)response.StatusCode == 204)
+			{
+				// Nothing to write
+			}
+			else
+			{
+				var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+				var contentLength = response.Content.Headers.ContentLength ?? -1;
+
+				// Decide whether to buffer the body for logging/inspection. Avoid buffering large or binary streams.
+				bool likelyText = contentType.StartsWith("text/") || contentType.Contains("json") || contentType.Contains("javascript") || contentType.Contains("xml") || contentType.Contains("mpegurl");
+				bool smallEnough = contentLength < 1024 * 1024 && contentLength != -1; // <1MB
+				bool shouldBuffer = (path.StartsWith("access/") || path.StartsWith("api/") || (int)response.StatusCode >= 400 || likelyText) && (smallEnough || contentLength == -1 && likelyText);
+
+				if (shouldBuffer)
+				{
+					var body = await response.Content.ReadAsStringAsync(ctx.RequestAborted);
+					// Log truncated body for diagnostics (redact tokens)
+					var logBody = body?.Replace(Environment.NewLine, " ") ?? string.Empty;
+					if (logBody.Length > 1000) logBody = logBody.Substring(0, 1000) + "...";
+					Console.WriteLine($"[Proxy] Response {response.StatusCode} ({contentType};len={contentLength}) from {targetUrl}: {logBody}");
+
+					// If HTML 200, inject WS shim before writing
+					if ((int)response.StatusCode == 200 && !string.IsNullOrWhiteSpace(contentType) && contentType.IndexOf("text/html", StringComparison.OrdinalIgnoreCase) >= 0)
+					{
+						// Enhanced injection: Clear all storage types and intercept both WebSocket and fetch/XMLHttpRequest for Mainsail
+						var injection = @"<script>(function(){
+try{
+  console.log('[Proxy Shim] Loading enhanced Mainsail/Fluidd proxy shim...');
+  
+  // WebSocket proxy - intercept and rewrite to our proxy
+  var WS=window.WebSocket;
+  function rw(u){
+    try{
+      if(!u)return u;
+      var x;
+      try{x=new URL(u, window.location.href);}catch(e){return u;}
+      var s=x.search||'';
+      var rewritten = new URL('/websocket'+s, window.location.href).toString();
+      console.log('[WS Shim] Rewriting WebSocket:',u,'->',rewritten);
+      return rewritten;
+    }catch(e){
+      console.error('[WS Shim] Error rewriting:',e);
+      return u;
+    }
+  }
+  window.WebSocket=function(u,p){
+    var nu=rw(u);
+    try{return p?new WS(nu,p):new WS(nu);}catch(e){return new WS(nu);}
+  };
+  window.WebSocket.prototype=WS.prototype;
+  
+  // Clear ALL storage types for Mainsail (it uses localStorage, sessionStorage, and IndexedDB)
+  console.log('[Proxy Shim] Clearing all browser storage...');
+  try{
+    localStorage.clear();
+    console.log('[Proxy Shim] localStorage cleared');
+  }catch(e){console.error('[Proxy Shim] localStorage clear failed:',e);}
+  
+  try{
+    sessionStorage.clear();
+    console.log('[Proxy Shim] sessionStorage cleared');
+  }catch(e){console.error('[Proxy Shim] sessionStorage clear failed:',e);}
+  
+  try{
+    if(window.indexedDB){
+      // Mainsail stores connection info in IndexedDB - we need to clear it
+      indexedDB.databases().then(function(dbs){
+        console.log('[Proxy Shim] Found IndexedDB databases:',dbs.map(function(d){return d.name;}));
+        dbs.forEach(function(db){
+          try{
+            console.log('[Proxy Shim] Deleting IndexedDB:',db.name);
+            indexedDB.deleteDatabase(db.name);
+          }catch(e){console.error('[Proxy Shim] IndexedDB delete failed:',e);}
+        });
+      }).catch(function(e){console.error('[Proxy Shim] IndexedDB enumeration failed:',e);});
+    }
+  }catch(e){console.error('[Proxy Shim] IndexedDB clear failed:',e);}
+  
+  // Unregister service workers that might cache old connection info
+  try{
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.getRegistrations().then(function(regs){
+        console.log('[Proxy Shim] Found',regs.length,'service workers');
+        regs.forEach(function(r){
+          try{
+            console.log('[Proxy Shim] Unregistering service worker:',r.scope);
+            r.unregister();
+          }catch(e){console.error('[Proxy Shim] SW unregister failed:',e);}
+        });
+      });
+    }
+  }catch(e){console.error('[Proxy Shim] Service worker clear failed:',e);}
+  
+  // Clear caches
+  try{
+    if(window.caches){
+      caches.keys().then(function(keys){
+        console.log('[Proxy Shim] Found cache keys:',keys);
+        keys.forEach(function(k){
+          try{
+            console.log('[Proxy Shim] Deleting cache:',k);
+            caches.delete(k);
+          }catch(e){console.error('[Proxy Shim] Cache delete failed:',e);}
+        });
+      });
+    }
+  }catch(e){console.error('[Proxy Shim] Cache clear failed:',e);}
+  
+  console.log('[Proxy Shim] Mainsail/Fluidd proxy shim loaded successfully');
+}catch(e){console.error('[Proxy Shim] Critical error:',e);}
+})();</script>";
+						string result;
+						// Remove any meta Content-Security-Policy tags so our injected inline script can run
+						var safeBody = (body ?? string.Empty);
+						try
+						{
+							safeBody = System.Text.RegularExpressions.Regex.Replace(safeBody, "<meta[^>]*http-equiv\\s*=\\s*['\"]?Content-Security-Policy['\"]?[^>]*>", string.Empty, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+							safeBody = System.Text.RegularExpressions.Regex.Replace(safeBody, "<meta[^>]*name\\s*=\\s*['\"]?content-security-policy['\"]?[^>]*>", string.Empty, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+						}
+						catch { }
+
+						var idx = safeBody.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
+						if (idx >= 0) result = safeBody.Substring(0, idx) + injection + safeBody.Substring(idx);
+						else
+						{
+							idx = safeBody.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+							if (idx >= 0) result = safeBody.Substring(0, idx) + injection + safeBody.Substring(idx);
+							else result = safeBody + injection;
+						}
+						var bytes = System.Text.Encoding.UTF8.GetBytes(result);
+						await ctx.Response.Body.WriteAsync(bytes, 0, bytes.Length, ctx.RequestAborted);
+					}
+					else
+					{
+						var bytes = System.Text.Encoding.UTF8.GetBytes(body ?? string.Empty);
+						await ctx.Response.Body.WriteAsync(bytes, 0, bytes.Length, ctx.RequestAborted);
+					}
+				}
+				else
+				{
+					// Stream directly without buffering
+					await response.Content.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"[Proxy] Error proxying {path}: {ex.Message}");
+			if (!ctx.Response.HasStarted)
+			{
+				ctx.Response.StatusCode = 502;
+				await ctx.Response.WriteAsync("Proxy error: "+ ex.Message);
+			}
+		}
+	}
+
+	internal static async Task PumpWebSocket(System.Net.WebSockets.WebSocket from, System.Net.WebSockets.WebSocket to, CancellationToken ct)
+	{
+		var buffer = new byte[8192];
+		try
+		{
+			while (from.State == System.Net.WebSockets.WebSocketState.Open && to.State == System.Net.WebSockets.WebSocketState.Open && !ct.IsCancellationRequested)
+			{
+				var result = await from.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+				if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
+				{
+					try { await to.CloseOutputAsync(result.CloseStatus ?? System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, result.CloseStatusDescription, ct); } catch { }
+					break;
+				}
+				await to.SendAsync(new ArraySegment<byte>(buffer, 0, result.Count), result.MessageType, result.EndOfMessage, ct);
+			}
+		}
+		catch (OperationCanceledException) { }
+		catch (Exception ex)
+		{
+			Console.WriteLine($"[WS Proxy] Pump error: {ex.Message}");
+		}
+	}
 }

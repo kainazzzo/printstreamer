@@ -5,127 +5,15 @@
 
 <PageTitle>Printer Console</PageTitle>
 
+
 <div class="wrap">
     <div class="nav">
         <NavLink href="/">← Back to Control Panel</NavLink>
         <NavLink href="/config" style="margin-left:10px">⚙️ Configuration</NavLink>
     </div>
-
-    <h1>Printer Console</h1>
-
-    <div class="section">
-        <div class="radio-group">
-            <label>
-                <input type="radio" name="ui" value="mainsail" @onchange="OnUiChanged" checked="@(selectedUi == "mainsail")" />
-                Mainsail
-            </label>
-            <label style="margin-left:16px">
-                <input type="radio" name="ui" value="fluidd" @onchange="OnUiChanged" checked="@(selectedUi == "fluidd")" />
-                Fluidd
-            </label>
-        </div>
-    </div>
-
-    <div class="section console-container" style="height: calc(100vh - 220px);">
-        @if (string.IsNullOrWhiteSpace(mainsailUrl) && string.IsNullOrWhiteSpace(fluiddUrl))
-        {
-            <p>Loading...</p>
-        }
-        else
-        {
-            <div class="iframe-stack">
-                @if (!string.IsNullOrWhiteSpace(mainsailUrl))
-                {
-                    <iframe src="@mainsailUrl" class="@(GetIframeClass("mainsail"))" title="Mainsail Console"></iframe>
-                }
-                @if (!string.IsNullOrWhiteSpace(fluiddUrl))
-                {
-                    <iframe src="@fluiddUrl" class="@(GetIframeClass("fluidd"))" title="Fluidd Console"></iframe>
-                }
-            </div>
-        }
-    </div>
-
-    <style>
-        .iframe-stack {
-            position: relative;
-            width: 100%;
-            height: 100%;
-        }
-        .iframe-stack iframe {
-            background: #000;
-            border: 1px solid #333;
-            border-radius: 8px;
-        }
-        /* Visible iframe fills the container */
-        .iframe-visible {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-        }
-        /* Hidden iframe remains loaded off-screen to keep session and assets warm */
-        .iframe-hidden {
-            position: absolute;
-            left: -99999px;
-            top: -99999px;
-            width: 1px;
-            height: 1px;
-            opacity: 0;
-            pointer-events: none;
-        }
-    </style>
 </div>
 
+
 @code {
-    private string selectedUi = "mainsail";
-    private string? mainsailUrl;
-    private string? fluiddUrl;
-
-    private string CurrentUrl => selectedUi == "fluidd" ? (fluiddUrl ?? "") : (mainsailUrl ?? "");
-
-    protected override async Task OnInitializedAsync()
-    {
-        await LoadConfig();
-    }
-
-    private async Task LoadConfig()
-    {
-        try
-        {
-            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
-            var cfg = await client.GetFromJsonAsync<ConfigResponse>("api/config");
-            if (cfg?.PrinterUI != null)
-            {
-                mainsailUrl = cfg.PrinterUI.MainsailUrl;
-                fluiddUrl = cfg.PrinterUI.FluiddUrl;
-            }
-        }
-        catch { }
-    }
-
-    private void OnUiChanged(ChangeEventArgs e)
-    {
-        var val = e.Value?.ToString()?.ToLowerInvariant();
-        if (val == "fluidd" || val == "mainsail")
-        {
-            selectedUi = val;
-            StateHasChanged();
-        }
-    }
-
-    private string GetIframeClass(string which)
-    {
-        return selectedUi == which ? "iframe-visible" : "iframe-hidden";
-    }
-
-    private class ConfigResponse
-    {
-        public PrinterUIConfig? PrinterUI { get; set; }
-    }
-    private class PrinterUIConfig
-    {
-        public string? MainsailUrl { get; set; }
-        public string? FluiddUrl { get; set; }
-    }
+    // All printer UI logic is now handled by the persistent component in MainLayout
 }

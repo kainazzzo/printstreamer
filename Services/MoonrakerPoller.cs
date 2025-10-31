@@ -16,6 +16,8 @@ namespace PrintStreamer.Services
         private static string? _currentBroadcastId;
     // Monitor state exposed to the UI
     private static volatile bool _isWaitingForIngestion = false;
+    // Semaphore to prevent concurrent broadcast creation
+    private static readonly SemaphoreSlim _broadcastCreationLock = new SemaphoreSlim(1, 1);
 
     // Camera simulation and blackout logic is handled only by WebCamManager.
 
@@ -85,14 +87,36 @@ namespace PrintStreamer.Services
         /// </summary>
         public static async Task<(bool ok, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, CancellationToken cancellationToken)
         {
-            // Only supports OAuth flow for automatic broadcast creation
-            var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
-            var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
-            bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
-            if (!useOAuth)
+            // Use semaphore to prevent concurrent broadcast creation
+            if (!await _broadcastCreationLock.WaitAsync(0, cancellationToken))
             {
-                return (false, "OAuth client credentials not configured", null);
+                Console.WriteLine("[StartBroadcast] Another broadcast creation is already in progress, skipping duplicate");
+                // Wait briefly to see if the other operation completes and return its result
+                await Task.Delay(500, cancellationToken);
+                if (IsBroadcastActive)
+                {
+                    return (true, "Broadcast created by concurrent operation", _currentBroadcastId);
+                }
+                return (false, "Another broadcast creation is in progress", null);
             }
+
+            try
+            {
+                // Check if a broadcast is already active - don't create a duplicate
+                if (IsBroadcastActive)
+                {
+                    Console.WriteLine("[StartBroadcast] A broadcast is already active, skipping duplicate creation");
+                    return (true, "Broadcast already active", _currentBroadcastId);
+                }
+
+                // Only supports OAuth flow for automatic broadcast creation
+                var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
+                var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
+                bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
+                if (!useOAuth)
+                {
+                    return (false, "OAuth client credentials not configured", null);
+                }
 
             // In some flows the local HLS streamer may be restarting (e.g., camera toggle or prior stop).
             // Give it a short grace period to appear; if still null, we'll start a fresh encoder below.
@@ -234,6 +258,16 @@ namespace PrintStreamer.Services
                 return (false, ex.Message, null);
             }
         }
+        catch (Exception outerEx)
+        {
+            Console.WriteLine($"[StartBroadcast] Unexpected error: {outerEx.Message}");
+            return (false, $"Unexpected error: {outerEx.Message}", null);
+        }
+        finally
+        {
+            _broadcastCreationLock.Release();
+        }
+    }
 
         /// <summary>
         /// Stop the current live broadcast and end the YouTube stream.
@@ -427,7 +461,9 @@ namespace PrintStreamer.Services
                             try
                             {
                                 // In polling mode, disable internal timelapse in streaming path to avoid duplicate uploads
-                                await StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: true);
+                                // Also check if a broadcast is already active (from manual start); if so, don't create another
+                                var alreadyBroadcasting = IsBroadcastActive;
+                                await StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: !alreadyBroadcasting);
                             }
                             catch (Exception ex)
                             {
@@ -880,8 +916,29 @@ namespace PrintStreamer.Services
 
                 if (hasYouTubeOAuth && liveBroadcastEnabled)
                 {
-                    Console.WriteLine("[YouTube] Creating live broadcast via OAuth...");
-                    ytService = new YouTubeControlService(config);
+                    // Check if broadcast already exists before creating
+                    if (IsBroadcastActive)
+                    {
+                        Console.WriteLine("[YouTube] Broadcast already active, using existing broadcast for stream");
+                        // Don't create a new broadcast, just use HLS-only mode or attach to existing
+                        rtmpUrl = null;
+                        streamKey = null;
+                    }
+                    else if (await _broadcastCreationLock.WaitAsync(0, cancellationToken))
+                    {
+                        try
+                        {
+                            // Double-check inside the lock
+                            if (IsBroadcastActive)
+                            {
+                                Console.WriteLine("[YouTube] Broadcast became active while waiting for lock, skipping creation");
+                                rtmpUrl = null;
+                                streamKey = null;
+                            }
+                            else
+                            {
+                                Console.WriteLine("[YouTube] Creating live broadcast via OAuth...");
+                                ytService = new YouTubeControlService(config);
 
                     // Authenticate
                     if (!await ytService.AuthenticateAsync(cancellationToken))
@@ -1015,6 +1072,19 @@ namespace PrintStreamer.Services
                                 }, timelapseCts.Token);
                             }
                         }
+                    }
+                            }
+                        }
+                        finally
+                        {
+                            _broadcastCreationLock.Release();
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("[YouTube] Another broadcast creation is in progress, skipping");
+                        rtmpUrl = null;
+                        streamKey = null;
                     }
                 }
                 else

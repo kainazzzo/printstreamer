@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+        <title>Mainsail</title>
+        <meta name="description" content="Mainsail is the popular web interface for Klipper." />
+
+        <link rel="icon" type="image/png" sizes="32x32" href="/mainsail/img/icons/favicon-32x32.png" />
+        <link rel="icon" type="image/png" sizes="16x16" href="/mainsail/img/icons/favicon-16x16.png" />
+        <meta name="theme-color" content="#121212" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+        <meta name="apple-mobile-web-app-title" content="Mainsail" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/mainsail/img/icons/apple-touch-icon-180x180.png" />
+        <link rel="mask-icon" href="img/icons/safari-pinned-tab.svg" color="#d51f26" />
+        <meta name="msapplication-TileImage" content="/img/icons/mstile-150x150.png" />
+        <meta name="msapplication-TileColor" content="#d51f26" />
+
+      <script type="module" crossorigin src="/mainsail/assets/index-C7EQ4c7A.js"></script>
+      <link rel="modulepreload" crossorigin href="/mainsail/assets/overlayscrollbars-CiKU261J.js">
+      <link rel="modulepreload" crossorigin href="/mainsail/assets/vuetify-Ce4WN_Dg.js">
+      <link rel="modulepreload" crossorigin href="/mainsail/assets/echarts-DzoUeqWp.js">
+      <link rel="stylesheet" crossorigin href="/mainsail/assets/overlayscrollbars-BJn_P54_.css">
+      <link rel="stylesheet" crossorigin href="/mainsail/assets/vuetify-BSwS9o2d.css">
+      <link rel="stylesheet" crossorigin href="/mainsail/assets/index-C-e3EX-E.css">
+    <link rel="manifest" href="/mainsail/manifest.webmanifest"><script>(function(){
+try{
+  console.log('[Proxy Shim] Loading enhanced Mainsail/Fluidd proxy shim...');
+  
+  // WebSocket proxy - intercept and rewrite to our proxy
+  var WS=window.WebSocket;
+  function rw(u){
+    try{
+      if(!u)return u;
+      var x;
+      try{x=new URL(u, window.location.href);}catch(e){return u;}
+      var s=x.search||'';
+      var rewritten = new URL('/websocket'+s, window.location.href).toString();
+      console.log('[WS Shim] Rewriting WebSocket:',u,'->',rewritten);
+      return rewritten;
+    }catch(e){
+      console.error('[WS Shim] Error rewriting:',e);
+      return u;
+    }
+  }
+  window.WebSocket=function(u,p){
+    var nu=rw(u);
+    try{return p?new WS(nu,p):new WS(nu);}catch(e){return new WS(nu);}
+  };
+  window.WebSocket.prototype=WS.prototype;
+  
+  // Clear ALL storage types for Mainsail (it uses localStorage, sessionStorage, and IndexedDB)
+  console.log('[Proxy Shim] Clearing all browser storage...');
+  try{
+    localStorage.clear();
+    console.log('[Proxy Shim] localStorage cleared');
+  }catch(e){console.error('[Proxy Shim] localStorage clear failed:',e);}
+  
+  try{
+    sessionStorage.clear();
+    console.log('[Proxy Shim] sessionStorage cleared');
+  }catch(e){console.error('[Proxy Shim] sessionStorage clear failed:',e);}
+  
+  try{
+    if(window.indexedDB){
+      // Mainsail stores connection info in IndexedDB - we need to clear it
+      indexedDB.databases().then(function(dbs){
+        console.log('[Proxy Shim] Found IndexedDB databases:',dbs.map(function(d){return d.name;}));
+        dbs.forEach(function(db){
+          try{
+            console.log('[Proxy Shim] Deleting IndexedDB:',db.name);
+            indexedDB.deleteDatabase(db.name);
+          }catch(e){console.error('[Proxy Shim] IndexedDB delete failed:',e);}
+        });
+      }).catch(function(e){console.error('[Proxy Shim] IndexedDB enumeration failed:',e);});
+    }
+  }catch(e){console.error('[Proxy Shim] IndexedDB clear failed:',e);}
+  
+  // Unregister service workers that might cache old connection info
+  try{
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.getRegistrations().then(function(regs){
+        console.log('[Proxy Shim] Found',regs.length,'service workers');
+        regs.forEach(function(r){
+          try{
+            console.log('[Proxy Shim] Unregistering service worker:',r.scope);
+            r.unregister();
+          }catch(e){console.error('[Proxy Shim] SW unregister failed:',e);}
+        });
+      });
+    }
+  }catch(e){console.error('[Proxy Shim] Service worker clear failed:',e);}
+  
+  // Clear caches
+  try{
+    if(window.caches){
+      caches.keys().then(function(keys){
+        console.log('[Proxy Shim] Found cache keys:',keys);
+        keys.forEach(function(k){
+          try{
+            console.log('[Proxy Shim] Deleting cache:',k);
+            caches.delete(k);
+          }catch(e){console.error('[Proxy Shim] Cache delete failed:',e);}
+        });
+      });
+    }
+  }catch(e){console.error('[Proxy Shim] Cache clear failed:',e);}
+  
+  console.log('[Proxy Shim] Mainsail/Fluidd proxy shim loaded successfully');
+}catch(e){console.error('[Proxy Shim] Critical error:',e);}
+})();</script></head>
+    <body style="background-color: #121212">
+        <noscript>
+            <strong>
+                We're sorry but Mainsail doesn't work properly without JavaScript enabled. Please enable it to continue.
+            </strong>
+        </noscript>
+        <div id="app"></div>
+    </body>
+</html>

@@ -17,18 +17,26 @@
 
     </div>
 
-        <StreamControlPanel IsLive="@isLive" IsStreamPlaying="@isStreamPlaying" IsGoingLive="@isGoingLive"
+        <StreamControlPanel IsLive="@(isLive && hlsAvailable)" IsStreamPlaying="@isStreamPlaying" IsGoingLive="@isGoingLive"
         StreamerRunning="@streamerRunning" WaitingForIngestion="@waitingForIngestion" CameraEnabled="@(!cameraDisabled)"
-        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" BroadcastId="@broadcastId"
+        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" BroadcastId="@(isLive && hlsAvailable ? broadcastId : null)"
         StatusMessage="@statusMessage" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
         OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" />
+
+        @if (isLive && !hlsAvailable)
+        {
+            <div style="color:#ff6666;font-weight:bold;margin:10px 0;">
+                Warning: Backend reports stream is live, but HLS is not available. The stream is NOT actually broadcasting.
+                <button style="margin-left:10px;padding:4px 10px;border:1px solid #a33;border-radius:6px;background:#330;color:#fff;cursor:pointer" @onclick="RepairStream">Try repair</button>
+            </div>
+        }
 
     <StreamContainer>
         <MjpegFeed />
         <HlsFeed />
     </StreamContainer>
 
-    @if (!string.IsNullOrWhiteSpace(broadcastId))
+    @if (!string.IsNullOrWhiteSpace(broadcastId) && isLive && hlsAvailable)
     {
         <div style="margin-top:20px">
             <h2 style="margin-bottom:10px">YouTube Live Stream</h2>
@@ -50,6 +58,7 @@
     private bool _jsReady = false;
     private List<(string Message, string Type)> _pendingToasts = new();
     private bool isLive = false;
+    private bool hlsAvailable = false;
     private bool isStreamPlaying = false;
     private bool isGoingLive = false;
     private bool streamerRunning = false;
@@ -174,6 +183,7 @@
                 broadcastId = response.BroadcastId;
                 streamerRunning = response.StreamerRunning;
                 waitingForIngestion = response.WaitingForIngestion;
+                hlsAvailable = response.HlsAvailable;
                 UpdateLiveStatusTimer();
             }
         }
@@ -256,6 +266,30 @@
         }
 
         StateHasChanged();
+    }
+
+    private async Task RepairStream()
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync("api/live/repair", null);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            if (result?.Success == true)
+            {
+                await SafeToast("Repair triggered", "success");
+            }
+            else
+            {
+                await SafeToast($"Repair failed: {result?.Error ?? "unknown"}", "error");
+            }
+            await Task.Delay(1500);
+            await CheckLiveStatus();
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Repair error: {ex.Message}", "error");
+        }
     }
 
     private async Task ToggleCamera()
@@ -556,6 +590,7 @@
         public string? BroadcastId { get; set; }
         public bool StreamerRunning { get; set; }
         public bool WaitingForIngestion { get; set; }
+        public bool HlsAvailable { get; set; }
     }
 
     private class ApiResponse

@@ -1,0 +1,146 @@
+
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+@code {
+
+    private string? mainsailUrl;
+    private string? fluiddUrl;
+    private string? remoteMainsailUrl;
+    private string? remoteFluiddUrl;
+    private string selectedUi = "mainsail";
+    private bool showConsole => Nav.Uri.Contains("/console");
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadConfig();
+        // Restore last selection from localStorage if available
+        try
+        {
+            var saved = await JS.InvokeAsync<string>("localStorage.getItem", "printerUi.selected");
+            if (!string.IsNullOrWhiteSpace(saved) && (saved == "mainsail" || saved == "fluidd"))
+            {
+                selectedUi = saved;
+            }
+        }
+        catch { }
+        Nav.LocationChanged += Nav_LocationChanged;
+    }
+
+    private void Nav_LocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        StateHasChanged();
+    }
+
+    private async Task LoadConfig()
+    {
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var cfg = await client.GetFromJsonAsync<ConfigResponse>("api/config");
+            if (cfg?.PrinterUI != null)
+            {
+                // Use direct remote URLs for standard iframes
+                remoteMainsailUrl = cfg.PrinterUI.MainsailUrl;
+                remoteFluiddUrl = cfg.PrinterUI.FluiddUrl;
+                mainsailUrl = !string.IsNullOrWhiteSpace(remoteMainsailUrl) ? remoteMainsailUrl : null;
+                fluiddUrl = !string.IsNullOrWhiteSpace(remoteFluiddUrl) ? remoteFluiddUrl : null;
+
+                // Pick a sensible default based on what's configured
+                if (string.IsNullOrWhiteSpace(mainsailUrl) && !string.IsNullOrWhiteSpace(fluiddUrl))
+                {
+                    selectedUi = "fluidd";
+                }
+                else if (!string.IsNullOrWhiteSpace(mainsailUrl) && string.IsNullOrWhiteSpace(fluiddUrl))
+                {
+                    selectedUi = "mainsail";
+                }
+            }
+        }
+        catch { }
+    }
+
+    private string GetIframeStyle(string which)
+    {
+        var baseStyle = "position: absolute; inset: 0; width: 100%; height: 100%; background: #000; border: 1px solid #333; border-radius: 8px;";
+        if (!showConsole)
+        {
+            return baseStyle + " opacity: 0; pointer-events: none; z-index: 0;";
+        }
+        
+        if (selectedUi == which)
+        {
+            var result = baseStyle + " opacity: 1; z-index: 1;";
+            Console.WriteLine($"[PrinterUiIframes] GetIframeStyle('{which}') with selectedUi='{selectedUi}' => visible");
+            return result;
+        }
+        else
+        {
+            var result = baseStyle + " opacity: 0; pointer-events: none; z-index: 0;";
+            Console.WriteLine($"[PrinterUiIframes] GetIframeStyle('{which}') with selectedUi='{selectedUi}' => hidden");
+            return result;
+        }
+    }
+
+    private async Task OnSelectedChanged(string value)
+    {
+        Console.WriteLine($"[PrinterUiIframes] *** RADIO CLICKED *** Switching from '{selectedUi}' to '{value}'");
+        selectedUi = value;
+        try { await JS.InvokeVoidAsync("localStorage.setItem", "printerUi.selected", value); } catch { }
+        Console.WriteLine($"[PrinterUiIframes] *** AFTER UPDATE *** selectedUi = '{selectedUi}'");
+        await InvokeAsync(StateHasChanged);
+        Console.WriteLine($"[PrinterUiIframes] *** AFTER StateHasChanged ***");
+    }
+
+    private class ConfigResponse
+    {
+        public PrinterUIConfig? PrinterUI { get; set; }
+    }
+    private class PrinterUIConfig
+    {
+        public string? MainsailUrl { get; set; }
+        public string? FluiddUrl { get; set; }
+    }
+}
+
+<div style="display:@(showConsole ? "block" : "none");height:calc(100vh - 220px);">
+    <div class="section" style="margin-bottom:10px;">
+        <span style="font-size: 1.1em;">
+            @if (!string.IsNullOrWhiteSpace(mainsailUrl))
+            {
+                <a href="javascript:void(0)" title="@remoteMainsailUrl" @onclick='@(() => OnSelectedChanged("mainsail"))' style="color: @(selectedUi == "mainsail" ? "lime" : "#66ccff"); text-decoration: none; font-weight: @(selectedUi == "mainsail" ? "bold" : "normal"); margin-right: 16px;">Mainsail</a>
+            }
+            @if (!string.IsNullOrWhiteSpace(fluiddUrl))
+            {
+                <a href="javascript:void(0)" title="@remoteFluiddUrl" @onclick='@(() => OnSelectedChanged("fluidd"))' style="color: @(selectedUi == "fluidd" ? "orange" : "#66ccff"); text-decoration: none; font-weight: @(selectedUi == "fluidd" ? "bold" : "normal");">Fluidd</a>
+            }
+        </span>
+    </div>
+    <div class="section console-container" style="height:100%;">
+        @if (string.IsNullOrWhiteSpace(mainsailUrl) && string.IsNullOrWhiteSpace(fluiddUrl))
+        {
+            <p>Loading...</p>
+        }
+        else
+        {
+            <div class="iframe-stack" @key="selectedUi">
+                @if (!string.IsNullOrWhiteSpace(mainsailUrl))
+                {
+                    <iframe src="@mainsailUrl" style="@GetIframeStyle("mainsail")" title="Mainsail Console"></iframe>
+                }
+                @if (!string.IsNullOrWhiteSpace(fluiddUrl))
+                {
+                    <iframe src="@fluiddUrl" style="@GetIframeStyle("fluidd")" title="Fluidd Console"></iframe>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+<style>
+    .iframe-stack {
+        position: relative;
+        width: 100%;
+        height: 100%;
+    }
+</style>
