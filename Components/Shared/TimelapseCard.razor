@@ -62,36 +62,62 @@
         }
     </div>
     
-    @if (Timelapse.VideoFiles?.Count > 0)
+    @if ((Timelapse.VideoFiles?.Count > 0) || !string.IsNullOrEmpty(Timelapse.YouTubeUrl))
     {
-        <div class="card-video">
-            <video controls preload="metadata" class="mini-player">
-                <source src="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(Timelapse.VideoFiles[0])}")" type="video/mp4">
-                Your browser does not support the video tag.
-            </video>
-        </div>
-        
-        @if (Timelapse.VideoFiles.Count > 1)
-        {
-            <div class="card-links">
-                @foreach (var video in Timelapse.VideoFiles)
+        <div class="card-media">
+            @* Simple tab switcher between local MP4 and YouTube embed when both are available *@
+            <div class="media-tabs">
+                @if (Timelapse.VideoFiles?.Count > 0)
                 {
-                    <a href="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(video)}")" 
-                       class="video-link" 
-                       target="_blank">
-                        📹 @video
-                    </a>
+                    <button class="tab-btn @(selectedTab == "video" ? "active" : "")" @onclick='() => SelectTab("video")'>MP4</button>
+                }
+                @if (!string.IsNullOrEmpty(Timelapse.YouTubeUrl))
+                {
+                    <button class="tab-btn @(selectedTab == "youtube" ? "active" : "")" @onclick='() => SelectTab("youtube")'>YouTube</button>
                 }
             </div>
-        }
-    }
-    
-    @if (!string.IsNullOrEmpty(Timelapse.YouTubeUrl))
-    {
-        <div class="card-youtube">
-            <a href="@Timelapse.YouTubeUrl" class="youtube-link" target="_blank">
-                🎬 View on YouTube
-            </a>
+
+            <div class="media-area">
+                @if (selectedTab == "video" && Timelapse.VideoFiles?.Count > 0)
+                {
+                    <div class="card-video">
+                        <video controls preload="metadata" class="mini-player">
+                            <source src="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(Timelapse.VideoFiles[0])}")" type="video/mp4">
+                            Your browser does not support the video tag.
+                        </video>
+                    </div>
+
+                    @if (Timelapse.VideoFiles.Count > 1)
+                    {
+                        <div class="card-links">
+                            @foreach (var video in Timelapse.VideoFiles)
+                            {
+                                <a href="@($"/api/timelapses/{Uri.EscapeDataString(Timelapse.Name)}/frames/{Uri.EscapeDataString(video)}")" 
+                                   class="video-link" 
+                                   target="_blank">
+                                    📹 @video
+                                </a>
+                            }
+                        </div>
+                    }
+                }
+
+                @if (selectedTab == "youtube" && !string.IsNullOrEmpty(Timelapse.YouTubeUrl))
+                {
+                    <div class="card-youtube-embed">
+                        @if (TryGetYouTubeId(Timelapse.YouTubeUrl, out var id))
+                        {
+                            <div class="youtube-embed-wrap">
+                                <iframe width="100%" height="300" src="@($"https://www.youtube.com/embed/{id}")" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                            </div>
+                        }
+                        else
+                        {
+                            <a href="@Timelapse.YouTubeUrl" class="youtube-link" target="_blank">🎬 View on YouTube</a>
+                        }
+                    </div>
+                }
+            </div>
         </div>
     }
 </div>
@@ -331,4 +357,62 @@
     private Task HandleRegenerate() => OnRegenerate.InvokeAsync(Timelapse.Name);
     private Task HandleUpload() => OnUpload.InvokeAsync(Timelapse.Name);
     private Task HandleDelete() => OnDelete.InvokeAsync(Timelapse.Name);
+
+    // UI state for media tab selection (video | youtube)
+    private string selectedTab = "video";
+
+    protected override void OnParametersSet()
+    {
+        // Default tab: prefer youtube if no local video and youtube exists
+        if (!string.IsNullOrEmpty(Timelapse?.YouTubeUrl) && (Timelapse?.VideoFiles == null || Timelapse.VideoFiles.Count == 0))
+        {
+            selectedTab = "youtube";
+        }
+        else if (Timelapse?.VideoFiles != null && Timelapse.VideoFiles.Count > 0)
+        {
+            selectedTab = "video";
+        }
+    }
+
+    private void SelectTab(string tab)
+    {
+        if (string.IsNullOrEmpty(tab)) return;
+        selectedTab = tab;
+    }
+
+    private static bool TryGetYouTubeId(string url, out string id)
+    {
+        id = string.Empty;
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        try
+        {
+            // Common YouTube URL patterns
+            var uri = new Uri(url);
+            if (uri.Host.Contains("youtube", StringComparison.OrdinalIgnoreCase))
+            {
+                var q = System.Web.HttpUtility.ParseQueryString(uri.Query);
+                var v = q.Get("v");
+                if (!string.IsNullOrEmpty(v)) { id = v; return true; }
+                // path like /watch?v=... handled above; otherwise possible /embed/{id} or /v/{id}
+                var segments = uri.Segments.Select(s => s.Trim('/')).Where(s => !string.IsNullOrEmpty(s)).ToArray();
+                if (segments.Length > 0)
+                {
+                    var last = segments.Last();
+                    // embed/ID or v/ID
+                    if (segments.Length >= 2 && (segments[segments.Length - 2].Equals("embed", StringComparison.OrdinalIgnoreCase) || segments[segments.Length - 2].Equals("v", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        id = last; return true;
+                    }
+                }
+            }
+            // youtu.be short url
+            if (uri.Host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase))
+            {
+                var seg = uri.Segments.Select(s => s.Trim('/')).Where(s => !string.IsNullOrEmpty(s)).ToArray();
+                if (seg.Length > 0) { id = seg[0]; return true; }
+            }
+        }
+        catch { }
+        return false;
+    }
 }

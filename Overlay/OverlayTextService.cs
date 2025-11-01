@@ -384,8 +384,12 @@ public sealed class OverlayTextService : IDisposable
     s = ReplaceStr(s, "speed", d.Speed.HasValue ? d.Speed.Value.ToString("0") : "0");
     s = ReplaceStr(s, "speedfactor", d.SpeedFactor.HasValue ? d.SpeedFactor.Value.ToString("0") + "%" : "-");
     // Flow is volumetric (mm^3/s) from Moonraker display_status.flow
-    s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") + " mm^3/s" : "0 mm^3/s");
-    s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") + "m" : "0.00m");
+    // Flow is volumetric (mm^3/s) from Moonraker: provide only the numeric value here
+    // so the template can include units to avoid duplication.
+    s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "0.0");
+    // Filament usage: d.Filament is provided in mm. Convert to meters here but do NOT append the unit
+    // because the overlay template itself may include the unit (avoid doubling like "mm" -> "mm").
+    s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") : "0.00");
         // ETA with time format if available
         if (d.ETA.HasValue)
         {

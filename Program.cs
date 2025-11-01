@@ -684,16 +684,14 @@ if (serveEnabled)
 			var videoPath = videoFiles[0]; // Use first mp4 found
 
 			// Use YouTubeControlService to upload
-			var ytService = new YouTubeControlService(config);
+			using var ytService = new YouTubeControlService(config);
 			if (!await ytService.AuthenticateAsync(ctx.RequestAborted))
 			{
-				ytService.Dispose();
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
 			}
 
 			// Bypass upload config for manual UI uploads
 			var videoId = await ytService.UploadTimelapseVideoAsync(videoPath, name, ctx.RequestAborted, true);
-			ytService.Dispose();
 
 			if (!string.IsNullOrEmpty(videoId))
 			{

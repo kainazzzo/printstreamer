@@ -284,31 +284,82 @@ namespace PrintStreamer.Timelapse
     {
         try
         {
-            var metadataPath = Path.Combine(directory, ".metadata");
-            if (!File.Exists(metadataPath))
-                return (null, null);
-                
+            // Try a few possible metadata filename patterns to be tolerant of different clients/tools
+            var candidates = new List<string>
+            {
+                Path.Combine(directory, ".metadata"),
+                Path.Combine(directory, "metadata"),
+                Path.Combine(directory, ".metadata.txt"),
+                Path.Combine(directory, ".meta"),
+                // allow files created by external uploaders that use a ".file" suffix or similar
+                // e.g., "video.mp4.file" or ".metadata.file"
+            };
+
+            // Add any files in the directory with a ".file" extension as candidates
+            try
+            {
+                var fileFiles = Directory.GetFiles(directory, "*.file");
+                foreach (var ff in fileFiles) candidates.Add(ff);
+            }
+            catch { }
+
             DateTime? createdAt = null;
             string? youtubeUrl = null;
-            
-            var lines = File.ReadAllLines(metadataPath);
-            foreach (var line in lines)
+
+            foreach (var metadataPath in candidates)
             {
-                if (line.StartsWith("CreatedAt="))
+                if (!File.Exists(metadataPath)) continue;
+
+                var lines = File.ReadAllLines(metadataPath);
+                foreach (var line in lines)
                 {
-                    var dateStr = line.Substring("CreatedAt=".Length);
-                    if (DateTime.TryParse(dateStr, out var date))
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var trimmed = line.Trim();
+
+                    // Attempt to split into key/value using '=' or ':' (accept spaces around separator)
+                    string? key = null;
+                    string? val = null;
+                    var eqIdx = trimmed.IndexOf('=');
+                    var colonIdx = trimmed.IndexOf(':');
+                    int sep = -1;
+                    if (eqIdx >= 0) sep = eqIdx;
+                    else if (colonIdx >= 0) sep = colonIdx;
+
+                    if (sep >= 0)
                     {
-                        createdAt = date;
+                        key = trimmed.Substring(0, sep).Trim();
+                        val = trimmed.Substring(sep + 1).Trim();
+                    }
+
+                    if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(val))
+                    {
+                        if (key.Equals("CreatedAt", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (DateTime.TryParse(val, out var date)) createdAt = date;
+                        }
+                        else if (key.IndexOf("youtube", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            youtubeUrl = val;
+                        }
+                    }
+                    else
+                    {
+                        // No key/value separator: accept a pure YouTube URL line
+                        if (Uri.IsWellFormedUriString(trimmed, UriKind.Absolute) && trimmed.IndexOf("youtube", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            youtubeUrl = trimmed;
+                        }
                     }
                 }
-                else if (line.StartsWith("YouTubeUrl="))
+
+                // If we've found any useful metadata, stop searching further candidates
+                if (createdAt != null || !string.IsNullOrEmpty(youtubeUrl))
                 {
-                    youtubeUrl = line.Substring("YouTubeUrl=".Length);
+                    return (createdAt, youtubeUrl);
                 }
             }
-            
-            return (createdAt, youtubeUrl);
+
+            return (null, null);
         }
         catch (Exception ex)
         {
