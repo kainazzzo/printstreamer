@@ -1,12 +1,16 @@
 @namespace PrintStreamer
 @using printstreamer.Components.Layout
+@{
+    // Always append current UTC timestamp so clients never cache these internal assets.
+    var assetsTimestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
-    <link rel="stylesheet" href="/Components/app.css" />
+    <link rel="stylesheet" href="/Components/app.css?v=@assetsTimestamp" />
     <title>PrintStreamer</title>
     <HeadOutlet />
 </head>
@@ -19,7 +23,7 @@
             <p>Sorry, there's nothing at this address.</p>
         </NotFound>
     </Router>
-    <script src="/Components/app.js?v=2"></script>
+    <script src="/Components/app.js?v=@assetsTimestamp"></script>
     <script src="_framework/blazor.web.js"></script>
 </body>
 </html>

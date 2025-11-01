@@ -19,13 +19,36 @@
         <meta name="msapplication-TileImage" content="/img/icons/mstile-150x150.png" />
         <meta name="msapplication-TileColor" content="#d51f26" />
 
-      <script type="module" crossorigin src="/mainsail/assets/index-C7EQ4c7A.js"></script>
-      <link rel="modulepreload" crossorigin href="/mainsail/assets/overlayscrollbars-CiKU261J.js">
-      <link rel="modulepreload" crossorigin href="/mainsail/assets/vuetify-Ce4WN_Dg.js">
-      <link rel="modulepreload" crossorigin href="/mainsail/assets/echarts-DzoUeqWp.js">
-      <link rel="stylesheet" crossorigin href="/mainsail/assets/overlayscrollbars-BJn_P54_.css">
-      <link rel="stylesheet" crossorigin href="/mainsail/assets/vuetify-BSwS9o2d.css">
-      <link rel="stylesheet" crossorigin href="/mainsail/assets/index-C-e3EX-E.css">
+  <script>
+  (function(){
+    // Inject mainsail assets with a timestamp cache-buster so they are never cached by clients.
+    try {
+      var v = new Date().toISOString().replace(/[:.TZ-]/g, '');
+      function addScript(src, isModule){
+        var s = document.createElement('script');
+        if (isModule) s.type = 'module';
+        s.crossOrigin = 'anonymous';
+        s.src = src + '?v=' + v;
+        document.head.appendChild(s);
+      }
+      function addLink(href, rel){
+        var l = document.createElement('link');
+        l.rel = rel;
+        l.crossOrigin = 'anonymous';
+        l.href = href + '?v=' + v;
+        document.head.appendChild(l);
+      }
+
+      addScript('/mainsail/assets/index-C7EQ4c7A.js', true);
+      addLink('/mainsail/assets/overlayscrollbars-CiKU261J.js', 'modulepreload');
+      addLink('/mainsail/assets/vuetify-Ce4WN_Dg.js', 'modulepreload');
+      addLink('/mainsail/assets/echarts-DzoUeqWp.js', 'modulepreload');
+      addLink('/mainsail/assets/overlayscrollbars-BJn_P54_.css', 'stylesheet');
+      addLink('/mainsail/assets/vuetify-BSwS9o2d.css', 'stylesheet');
+      addLink('/mainsail/assets/index-C-e3EX-E.css', 'stylesheet');
+    } catch (e) { console.error('Asset injection failed', e); }
+  })();
+  </script>
     <link rel="manifest" href="/mainsail/manifest.webmanifest"><script>(function(){
 try{
   console.log('[Proxy Shim] Loading enhanced Mainsail/Fluidd proxy shim...');

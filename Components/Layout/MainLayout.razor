@@ -19,10 +19,10 @@
 
 <div class="wrap">
     <div class="nav">
-        <NavLink href="/">Control Panel</NavLink>
-        <NavLink href="/config">Configuration</NavLink>
-        <NavLink href="/console">Console</NavLink>
-        <NavLink href="/timelapses">Timelapses</NavLink>
+    <NavLink href="/" Match="NavLinkMatch.All">Home 🏠</NavLink>
+        <NavLink href="/console">Console 🖨️</NavLink>
+        <NavLink href="/timelapses">Timelapses ⌛</NavLink>
+        <NavLink href="/config">Configuration ⚙️</NavLink>
     </div>
 
     <PrinterUiIframes @rendermode="@(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())" />
