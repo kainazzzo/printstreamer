@@ -11,3 +11,4 @@ appsettings.Local.json
 timelapse/
 overlay/overlay.txt
 hls/
+appsettings.Custom.json

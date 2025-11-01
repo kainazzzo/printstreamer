@@ -1,4 +1,5 @@
 @inject IJSRuntime JS
+@inject NavigationManager Nav
 
 <div class="timelapse-card @(Timelapse.IsActive ? "active" : "")">
     <div class="card-header">
@@ -11,6 +12,11 @@
             @if (!Timelapse.IsActive)
             {
                 <button @onclick="HandleDelete" class="icon-btn delete" title="Delete timelapse">🗑</button>
+            }
+            @* Always show YouTube link/button if a URL is present so it's obvious even when MP4 tab is selected *@
+            @if (!string.IsNullOrEmpty(Timelapse.YouTubeUrl))
+            {
+                <a href="@Timelapse.YouTubeUrl" class="icon-btn youtube" target="_blank" title="View on YouTube">🎬</a>
             }
         </div>
     </div>
@@ -46,12 +52,9 @@
         {
             @if (Timelapse.VideoFiles?.Count > 0)
             {
-                @if (string.IsNullOrEmpty(Timelapse.YouTubeUrl))
-                {
-                    <button @onclick="HandleUpload" class="btn btn-primary btn-block" disabled="@IsProcessing">
+                    <button @onclick="HandleUpload" class="btn btn-primary btn-block" disabled="@(IsProcessing || !string.IsNullOrEmpty(Timelapse.YouTubeUrl))">
                         @(IsProcessing ? "Uploading..." : "Upload to YouTube")
                     </button>
-                }
             }
             else
             {
@@ -108,7 +111,9 @@
                         @if (TryGetYouTubeId(Timelapse.YouTubeUrl, out var id))
                         {
                             <div class="youtube-embed-wrap">
-                                <iframe width="100%" height="300" src="@($"https://www.youtube.com/embed/{id}")" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                                @* Use embed parameters to reduce branding/related recommendations.
+                                   Do NOT loop the video; instead enable JS API so we can detect ended and pause on the final frame. *@
+                                <iframe id="@iframeId" width="100%" height="300" src="@($"https://www.youtube.com/embed/{id}?rel=0&modestbranding=1&controls=1&enablejsapi=1")" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
                             </div>
                         }
                         else
@@ -363,14 +368,54 @@
 
     protected override void OnParametersSet()
     {
-        // Default tab: prefer youtube if no local video and youtube exists
-        if (!string.IsNullOrEmpty(Timelapse?.YouTubeUrl) && (Timelapse?.VideoFiles == null || Timelapse.VideoFiles.Count == 0))
+        // Default tab: prefer YouTube when a URL is available; otherwise prefer local MP4
+        if (!string.IsNullOrEmpty(Timelapse?.YouTubeUrl))
         {
             selectedTab = "youtube";
         }
         else if (Timelapse?.VideoFiles != null && Timelapse.VideoFiles.Count > 0)
         {
             selectedTab = "video";
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // If the server-side list didn't include a YouTube URL, attempt to fetch metadata for this timelapse
+        try
+        {
+            if (string.IsNullOrEmpty(Timelapse?.YouTubeUrl))
+            {
+                using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+                var name = Timelapse?.Name ?? string.Empty;
+                var resp = await client.GetFromJsonAsync<MetadataResponse>($"api/timelapses/{Uri.EscapeDataString(name)}/metadata");
+                if (resp?.YoutubeUrl is string y && !string.IsNullOrEmpty(y) && Timelapse != null)
+                {
+                    Timelapse.YouTubeUrl = y;
+                    // Ensure the JS registration occurs again for the new iframe
+                    _youtubeHandlerRegistered = false;
+                    StateHasChanged();
+                }
+            }
+        }
+        catch { }
+    }
+
+    // unique id used for the iframe so JS can target it
+    private string iframeId => "yt-" + System.Text.RegularExpressions.Regex.Replace(Timelapse?.Name ?? "timelapse", "\\W+", "-").ToLowerInvariant();
+    private bool _youtubeHandlerRegistered = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // When the YouTube tab is active, register a small JS handler to pause the player on ended
+        if (!string.IsNullOrEmpty(Timelapse?.YouTubeUrl) && selectedTab == "youtube" && !_youtubeHandlerRegistered)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("printstreamer.registerYoutubeEndHandler", iframeId);
+                _youtubeHandlerRegistered = true;
+            }
+            catch { /* best-effort */ }
         }
     }
 
@@ -414,5 +459,12 @@
         }
         catch { }
         return false;
+    }
+    private class MetadataResponse
+    {
+        public bool Success { get; set; }
+        public string? YoutubeUrl { get; set; }
+        public string? CreatedAt { get; set; }
+        public string? Error { get; set; }
     }
 }

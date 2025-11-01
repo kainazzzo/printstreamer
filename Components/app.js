@@ -272,3 +272,74 @@ window.detachHls = cleanup;
 window.getStreamPlayingStatus = function() {
     return isStreamPlaying;
 };
+
+// Register a YouTube iframe end handler that seeks to the last frame and pauses
+window.printstreamer = window.printstreamer || {};
+window.printstreamer._players = window.printstreamer._players || {};
+window.printstreamer._ytReady = window.printstreamer._ytReady || false;
+
+window.printstreamer.registerYoutubeEndHandler = function (iframeId) {
+    return new Promise((resolve, reject) => {
+        try {
+            const setupPlayer = () => {
+                try {
+                    if (window.printstreamer._players[iframeId]) return resolve();
+                    // eslint-disable-next-line no-undef
+                    const player = new YT.Player(iframeId, {
+                        events: {
+                            'onStateChange': function (e) {
+                                try {
+                                    // eslint-disable-next-line no-undef
+                                    if (e.data === YT.PlayerState.ENDED) {
+                                        const p = window.printstreamer._players[iframeId];
+                                        if (!p) return;
+                                        try {
+                                            const d = p.getDuration();
+                                            if (d && d > 0) {
+                                                // Seek to just before the end and pause so the last frame remains visible
+                                                p.seekTo(Math.max(0, d - 0.05), true);
+                                                p.pauseVideo();
+                                            } else {
+                                                p.pauseVideo();
+                                            }
+                                        } catch (e) { /* ignore */ }
+                                    }
+                                } catch (ee) { /* ignore */ }
+                            }
+                        }
+                    });
+                    window.printstreamer._players[iframeId] = player;
+                    return resolve();
+                } catch (err) {
+                    return reject(err);
+                }
+            };
+
+            if (window.YT && window.YT.Player) {
+                setupPlayer();
+            } else {
+                // load api if not already
+                if (!window.printstreamer._ytLoading) {
+                    window.printstreamer._ytLoading = true;
+                    const tag = document.createElement('script');
+                    tag.src = 'https://www.youtube.com/iframe_api';
+                    const firstScriptTag = document.getElementsByTagName('script')[0];
+                    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+                    window.onYouTubeIframeAPIReady = function () {
+                        window.printstreamer._ytReady = true;
+                    };
+                }
+
+                // Wait until API is ready
+                const waitForApi = () => {
+                    if (window.YT && window.YT.Player) return setupPlayer();
+                    setTimeout(waitForApi, 150);
+                };
+                waitForApi();
+            }
+        } catch (ex) {
+            reject(ex);
+        }
+    });
+};

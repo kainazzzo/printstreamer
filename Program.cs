@@ -751,6 +751,67 @@ if (serveEnabled)
 		}
 	});
 
+	// Read timelapse metadata (small helper endpoint used by the UI to refresh a single card)
+	app.MapGet("/api/timelapses/{name}/metadata", (string name) =>
+	{
+		try
+		{
+			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+			if (!Directory.Exists(timelapseDir))
+				return Results.Json(new { success = false, error = "Timelapse not found" });
+
+			var metadataPath = Path.Combine(timelapseDir, ".metadata");
+			if (!File.Exists(metadataPath))
+			{
+				// Try other common names
+				var alt = new[] { Path.Combine(timelapseDir, "metadata"), Path.Combine(timelapseDir, ".metadata.txt"), Path.Combine(timelapseDir, ".meta") };
+				metadataPath = alt.FirstOrDefault(File.Exists) ?? metadataPath;
+			}
+
+			if (!File.Exists(metadataPath))
+				return Results.Json(new { success = true, youtubeUrl = (string?)null, createdAt = (string?)null });
+
+			string? youtubeUrl = null;
+			DateTime? createdAt = null;
+			var lines = File.ReadAllLines(metadataPath);
+			foreach (var line in lines)
+			{
+				if (string.IsNullOrWhiteSpace(line)) continue;
+				var trimmed = line.Trim();
+				var eqIdx = trimmed.IndexOf('=');
+				var colonIdx = trimmed.IndexOf(':');
+				int sep = -1;
+				if (eqIdx >= 0) sep = eqIdx;
+				else if (colonIdx >= 0) sep = colonIdx;
+
+				if (sep >= 0)
+				{
+					var key = trimmed.Substring(0, sep).Trim();
+					var val = trimmed.Substring(sep + 1).Trim();
+					if (key.Equals("CreatedAt", StringComparison.OrdinalIgnoreCase))
+					{
+						if (DateTime.TryParse(val, out var dt)) createdAt = dt;
+					}
+					else if (key.IndexOf("youtube", StringComparison.OrdinalIgnoreCase) >= 0)
+					{
+						youtubeUrl = val;
+					}
+				}
+				else
+				{
+					if (Uri.IsWellFormedUriString(trimmed, UriKind.Absolute) && trimmed.IndexOf("youtube", StringComparison.OrdinalIgnoreCase) >= 0)
+						youtubeUrl = trimmed;
+				}
+			}
+
+			return Results.Json(new { success = true, youtubeUrl, createdAt = createdAt?.ToString("O") });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
 	// Enhanced test page with timelapse management
 	// Blazor pages are now served via MapRazorComponents below
 	app.MapRazorComponents<PrintStreamer.App>()
@@ -792,7 +853,8 @@ if (serveEnabled)
 					BoxColor = config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
 					BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
 					X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
-					Y = config.GetValue<string>("Overlay:Y") ?? "20"
+					Y = config.GetValue<string>("Overlay:Y") ?? string.Empty,
+					BannerFraction = config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2
 				},
 				YouTube = new
 				{
@@ -924,7 +986,8 @@ if (serveEnabled)
 					BoxColor = "black@0.4",
 					BoxBorderW = 8,
 					X = "(w-tw)-20",
-					Y = "20"
+					Y = "",
+					BannerFraction = 0.2
 				},
 				YouTube = new
 				{

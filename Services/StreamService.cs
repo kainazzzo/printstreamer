@@ -109,7 +109,8 @@ namespace PrintStreamer.Services
                         BoxColor = _config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
                         BoxBorderW = _config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
                         X = _config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
-                        Y = _config.GetValue<string>("Overlay:Y") ?? "20"
+                        Y = _config.GetValue<string>("Overlay:Y") ?? string.Empty,
+                        BannerFraction = _config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2
                     };
                     Console.WriteLine($"[StreamService] Overlay enabled: {overlayOptions.TextFile}");
                 }
