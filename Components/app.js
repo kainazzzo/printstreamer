@@ -343,3 +343,29 @@ window.printstreamer.registerYoutubeEndHandler = function (iframeId) {
         }
     });
 };
+
+// Simple audio preview controller for the audio stream endpoint
+window.audioPreview = {
+    play: function() {
+        try {
+            const a = document.getElementById('audioPreview');
+            if (!a) return;
+            a.play().catch(() => {});
+        } catch {}
+    },
+    pause: function() {
+        try {
+            const a = document.getElementById('audioPreview');
+            if (!a) return;
+            a.pause();
+        } catch {}
+    },
+    reload: function() {
+        try {
+            const a = document.getElementById('audioPreview');
+            if (!a) return;
+            a.src = '/api/audio/stream?ts=' + Date.now();
+            a.play().catch(() => {});
+        } catch {}
+    }
+};

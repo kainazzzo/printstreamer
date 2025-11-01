@@ -86,6 +86,7 @@ webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamOrchestrator>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.MoonrakerPollerService>();
 webBuilder.Services.AddHostedService<PrintStreamer.Services.MoonrakerHostedService>();
+webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioService>();
 
 // Add Blazor Server services
 webBuilder.Services.AddRazorComponents()
@@ -835,6 +836,11 @@ if (serveEnabled)
 						HlsFolder = config.GetValue<string>("Stream:Local:HlsFolder") ?? "hls"
 					}
 				},
+				Audio = new
+				{
+					Folder = config.GetValue<string>("Audio:Folder") ?? config.GetValue<string>("audio:folder") ?? "audio",
+					Enabled = config.GetValue<bool?>("Audio:Enabled") ?? config.GetValue<bool?>("audio:enabled") ?? true
+				},
 				Moonraker = new
 				{
 					BaseUrl = config.GetValue<string>("Moonraker:BaseUrl"),
@@ -968,6 +974,11 @@ if (serveEnabled)
 				{
 					Source = "http://192.168.1.2/webcam"
 				},
+				Audio = new
+				{
+					Folder = "audio",
+					Enabled = true
+				},
 				Moonraker = new
 				{
 					BaseUrl = "http://192.168.1.2:7125/",
@@ -1035,6 +1046,174 @@ if (serveEnabled)
 		{
 			Console.WriteLine($"[Config] Error resetting configuration: {ex.Message}");
 			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// Audio API
+	app.MapGet("/api/audio/tracks", (HttpContext ctx) =>
+	{
+		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var tracks = audio.Library.Select(t => new { t.Name }).ToArray();
+		return Results.Json(tracks);
+	});
+
+	app.MapGet("/api/audio/state", (HttpContext ctx) =>
+	{
+		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		return Results.Json(audio.GetState());
+	});
+
+	app.MapPost("/api/audio/folder", async (HttpContext ctx) =>
+	{
+		var path = ctx.Request.Query["path"].ToString();
+		if (string.IsNullOrWhiteSpace(path)) return Results.BadRequest(new { error = "Missing 'path'" });
+		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		audio.SetFolder(path);
+		return Results.Json(new { success = true, folder = audio.Folder });
+	});
+
+	app.MapPost("/api/audio/scan", (HttpContext ctx) =>
+	{
+		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		audio.Rescan();
+		return Results.Json(new { success = true });
+	});
+
+	app.MapPost("/api/audio/queue", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var names = new List<string>();
+			// Accept names via JSON { names: ["track1", ...] } and/or query ?name=...&name=...
+			using (var sr = new StreamReader(ctx.Request.Body))
+			{
+				var body = await sr.ReadToEndAsync();
+				if (!string.IsNullOrWhiteSpace(body))
+				{
+					try
+					{
+						using var doc = System.Text.Json.JsonDocument.Parse(body);
+						if (doc.RootElement.TryGetProperty("names", out var arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+						{
+							foreach (var el in arr.EnumerateArray())
+							{
+								if (el.ValueKind == System.Text.Json.JsonValueKind.String)
+								{
+									names.Add(el.GetString()!);
+								}
+							}
+						}
+					}
+					catch { /* ignore parse errors */ }
+				}
+			}
+			names.AddRange(ctx.Request.Query["name"].Where(s => !string.IsNullOrEmpty(s))!);
+
+			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+			audio.Enqueue(names.ToArray());
+			Console.WriteLine($"[Audio] Queued {names.Count} track(s): {string.Join(", ", names)}");
+			return Results.Json(new { success = true, queued = names.Count });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	app.MapPost("/api/audio/clear", (HttpContext ctx) =>
+	{
+		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		audio.ClearQueue();
+		return Results.Json(new { success = true });
+	});
+
+	app.MapPost("/api/audio/play", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Play(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/pause", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Pause(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/toggle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Toggle(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/next", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Next(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/prev", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Prev(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/shuffle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var raw = ctx.Request.Query["enabled"].ToString(); bool enabled = string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) || raw == "1"; a.SetShuffle(enabled); return Results.Json(new { success = true, enabled }); });
+	app.MapPost("/api/audio/repeat", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var m = ctx.Request.Query["mode"].ToString(); var mode = m?.ToLowerInvariant() switch { "one" => PrintStreamer.Services.RepeatMode.One, "all" => PrintStreamer.Services.RepeatMode.All, _ => PrintStreamer.Services.RepeatMode.None }; a.SetRepeat(mode); return Results.Json(new { success = true, mode = mode.ToString() }); });
+
+	// Continuous audio stream endpoint (MP3). Streams from immediate queue first, then rotates library.
+	app.MapGet("/api/audio/stream", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var cfg = ctx.RequestServices.GetRequiredService<IConfiguration>();
+			var enabled = cfg.GetValue<bool?>("Audio:Enabled") ?? cfg.GetValue<bool?>("audio:enabled") ?? true;
+			if (!enabled)
+			{
+				ctx.Response.StatusCode = 404;
+				await ctx.Response.WriteAsync("Audio stream disabled");
+				return;
+			}
+
+			ctx.Response.StatusCode = 200;
+			ctx.Response.Headers["Content-Type"] = "audio/mpeg";
+			ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+			ctx.Response.Headers["Pragma"] = "no-cache";
+			await ctx.Response.Body.FlushAsync();
+
+			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+			while (!ctx.RequestAborted.IsCancellationRequested)
+			{
+				if (!audio.TryGetNextTrack(out var path) || string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+				{
+					await Task.Delay(1000, ctx.RequestAborted).ContinueWith(_ => { });
+					continue;
+				}
+
+				var psi = new System.Diagnostics.ProcessStartInfo
+				{
+					FileName = "ffmpeg",
+					Arguments = $"-hide_banner -loglevel error -vn -i \"{path}\" -f mp3 -b:a 192k -",
+					UseShellExecute = false,
+					RedirectStandardError = true,
+					RedirectStandardOutput = true,
+					CreateNoWindow = true
+				};
+				using var proc = System.Diagnostics.Process.Start(psi);
+				if (proc == null)
+				{
+					await Task.Delay(500, ctx.RequestAborted).ContinueWith(_ => { });
+					continue;
+				}
+
+				var token = audio.CreateOrSwapTrackToken(ctx.RequestAborted);
+				var buffer = new byte[8192];
+				try
+				{
+					while (!token.IsCancellationRequested && !ctx.RequestAborted.IsCancellationRequested)
+					{
+						int read = await proc.StandardOutput.BaseStream.ReadAsync(buffer.AsMemory(0, buffer.Length), token);
+						if (read <= 0) break; // track finished
+						await ctx.Response.Body.WriteAsync(buffer.AsMemory(0, read), ctx.RequestAborted);
+					}
+				}
+				catch (OperationCanceledException) { }
+				catch (Exception ex)
+				{
+					Console.WriteLine($"[Audio] Stream error: {ex.Message}");
+				}
+				finally
+				{
+					try
+					{
+						if (!proc.HasExited) proc.Kill(true);
+					}
+					catch { }
+				}
+
+				// small gap to avoid tight loop
+				await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+				await Task.Delay(100, ctx.RequestAborted).ContinueWith(_ => { });
+			}
+		}
+		catch (OperationCanceledException) { }
+		catch (Exception ex)
+		{
+			Console.WriteLine($"[Audio] Fatal stream error: {ex.Message}");
 		}
 	});
 

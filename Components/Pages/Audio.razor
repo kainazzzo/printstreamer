@@ -1,0 +1,229 @@
+@page "/audio"
+@rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.AspNetCore.Components.Web
+@implements IDisposable
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>Audio</PageTitle>
+
+<div class="wrap">
+  <div class="nav">
+    <NavLink href="/">← Back to Control Panel</NavLink>
+    <NavLink href="/config">Configuration</NavLink>
+  </div>
+
+  <h1>Audio</h1>
+
+  @if (_loading)
+  {
+    <p>Loading…</p>
+  }
+  else
+  {
+    <div class="grid-2col-leftwide">
+      <div>
+        <div class="section">
+          <h2>Preview Stream</h2>
+          <div class="help-text">This plays the live audio stream from <code>/api/audio/stream</code>.</div>
+          <audio id="audioPreview" controls preload="none" src="/api/audio/stream"></audio>
+          <div class="button-group" style="margin-top:10px; flex-wrap: wrap;">
+            <button class="success" @onclick="ConnectPreview">▶ Connect</button>
+            <button @onclick="ReloadPreview">↻ Reconnect</button>
+          </div>
+        </div>
+        <div class="section">
+          <h2>Now Playing</h2>
+          <div class="np-grid">
+            <div>
+              <div class="label">Track</div>
+              <div class="value">@(_state?.Current ?? "—")</div>
+            </div>
+            <div>
+              <div class="label">Status</div>
+              <div class="value">@(_state?.IsPlaying == true ? "Playing" : "Paused")</div>
+            </div>
+            <div>
+              <div class="label">Repeat</div>
+              <div class="value">@(_state?.Repeat.ToString() ?? "None")</div>
+            </div>
+          </div>
+          <div class="button-group" style="margin-top:10px; flex-wrap: wrap;">
+            <button @onclick="Prev">⏮ Prev</button>
+            <button class="success" @onclick="Play">▶ Play</button>
+            <button class="warning" @onclick="Pause">⏸ Pause</button>
+            <button @onclick="Next">⏭ Next</button>
+            <button @onclick="ToggleShuffle" class="@( _state?.Shuffle == true ? "success" : "")">Shuffle: @(_state?.Shuffle == true ? "On" : "Off")</button>
+            <select @onchange="OnRepeatChange" value="@_repeatSel">
+              <option value="None">Repeat: None</option>
+              <option value="One">Repeat: One</option>
+              <option value="All">Repeat: All</option>
+            </select>
+            <button class="danger" @onclick="ClearQueue">Clear Queue</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>Tracks</h2>
+          <div class="help-text">Click to add to the queue.</div>
+          @if (_tracks?.Count == 0)
+          {
+            <p>No tracks found. Set your folder in Configuration → Audio, then Rescan.</p>
+          }
+          else
+          {
+            <div class="audio-tracks">
+              @foreach (var t in _tracks!)
+              {
+                <div class="audio-track">
+                  <div class="audio-title" title="@t">@t</div>
+                  <div class="audio-actions">
+                    <button class="btn-sm" @onclick="() => Enqueue(t)">Queue</button>
+                  </div>
+                </div>
+              }
+            </div>
+          }
+        </div>
+      </div>
+
+      <div>
+        <div class="section">
+          <h2>Queue</h2>
+          @if (_state?.Queue == null || _state.Queue.Count == 0)
+          {
+            <p>Empty</p>
+          }
+          else
+          {
+            <ol class="queue-list">
+              @foreach (var q in _state!.Queue)
+              {
+                <li>@q</li>
+              }
+            </ol>
+          }
+        </div>
+      </div>
+    </div>
+  }
+</div>
+
+<div id="toast-container"></div>
+
+@code {
+  private bool _loading = true;
+  private List<string>? _tracks;
+  private AudioStateDto? _state;
+  private string _repeatSel = "None";
+  private System.Threading.Timer? _timer;
+
+  protected override async Task OnInitializedAsync()
+  {
+    await LoadAll();
+    _timer = new System.Threading.Timer(async _ => {
+      try { await LoadState(); StateHasChanged(); } catch { }
+    }, null, 1000, 1500);
+  }
+
+  public void Dispose()
+  {
+    _timer?.Dispose();
+  }
+
+  private async Task LoadAll()
+  {
+    _loading = true;
+    try
+    {
+      await LoadTracks();
+      await LoadState();
+    }
+    finally { _loading = false; }
+  }
+
+  private async Task LoadTracks()
+  {
+    try
+    {
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      var list = await client.GetFromJsonAsync<List<TrackDto>>("api/audio/tracks");
+      _tracks = list?.Select(t => t.Name).OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList() ?? new();
+    }
+    catch { _tracks = new(); }
+  }
+
+  private async Task LoadState()
+  {
+    try
+    {
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      _state = await client.GetFromJsonAsync<AudioStateDto>("api/audio/state");
+      _repeatSel = _state?.Repeat ?? "None";
+    }
+    catch { }
+  }
+
+  private async Task Enqueue(string name)
+  {
+    try
+    {
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      var payload = System.Text.Json.JsonSerializer.Serialize(new { names = new [] { name } });
+      var resp = await client.PostAsync("api/audio/queue", new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
+      if (resp.IsSuccessStatusCode)
+      {
+        await Toast($"Queued: {name}", "success");
+      }
+      else
+      {
+        var err = await resp.Content.ReadAsStringAsync();
+        await Toast($"Queue failed: {err}", "error");
+      }
+      await LoadState();
+    }
+    catch { }
+  }
+
+  private async Task Play() { try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }
+  private async Task Pause() { try { await JS.InvokeVoidAsync("audioPreview.pause"); } catch {} await LoadState(); }
+  private async Task ConnectPreview() { try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} }
+  private async Task ReloadPreview() { try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} }
+  private async Task Next() { await Post("api/audio/next"); await LoadState(); }
+  private async Task Prev() { await Post("api/audio/prev"); await LoadState(); }
+  private async Task ClearQueue() { await Post("api/audio/clear"); await LoadState(); }
+  private async Task ToggleShuffle() { var en = !(_state?.Shuffle ?? false); await Post($"api/audio/shuffle?enabled={(en ? "true" : "false")}"); await LoadState(); }
+  private async Task OnRepeatChange(ChangeEventArgs e) { var v = e.Value?.ToString() ?? "None"; _repeatSel = v; await Post($"api/audio/repeat?mode={Uri.EscapeDataString(v)}"); await LoadState(); }
+
+  private async Task Post(string url)
+  {
+    try
+    {
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      var resp = await client.PostAsync(url, null);
+      if (!resp.IsSuccessStatusCode)
+      {
+        var err = await resp.Content.ReadAsStringAsync();
+        await Toast($"Request failed: {url} -> {err}", "error");
+      }
+    }
+    catch { }
+  }
+
+  private async Task Toast(string msg, string type = "info")
+  {
+    try { await JS.InvokeVoidAsync("showToast", msg, type); } catch { }
+  }
+
+  private sealed class TrackDto { public string Name { get; set; } = string.Empty; }
+  private sealed class AudioStateDto
+  {
+    public bool IsPlaying { get; set; }
+    public string? Current { get; set; }
+    public List<string> Queue { get; set; } = new();
+    public bool Shuffle { get; set; }
+    public string Repeat { get; set; } = "None";
+  }
+}
