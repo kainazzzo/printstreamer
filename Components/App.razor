@@ -1,8 +1,30 @@
 @namespace PrintStreamer
 @using printstreamer.Components.Layout
+@using System.Reflection
+@using System.IO
 @{
-    // Always append current UTC timestamp so clients never cache these internal assets.
-    var assetsTimestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+    // Use the server assembly file write time (UTC) as a cache-buster so each build
+    // produces a stable timestamp and clients will fetch fresh assets after a deploy.
+    string assetsTimestamp;
+    try
+    {
+        var asm = typeof(Program).Assembly;
+        var loc = asm.Location;
+        if (!string.IsNullOrEmpty(loc) && File.Exists(loc))
+        {
+            var wt = File.GetLastWriteTimeUtc(loc);
+            assetsTimestamp = wt.ToString("yyyyMMddHHmmss");
+        }
+        else
+        {
+            // Fallback: use current UTC time if assembly location is unavailable
+            assetsTimestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        }
+    }
+    catch
+    {
+        assetsTimestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+    }
 }
 <!DOCTYPE html>
 <html lang="en">
