@@ -222,7 +222,8 @@ namespace PrintStreamer.Services
                         continue;
                     }
 
-                    var args = $"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -i \"{feedUrl}\" -f mp3 -b:a 192k -";
+                    // Use -re to read input at native (real) time so ffmpeg does not transcode the whole file as fast as possible
+                    var args = $"-re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -i \"{feedUrl}\" -f mp3 -b:a 192k -";
                     var psi = new ProcessStartInfo
                     {
                         FileName = "ffmpeg",
