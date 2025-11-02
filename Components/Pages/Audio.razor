@@ -101,7 +101,10 @@
             <ol class="queue-list">
               @foreach (var q in _state!.Queue)
               {
-                <li>@q</li>
+                <li>
+                  <span class="queue-name">@q</span>
+                  <button class="btn-sm btn-clear" title="Remove" @onclick="() => RemoveQueued(q)">×</button>
+                </li>
               }
             </ol>
           }
@@ -182,9 +185,32 @@
         var err = await resp.Content.ReadAsStringAsync();
         await Toast($"Queue failed: {err}", "error");
       }
-      await LoadState();
     }
     catch { }
+    await LoadState();
+  }
+
+  private async Task RemoveQueued(string name)
+  {
+    try
+    {
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      // Backend compares names by filename without extension, but the UI displays filenames
+      // with extensions (e.g., "song.mp3"). Strip the extension so the remove call matches.
+      var baseName = System.IO.Path.GetFileNameWithoutExtension(name) ?? name;
+      var resp = await client.PostAsync($"api/audio/queue/remove?name={Uri.EscapeDataString(baseName)}", null);
+      if (resp.IsSuccessStatusCode)
+      {
+        await Toast($"Removed from queue: {name}", "success");
+      }
+      else
+      {
+        var err = await resp.Content.ReadAsStringAsync();
+        await Toast($"Remove failed: {err}", "error");
+      }
+    }
+    catch { }
+    await LoadState();
   }
 
   private async Task Play() { await Post("api/audio/play"); try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }

@@ -1140,11 +1140,54 @@ if (serveEnabled)
 		}
 	});
 
+
 	app.MapPost("/api/audio/clear", (HttpContext ctx) =>
 	{
 		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
 		audio.ClearQueue();
 		return Results.Json(new { success = true });
+	});
+
+	// Remove specific named tracks from the queue
+	app.MapPost("/api/audio/queue/remove", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var names = new List<string>();
+			using (var sr = new StreamReader(ctx.Request.Body))
+			{
+				var body = await sr.ReadToEndAsync();
+				if (!string.IsNullOrWhiteSpace(body))
+				{
+					try
+					{
+						using var doc = System.Text.Json.JsonDocument.Parse(body);
+						if (doc.RootElement.TryGetProperty("names", out var arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+						{
+							foreach (var el in arr.EnumerateArray())
+							{
+								if (el.ValueKind == System.Text.Json.JsonValueKind.String)
+								{
+									names.Add(el.GetString()!);
+								}
+							}
+						}
+					}
+					catch { /* ignore parse errors */ }
+				}
+			}
+			names.AddRange(ctx.Request.Query["name"].Where(s => !string.IsNullOrEmpty(s))!);
+
+			if (names.Count == 0) return Results.BadRequest(new { error = "Missing 'name'" });
+
+			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+			var removed = audio.RemoveFromQueue(names.ToArray());
+			return Results.Json(new { success = true, removed });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
 	});
 
 	app.MapPost("/api/audio/play", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Play(); return Results.Json(new { success = true }); });

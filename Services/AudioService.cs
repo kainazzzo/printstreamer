@@ -210,6 +210,81 @@ namespace PrintStreamer.Services
             return true;
         }
 
+        /// <summary>
+        /// Try to consume the next item from the explicit queue (if any) and make it the current track.
+        /// Returns true when a queued path was found and selected.
+        /// </summary>
+        public bool TryConsumeQueue(out string path)
+        {
+            path = string.Empty;
+            if (_queue.TryDequeue(out var qpath))
+            {
+                path = qpath;
+                _current = path;
+                _playing = true;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Remove the queued entry at the given zero-based index. Returns true if removed.
+        /// </summary>
+        public bool RemoveFromQueueAt(int index)
+        {
+            if (index < 0) return false;
+            var tmp = new List<string>();
+            var removed = false;
+            var i = 0;
+            while (_queue.TryDequeue(out var p))
+            {
+                if (!removed && i == index)
+                {
+                    removed = true;
+                }
+                else
+                {
+                    tmp.Add(p);
+                }
+                i++;
+            }
+            foreach (var item in tmp) _queue.Enqueue(item);
+            return removed;
+        }
+
+        /// <summary>
+        /// Remove any queued entries that match the provided track names (case-insensitive, compares filename without extension).
+        /// Returns the number of removed items.
+        /// </summary>
+        public int RemoveFromQueue(params string[] names)
+        {
+            if (names == null || names.Length == 0) return 0;
+            var lookup = new HashSet<string>(names.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()), StringComparer.OrdinalIgnoreCase);
+            if (lookup.Count == 0) return 0;
+
+            // Rebuild the queue excluding matching items. Use a small lock to avoid concurrent rebuild collisions.
+            var removed = 0;
+            var temp = new List<string>();
+            while (_queue.TryDequeue(out var p))
+            {
+                var name = System.IO.Path.GetFileNameWithoutExtension(p) ?? string.Empty;
+                if (lookup.Contains(name))
+                {
+                    removed++;
+                    continue;
+                }
+                temp.Add(p);
+            }
+
+            // Re-enqueue preserved items in original order
+            foreach (var item in temp)
+            {
+                _queue.Enqueue(item);
+            }
+
+            return removed;
+        }
+
         public string? Current => _current is string p ? System.IO.Path.GetFileName(p) : null;
         public string? CurrentPath => _current;
     }

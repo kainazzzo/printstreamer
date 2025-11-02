@@ -21,7 +21,6 @@ namespace PrintStreamer.Services
         private CancellationTokenSource _cts = new();
         private Task? _loopTask;
         private bool _disposed;
-        private string? _currentTrackPath;
         private DateTime _lastBroadcastAt = DateTime.MinValue;
 
     // current ffmpeg process (if streaming via ffmpeg)
@@ -277,7 +276,12 @@ namespace PrintStreamer.Services
                         {
                             if (!_cts.IsCancellationRequested && _audio.IsPlaying)
                             {
-                                if (_audio.TryGetNextTrack(out var next))
+                                // Prefer explicit queue items when advancing between tracks
+                                if (_audio.TryConsumeQueue(out var queued))
+                                {
+                                    Console.WriteLine($"[AudioBroadcast] Auto-advanced to next queued track: {System.IO.Path.GetFileName(queued)}");
+                                }
+                                else if (_audio.TryGetNextTrack(out var next))
                                 {
                                     Console.WriteLine($"[AudioBroadcast] Auto-advanced to next track: {System.IO.Path.GetFileName(next)}");
                                 }
