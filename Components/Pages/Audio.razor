@@ -187,8 +187,8 @@
     catch { }
   }
 
-  private async Task Play() { try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }
-  private async Task Pause() { try { await JS.InvokeVoidAsync("audioPreview.pause"); } catch {} await LoadState(); }
+  private async Task Play() { await Post("api/audio/play"); try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }
+  private async Task Pause() { await Post("api/audio/pause"); /* keep preview connected so silence plays while paused */ try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }
   private async Task ConnectPreview() { try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} }
   private async Task ReloadPreview() { try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} }
   private async Task Next() { await Post("api/audio/next"); await LoadState(); }

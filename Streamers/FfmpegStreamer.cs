@@ -8,6 +8,7 @@ namespace PrintStreamer.Streamers
 
 	{
 		private readonly string _source;
+		private readonly string? _audioUrl;
 		private readonly string? _rtmpUrl;
 		private readonly string? _hlsFolder;
 		private readonly int _targetFps;
@@ -18,7 +19,7 @@ namespace PrintStreamer.Streamers
 
 		public Task ExitTask => _exitTcs?.Task ?? Task.CompletedTask;
 
-		public FfmpegStreamer(string source, string? rtmpUrl, int targetFps = 30, int bitrateKbps = 2500, FfmpegOverlayOptions? overlay = null, string? hlsFolder = null)
+		public FfmpegStreamer(string source, string? rtmpUrl, int targetFps = 30, int bitrateKbps = 2500, FfmpegOverlayOptions? overlay = null, string? hlsFolder = null, string? audioUrl = null)
 		{
 			_source = source;
 			_rtmpUrl = rtmpUrl;
@@ -26,6 +27,7 @@ namespace PrintStreamer.Streamers
 			_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 			_overlay = overlay;
 			_hlsFolder = hlsFolder;
+			_audioUrl = audioUrl;
 		}
 
 		public Task StartAsync(CancellationToken cancellationToken = default)
@@ -61,7 +63,7 @@ namespace PrintStreamer.Streamers
 				}
 			}
 
-			var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _hlsFolder);
+			var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _hlsFolder, _audioUrl);
 
 			Console.WriteLine($"Starting ffmpeg with args: {ffmpegArgs}");
 
@@ -149,7 +151,7 @@ namespace PrintStreamer.Streamers
 			}
 		}
 
-		private static string BuildFfmpegArgs(string source, string? rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? hlsFolder)
+		private static string BuildFfmpegArgs(string source, string? rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? hlsFolder, string? audioUrl)
 		{
 			// Basic ffmpeg args that should work for many MJPEG/http or v4l2 inputs.
 			// -re to read input at native frame rate
@@ -181,7 +183,7 @@ namespace PrintStreamer.Streamers
 
 			// For MJPEG/http sources that have no audio, include a silent audio track so YouTube sees audio present.
 			// We'll add a lavfi anullsrc input and map it as the audio input.
-			var addSilentAudio = isHttpSource || srcArg.StartsWith("/dev/") == false;
+			var addSilentAudio = string.IsNullOrWhiteSpace(audioUrl) && (isHttpSource || srcArg.StartsWith("/dev/") == false);
 
 			// ffmpeg logging: allow overriding via env var to hide benign errors
 			string logLevel = System.Environment.GetEnvironmentVariable("FFMPEG_LOGLEVEL") ?? "error";
@@ -207,7 +209,17 @@ namespace PrintStreamer.Streamers
 			string audioEncArgs = "";
 
 			string audioMap = "";
-			if (addSilentAudio)
+			if (!string.IsNullOrWhiteSpace(audioUrl))
+			{
+				// Video input + HTTP MP3 audio input from API endpoint
+				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
+				var audioReconnect = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
+				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -fflags +genpts -i \"{audioUrl}\"";
+				// Map audio from second input
+				audioMap = "-map 1:a:0";
+				audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
+			}
+			else if (addSilentAudio)
 			{
 				// Add reconnect logic for HTTP sources and add a silent audio track
 				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";

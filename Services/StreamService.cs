@@ -90,6 +90,19 @@ namespace PrintStreamer.Services
             var localStreamEnabled = _config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
             var hlsFolder = _config.GetValue<string>("Stream:Local:HlsFolder");
 
+            // Determine audio source for ffmpeg: prefer API endpoint when serving locally and enabled
+            string? audioUrl = null;
+            var useApiAudio = _config.GetValue<bool?>("Stream:Audio:UseApiStream") ?? true;
+            var audioFeatureEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? _config.GetValue<bool?>("audio:enabled") ?? true;
+            if (serveEnabled && useApiAudio && audioFeatureEnabled)
+            {
+                audioUrl = _config.GetValue<string>("Stream:Audio:Url");
+                if (string.IsNullOrWhiteSpace(audioUrl))
+                {
+                    audioUrl = "http://127.0.0.1:8080/api/audio/stream";
+                }
+            }
+
             // Setup overlay if enabled
             FfmpegOverlayOptions? overlayOptions = null;
             OverlayTextService? newOverlayService = null;
@@ -121,7 +134,7 @@ namespace PrintStreamer.Services
             }
 
             // Create new streamer
-            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null);
+            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null, audioUrl);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             lock (_lock)
