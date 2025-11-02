@@ -1193,8 +1193,28 @@ if (serveEnabled)
 	app.MapPost("/api/audio/play", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Play(); return Results.Json(new { success = true }); });
 	app.MapPost("/api/audio/pause", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Pause(); return Results.Json(new { success = true }); });
 	app.MapPost("/api/audio/toggle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Toggle(); return Results.Json(new { success = true }); });
-	app.MapPost("/api/audio/next", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Next(); return Results.Json(new { success = true }); });
-	app.MapPost("/api/audio/prev", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Prev(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/next", (HttpContext ctx) => {
+		var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		a.Next();
+		try
+		{
+			var b = ctx.RequestServices.GetService<PrintStreamer.Services.AudioBroadcastService>();
+			b?.InterruptFfmpeg();
+		}
+		catch { }
+		return Results.Json(new { success = true });
+	});
+	app.MapPost("/api/audio/prev", (HttpContext ctx) => {
+		var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		a.Prev();
+		try
+		{
+			var b = ctx.RequestServices.GetService<PrintStreamer.Services.AudioBroadcastService>();
+			b?.InterruptFfmpeg();
+		}
+		catch { }
+		return Results.Json(new { success = true });
+	});
 	app.MapPost("/api/audio/shuffle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var raw = ctx.Request.Query["enabled"].ToString(); bool enabled = string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) || raw == "1"; a.SetShuffle(enabled); return Results.Json(new { success = true, enabled }); });
 	app.MapPost("/api/audio/repeat", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var m = ctx.Request.Query["mode"].ToString(); var mode = m?.ToLowerInvariant() switch { "one" => PrintStreamer.Services.RepeatMode.One, "all" => PrintStreamer.Services.RepeatMode.All, _ => PrintStreamer.Services.RepeatMode.None }; a.SetRepeat(mode); return Results.Json(new { success = true, mode = mode.ToString() }); });
 
@@ -1257,6 +1277,15 @@ if (serveEnabled)
 		{
 			Console.WriteLine("[Stream] Web server ready, starting local HLS preview stream...");
 			// Start a local HLS-only stream on startup for preview
+			// Ensure audio broadcaster is constructed so the API audio endpoint is available
+			try
+			{
+				// Resolve the AudioBroadcastService (constructor will start its internal feed/supervisor)
+				var _ = app.Services.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+			}
+			catch { }
+
+			// Small delay to give the audio feed a moment to start before ffmpeg connects
 			Task.Delay(500).ContinueWith(async _ =>
 			{
 				try

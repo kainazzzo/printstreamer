@@ -430,6 +430,26 @@ namespace PrintStreamer.Services
             }
         }
 
+        /// <summary>
+        /// Forcefully interrupt the current ffmpeg process so the supervisor will restart
+        /// and pick up the currently requested audio path. Useful to implement immediate
+        /// skips when the AudioService changes the current track.
+        /// </summary>
+        public void InterruptFfmpeg()
+        {
+            lock (_lock)
+            {
+                try
+                {
+                    if (_ffmpegProc != null && !_ffmpegProc.HasExited)
+                    {
+                        try { _ffmpegProc.Kill(true); } catch { }
+                    }
+                }
+                catch { }
+            }
+        }
+
         // Diagnostic status used by the API
         public object GetStatus()
         {

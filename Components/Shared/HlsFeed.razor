@@ -1,8 +1,99 @@
+@inject IJSRuntime JS
+
 <div style="flex:1;display:flex;flex-direction:column">
     <h3 style="margin:6px 0;font-size:1em">Preview (with overlay)</h3>
-    <div id="hlsContainer" style="width:100%;background:#000;border:4px solid #333;display:flex;align-items:center;justify-content:center">
-        <video id="hlsPlayer" autoplay muted playsinline style="width:100%;height:auto;max-height:480px;display:block"></video>
+    <div id="hlsContainer" class="preview-wide" style="background:#000;">
+        <!-- Add native controls so users can unmute/play, but also provide a small control bar below -->
+        <video id="hlsPlayer" controls></video>
     </div>
-    <div id="hlsStatus" style="margin-top:8px;color:#66ccff;font-size:0.9em">HLS status: initializing...</div>
-    <p>Local HLS: <a href="/hls/stream.m3u8" style="color:#66ccff">/hls/stream.m3u8</a></p>
+
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+        <button @onclick="TogglePlayPause" style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">@(_isPlaying ? "Pause" : "Play")</button>
+        <button @onclick="ToggleMute" style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">@(_isMuted ? "Unmute" : "Mute")</button>
+        <label style="color:#ccc;font-size:0.9em">Volume</label>
+        <input type="range" min="0" max="100" value="@(_volume*100)" @oninput="VolumeChanged" style="width:140px" />
+        <div id="hlsStatus" style="margin-left:8px;color:#66ccff;font-size:0.9em">HLS status: initializing...</div>
+    </div>
+
+    <p style="margin-top:6px">Local HLS: <a href="/hls/stream.m3u8" style="color:#66ccff">/hls/stream.m3u8</a></p>
 </div>
+
+@code {
+    private bool _isPlaying = false;
+    private bool _isMuted = true;
+    private double _volume = 0.0; // 0.0 - 1.0
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Try to read initial state from JS
+            try
+            {
+                _isMuted = await JS.InvokeAsync<bool>("hlsControls.isMuted");
+            }
+            catch { }
+            try
+            {
+                _isPlaying = await JS.InvokeAsync<bool>("hlsControls.isPlaying");
+            }
+            catch { }
+            try
+            {
+                var vol = await JS.InvokeAsync<double>("(function(){ const v=document.getElementById('hlsPlayer'); return v? v.volume : 0; })");
+                _volume = Math.Max(0, Math.Min(1, vol));
+            }
+            catch { }
+            StateHasChanged();
+        }
+    }
+
+    private async Task TogglePlayPause()
+    {
+        try
+        {
+            var playing = await JS.InvokeAsync<bool>("hlsControls.isPlaying");
+            if (playing)
+            {
+                await JS.InvokeVoidAsync("hlsControls.pause");
+                _isPlaying = false;
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("hlsControls.play");
+                _isPlaying = true;
+            }
+        }
+        catch { }
+        StateHasChanged();
+    }
+
+    private async Task ToggleMute()
+    {
+        try
+        {
+            var muted = await JS.InvokeAsync<bool>("hlsControls.toggleMute");
+            _isMuted = muted;
+        }
+        catch { }
+        StateHasChanged();
+    }
+
+    private async Task VolumeChanged(ChangeEventArgs e)
+    {
+        try
+        {
+            if (e?.Value == null) return;
+            var v = 0.0;
+            if (double.TryParse(e.Value.ToString(), out var iv))
+            {
+                v = Math.Max(0, Math.Min(100, iv)) / 100.0;
+            }
+            _volume = v;
+            await JS.InvokeVoidAsync("hlsControls.setVolume", _volume);
+            _isMuted = await JS.InvokeAsync<bool>("hlsControls.isMuted");
+        }
+        catch { }
+        StateHasChanged();
+    }
+}

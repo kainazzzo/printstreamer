@@ -217,8 +217,8 @@
   private async Task Pause() { await Post("api/audio/pause"); /* keep preview connected so silence plays while paused */ try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }
   private async Task ConnectPreview() { try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} }
   private async Task ReloadPreview() { try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} }
-  private async Task Next() { await Post("api/audio/next"); await LoadState(); }
-  private async Task Prev() { await Post("api/audio/prev"); await LoadState(); }
+  private async Task Next() { await Post("api/audio/next"); try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} await LoadState(); }
+  private async Task Prev() { await Post("api/audio/prev"); try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} await LoadState(); }
   private async Task ClearQueue() { await Post("api/audio/clear"); await LoadState(); }
   private async Task ToggleShuffle() { var en = !(_state?.Shuffle ?? false); await Post($"api/audio/shuffle?enabled={(en ? "true" : "false")}"); await LoadState(); }
   private async Task OnRepeatChange(ChangeEventArgs e) { var v = e.Value?.ToString() ?? "None"; _repeatSel = v; await Post($"api/audio/repeat?mode={Uri.EscapeDataString(v)}"); await LoadState(); }

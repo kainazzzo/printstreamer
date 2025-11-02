@@ -273,6 +273,49 @@ window.getStreamPlayingStatus = function() {
     return isStreamPlaying;
 };
 
+// HLS player control helpers exposed for Blazor UI
+window.hlsControls = {
+    play: function() {
+        try {
+            const v = document.getElementById('hlsPlayer');
+            if (!v) return;
+            v.play().catch(() => {});
+        } catch (e) { }
+    },
+    pause: function() {
+        try {
+            const v = document.getElementById('hlsPlayer');
+            if (!v) return;
+            v.pause();
+        } catch (e) { }
+    },
+    toggleMute: function() {
+        try {
+            const v = document.getElementById('hlsPlayer');
+            if (!v) return;
+            v.muted = !v.muted;
+            try { if (!v.muted) v.play().catch(() => {}); } catch {}
+            return v.muted;
+        } catch (e) { return true; }
+    },
+    setVolume: function(vol) {
+        try {
+            const v = document.getElementById('hlsPlayer');
+            if (!v) return;
+            // Clamp 0.0 - 1.0
+            const f = Math.max(0, Math.min(1, parseFloat(vol) || 0));
+            v.volume = f;
+            if (f > 0 && v.muted) v.muted = false;
+        } catch (e) {}
+    },
+    isMuted: function() {
+        try { const v = document.getElementById('hlsPlayer'); return v ? v.muted : true; } catch { return true; }
+    },
+    isPlaying: function() {
+        try { const v = document.getElementById('hlsPlayer'); return v && !v.paused && !v.ended; } catch { return false; }
+    }
+};
+
 // Register a YouTube iframe end handler that seeks to the last frame and pauses
 window.printstreamer = window.printstreamer || {};
 window.printstreamer._players = window.printstreamer._players || {};
