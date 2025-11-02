@@ -11,15 +11,17 @@ namespace PrintStreamer.Services
     public class StreamService : IDisposable
     {
         private readonly object _lock = new object();
-        private readonly IConfiguration _config;
+    private readonly IConfiguration _config;
+    private readonly AudioService _audioService;
         private IStreamer? _currentStreamer;
         private CancellationTokenSource? _currentCts;
         private OverlayTextService? _overlayService;
         private bool _disposed = false;
 
-        public StreamService(IConfiguration config)
+        public StreamService(IConfiguration config, AudioService audioService)
         {
             _config = config;
+            _audioService = audioService;
         }
 
         /// <summary>
@@ -106,11 +108,11 @@ namespace PrintStreamer.Services
             // Setup overlay if enabled
             FfmpegOverlayOptions? overlayOptions = null;
             OverlayTextService? newOverlayService = null;
-            if (_config.GetValue<bool?>("Overlay:Enabled") ?? false)
+                    if (_config.GetValue<bool?>("Overlay:Enabled") ?? false)
             {
                 try
                 {
-                    newOverlayService = new OverlayTextService(_config, overlayProvider);
+                    newOverlayService = new OverlayTextService(_config, overlayProvider, () => _audioService.Current);
                     newOverlayService.Start();
                     overlayOptions = new FfmpegOverlayOptions
                     {

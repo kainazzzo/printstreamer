@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using PrintStreamer.Services;
 
 namespace PrintStreamer.Overlay;
 
@@ -21,12 +22,14 @@ public sealed class OverlayTextService : IDisposable
     private Task? _loopTask;
     // Optional provider to get cached timelapse metadata (filename -> session data)
     private readonly ITimelapseMetadataProvider? _tlProvider;
+    private readonly Func<string?>? _audioProvider;
 
     public string TextFilePath => _textFilePath;
 
-    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider = null)
+    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider = null, Func<string?>? audioProvider = null)
     {
         _tlProvider = timelapseProvider;
+        _audioProvider = audioProvider;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
 
         _moonrakerBase = (config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125").TrimEnd('/');
@@ -407,6 +410,17 @@ public sealed class OverlayTextService : IDisposable
             var right = d.LayerMax.HasValue ? d.LayerMax.Value.ToString() : "-";
             s = s + $"  |  Layers: {left}/{right}";
         }
+
+        // Append current audio filename as a new final line when available
+        try
+        {
+            var audioName = _audioProvider?.Invoke();
+            if (!string.IsNullOrWhiteSpace(audioName))
+            {
+                s = s + "\n" + "Song: " + audioName;
+            }
+        }
+        catch { }
 
         // Escape backslashes and colons minimally for drawtext textfile content safety
         // Newlines are supported; keep as-is

@@ -182,7 +182,7 @@ namespace PrintStreamer.Services
                 FfmpegOverlayOptions? overlayOptions = null;
                 if (config.GetValue<bool?>("Overlay:Enabled") ?? false)
                 {
-                    var overlayService = new OverlayTextService(config, null);
+                    var overlayService = new OverlayTextService(config, null, null);
                     overlayService.Start();
                     overlayOptions = new FfmpegOverlayOptions
                     {
@@ -884,7 +884,7 @@ namespace PrintStreamer.Services
                 {
                     try
                     {
-                        overlayService = new OverlayTextService(config, timelapseProvider);
+                        overlayService = new OverlayTextService(config, timelapseProvider, null);
                         overlayService.Start();
                         overlayOptions = new FfmpegOverlayOptions
                         {
