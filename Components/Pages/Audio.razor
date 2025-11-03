@@ -67,24 +67,28 @@
 
         <div class="section">
           <h2>Tracks</h2>
-          <div class="help-text">Click to add to the queue.</div>
+          <div class="help-text">Browse your library. Use Queue to add, Play to switch the live stream immediately, or Preview to listen locally.</div>
           @if (_tracks?.Count == 0)
           {
             <p>No tracks found. Set your folder in Configuration → Audio, then Rescan.</p>
           }
           else
           {
-            <div class="audio-tracks">
+            <div class="audio-list" style="max-height: 360px; overflow-y: auto;">
               @foreach (var t in _tracks!)
               {
-                <div class="audio-track">
-                  <div class="audio-title" title="@t">@t</div>
+                <div class="audio-row">
+                  <div class="audio-name" title="@t">@t</div>
                   <div class="audio-actions">
-                    <button class="btn-sm" @onclick="() => Enqueue(t)">Queue</button>
+                    <button class="btn-xs" title="Add to queue" @onclick="() => Enqueue(t)">Queue</button>
+                    <button class="btn-xs success" title="Play now on stream" @onclick="() => PlayNow(t)">Play</button>
+                    <button class="btn-xs" title="Preview locally" @onclick="() => Preview(t)">Preview</button>
                   </div>
                 </div>
               }
             </div>
+            <div class="help-text" style="margin-top:8px">Preview plays locally in your browser:</div>
+            <audio id="trackPreview" controls preload="none" style="width:100%"></audio>
           }
         </div>
       </div>
@@ -222,6 +226,34 @@
   private async Task ClearQueue() { await Post("api/audio/clear"); await LoadState(); }
   private async Task ToggleShuffle() { var en = !(_state?.Shuffle ?? false); await Post($"api/audio/shuffle?enabled={(en ? "true" : "false")}"); await LoadState(); }
   private async Task OnRepeatChange(ChangeEventArgs e) { var v = e.Value?.ToString() ?? "None"; _repeatSel = v; await Post($"api/audio/repeat?mode={Uri.EscapeDataString(v)}"); await LoadState(); }
+
+  // New: play a specific track immediately on the live stream
+  private async Task PlayNow(string name)
+  {
+    try
+    {
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      var resp = await client.PostAsync($"api/audio/play-track?name={Uri.EscapeDataString(name)}", null);
+      if (resp.IsSuccessStatusCode)
+      {
+        await Toast($"Playing now: {name}", "success");
+        try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch { }
+      }
+      else
+      {
+        var err = await resp.Content.ReadAsStringAsync();
+        await Toast($"Play failed: {err}", "error");
+      }
+    }
+    catch { }
+    await LoadState();
+  }
+
+  // New: local file preview in the browser
+  private async Task Preview(string name)
+  {
+    try { await JS.InvokeVoidAsync("trackPreview.play", name); } catch { }
+  }
 
   private async Task Post(string url)
   {

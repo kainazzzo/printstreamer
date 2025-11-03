@@ -171,3 +171,16 @@ window.audioPreview = {
         } catch {}
     }
 };
+
+// Local file preview player (per-track)
+window.trackPreview = {
+    play: function(name) {
+        try {
+            const a = document.getElementById('trackPreview');
+            if (!a) return;
+            const url = '/api/audio/preview?name=' + encodeURIComponent(name) + '&ts=' + Date.now();
+            a.src = url;
+            a.play().catch(() => {});
+        } catch {}
+    }
+};

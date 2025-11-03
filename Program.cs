@@ -1339,6 +1339,57 @@ if (serveEnabled)
 	app.MapPost("/api/audio/shuffle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var raw = ctx.Request.Query["enabled"].ToString(); bool enabled = string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) || raw == "1"; a.SetShuffle(enabled); return Results.Json(new { success = true, enabled }); });
 	app.MapPost("/api/audio/repeat", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var m = ctx.Request.Query["mode"].ToString(); var mode = m?.ToLowerInvariant() switch { "one" => PrintStreamer.Services.RepeatMode.One, "all" => PrintStreamer.Services.RepeatMode.All, _ => PrintStreamer.Services.RepeatMode.None }; a.SetRepeat(mode); return Results.Json(new { success = true, mode = mode.ToString() }); });
 
+	// Preview a specific audio file directly (browser-only). Streams the raw file with best-effort MIME type.
+	app.MapGet("/api/audio/preview", (HttpContext ctx) =>
+	{
+		try
+		{
+			var name = ctx.Request.Query["name"].ToString();
+			if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest(new { error = "Missing 'name'" });
+			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+			var path = audio.GetPathForName(name);
+			if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) return Results.NotFound();
+
+			var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+			var contentType = ext switch
+			{
+				".mp3" => "audio/mpeg",
+				".aac" => "audio/aac",
+				".m4a" => "audio/mp4",
+				".wav" => "audio/wav",
+				".flac" => "audio/flac",
+				".ogg" => "audio/ogg",
+				".opus" => "audio/ogg",
+				_ => "application/octet-stream"
+			};
+			return Results.File(path, contentType, enableRangeProcessing: true);
+		}
+		catch
+		{
+			return Results.NotFound();
+		}
+	});
+
+	// Play a specific track immediately on the live stream
+	app.MapPost("/api/audio/play-track", (HttpContext ctx) =>
+	{
+		var name = ctx.Request.Query["name"].ToString();
+		if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest(new { error = "Missing 'name'" });
+		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		if (!audio.TrySelectByName(name, out var selected))
+		{
+			return Results.Json(new { success = false, error = "Track not found" });
+		}
+		// Interrupt ffmpeg so the broadcast switches to the selected file
+		try
+		{
+			var b = ctx.RequestServices.GetService<PrintStreamer.Services.AudioBroadcastService>();
+			b?.InterruptFfmpeg();
+		}
+		catch { }
+		return Results.Json(new { success = true, track = System.IO.Path.GetFileName(selected!) });
+	});
+
 	// Live-only audio stream endpoint (MP3). Subscribes to a centralized broadcaster so
 	// reconnects resume at the live edge instead of starting a new track.
 	app.MapGet("/api/audio/stream", async (HttpContext ctx) =>

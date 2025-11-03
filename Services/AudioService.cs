@@ -151,6 +151,31 @@ namespace PrintStreamer.Services
         public void SetShuffle(bool enabled) { _shuffle = enabled; }
         public void SetRepeat(RepeatMode mode) { _repeat = mode; }
 
+        /// <summary>
+        /// Select a specific track by display name and start playing it immediately.
+        /// Returns true if the name was found in the library.
+        /// </summary>
+        public bool TrySelectByName(string name, out string? selectedPath)
+        {
+            selectedPath = null;
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            var match = _library.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (match == null || string.IsNullOrWhiteSpace(match.Path)) return false;
+            _current = match.Path;
+            _playing = true;
+            selectedPath = match.Path;
+            return true;
+        }
+
+        /// <summary>
+        /// Resolve a display name to an absolute file path, or null if not found.
+        /// </summary>
+        public string? GetPathForName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            return _library.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase))?.Path;
+        }
+
         public bool TryGetNextTrack(out string path)
         {
             path = string.Empty;
