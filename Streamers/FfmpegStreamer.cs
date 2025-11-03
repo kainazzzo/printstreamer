@@ -32,34 +32,8 @@ namespace PrintStreamer.Streamers
 		{
 			_exitTcs = new TaskCompletionSource<object?>();
 
-			// Ensure overlay prerequisites exist before launching ffmpeg
-			if (_overlay is not null)
-			{
-				try
-				{
-					if (!string.IsNullOrWhiteSpace(_overlay.TextFile))
-					{
-						var tf = _overlay.TextFile;
-						var tfDir = Path.GetDirectoryName(tf);
-						if (!string.IsNullOrEmpty(tfDir) && !Directory.Exists(tfDir))
-						{
-							Directory.CreateDirectory(tfDir);
-						}
-						if (!File.Exists(tf))
-						{
-							File.WriteAllText(tf, "Starting…", System.Text.Encoding.UTF8);
-						}
-					}
-					if (!string.IsNullOrWhiteSpace(_overlay.FontFile) && !File.Exists(_overlay.FontFile))
-					{
-						Console.WriteLine($"[Overlay] Warning: Font file not found at '{_overlay.FontFile}'. ffmpeg may fail to render text.");
-					}
-				}
-				catch (Exception ex)
-				{
-					Console.WriteLine($"[Overlay] Preflight error: {ex.Message}");
-				}
-			}
+			// Note: Overlay text is now handled upstream by the /stream/overlay endpoint.
+			// FfmpegStreamer no longer manages overlay text files or fonts.
 
 			var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _audioUrl);
 
@@ -271,58 +245,17 @@ namespace PrintStreamer.Streamers
 			// resolution by default. If you want to enforce a target resolution, add a
 			// configurable scale filter here (e.g. scale=1280:-1 for 720p/1080p targeting).
 
-			// Inject drawtext overlay if configured
-			if (overlay is not null && !string.IsNullOrWhiteSpace(overlay.TextFile))
+			// No drawtext/drawbox here: the video already includes overlay from /stream/overlay
+
+			// If we're outputting to RTMP (YouTube), upscale the final composed frame to 1080p
+			// without altering the original source or overlay logic. We preserve aspect ratio
+			// and pad to 1920x1080 to avoid stretching.
+			if (!string.IsNullOrWhiteSpace(rtmpUrl))
 			{
-				string esc(string s) => s.Replace("\\", "\\\\").Replace("'", "\\'");
-				var font = esc(overlay.FontFile ?? "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf");
-				var text = esc(overlay.TextFile);
-				var fontColor = string.IsNullOrWhiteSpace(overlay.FontColor) ? "white" : overlay.FontColor;
-				var boxColor = string.IsNullOrWhiteSpace(overlay.BoxColor) ? "black@0.4" : overlay.BoxColor;
-				var x = "0";
-				// Keep the raw overlay.Y value (don't default to 20 here) so we can decide
-				// whether to honor an explicit config or compute a bottom-anchored value.
-				var y = overlay.Y;
-				var fontsize = overlay.FontSize <= 0 ? 22 : overlay.FontSize;
-				var borderw = overlay.BoxBorderW < 0 ? 8 : overlay.BoxBorderW;
-
-				// Draw a full-width background bar behind the text using drawbox
-				try
-				{
-					// Estimate the text height from the current text file so the banner can be
-					// sized to the text and anchored to the bottom. This is an approximation
-					// (based on fontsize and line count) and will be recomputed when ffmpeg
-					// is restarted or the initial file is present at startup.
-					int lineCount = 1;
-					try
-					{
-						var initialTextPath = overlay.TextFile;
-						var initialText = File.Exists(initialTextPath) ? File.ReadAllText(initialTextPath) : string.Empty;
-						if (!string.IsNullOrEmpty(initialText))
-						{
-							lineCount = initialText.Split('\n').Length;
-						}
-					}
-					catch { }
-
-					var approxTextHeight = Math.Max(fontsize, 12) * Math.Max(1, lineCount);
-					var padding = 32; // top+bottom padding approx
-					var extra = 6; // small fudge for ascent/descent
-					var boxH = padding + approxTextHeight + borderw + extra;
-
-					// Place drawbox anchored to the bottom: y = h - boxH
-					// Use parentheses around the numeric box height to avoid any parsing ambiguity
-					var drawbox = $"drawbox=x=0:y=ih-({boxH}):w=iw:h={boxH}:color={boxColor}:t=fill";
-					vfFilters.Add(drawbox);
-
-					// Compute a default Y value that places the text inside the banner if overlay.Y not provided
-					// or if it appears to be the old default ("20"). Treat some legacy defaults as unset.
-					var textY = $"h-({boxH})+{padding / 2}";
-					var textX = $"{x} + {padding / 2}";
-					var draw = $"drawtext=fontfile='{font}':textfile='{text}':reload=1:expansion=none:fontsize={fontsize}:fontcolor={fontColor}:x={textX}:y={textY}";
-					vfFilters.Add(draw);
-				}
-				catch { }
+				vfFilters.Add("scale=1920:1080:flags=lanczos:force_original_aspect_ratio=decrease");
+				vfFilters.Add("pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black");
+				// Re-assert pixel format to be safe after scale/pad
+				vfFilters.Add("format=yuv420p");
 			}
 
 			var vfChain = string.Join(",", vfFilters);

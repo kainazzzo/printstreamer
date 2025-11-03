@@ -189,9 +189,9 @@ namespace PrintStreamer.Services
 
                 
 
-                // Overlay options
+                // Overlay options: only when not using the pre-composited overlay endpoint
                 FfmpegOverlayOptions? overlayOptions = null;
-                if (config.GetValue<bool?>("Overlay:Enabled") ?? false)
+                if (!(config.GetValue<bool?>("Serve:Enabled") ?? true) && (config.GetValue<bool?>("Overlay:Enabled") ?? false))
                 {
                     var overlayService = new OverlayTextService(config, null, null);
                     overlayService.Start();
@@ -891,9 +891,9 @@ namespace PrintStreamer.Services
                 // Respect config flag: whether automatic LiveBroadcast creation is enabled
                 var liveBroadcastEnabled = allowYouTube && (config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true);
 
-                // Prepare overlay options early so native fallback can reuse them
+                // Prepare overlay options only when NOT using pre-composited overlay endpoint
                 FfmpegOverlayOptions? overlayOptions = null;
-                if (config.GetValue<bool?>("Overlay:Enabled") ?? false)
+                if (!(config.GetValue<bool?>("Serve:Enabled") ?? true) && (config.GetValue<bool?>("Overlay:Enabled") ?? false))
                 {
                     try
                     {

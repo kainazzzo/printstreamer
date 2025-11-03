@@ -106,10 +106,10 @@ namespace PrintStreamer.Services
                 }
             }
 
-            // Setup overlay if enabled
+            // Setup overlay options only when NOT using the pre-composited overlay endpoint
             FfmpegOverlayOptions? overlayOptions = null;
             OverlayTextService? newOverlayService = null;
-                    if (_config.GetValue<bool?>("Overlay:Enabled") ?? false)
+            if (!serveEnabled && (_config.GetValue<bool?>("Overlay:Enabled") ?? false))
             {
                 try
                 {
@@ -128,11 +128,11 @@ namespace PrintStreamer.Services
                         Y = _config.GetValue<string>("Overlay:Y") ?? string.Empty,
                         BannerFraction = _config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2
                     };
-                    Console.WriteLine($"[StreamService] Overlay enabled: {overlayOptions.TextFile}");
+                    Console.WriteLine($"[StreamService] Overlay enabled (ffmpeg): {overlayOptions.TextFile}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[StreamService] Failed to start overlay: {ex.Message}");
+                    Console.WriteLine($"[StreamService] Failed to start overlay (ffmpeg): {ex.Message}");
                 }
             }
 
