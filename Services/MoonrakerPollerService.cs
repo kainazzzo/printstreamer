@@ -86,7 +86,7 @@ namespace PrintStreamer.Services
                             }
                         }
 
-                        // Start broadcast when printing begins
+                        // Start broadcast (or local stream) when printing begins
                         if (isPrinting && !_orchestrator.IsBroadcastActive && (string.IsNullOrWhiteSpace(currentJob) || currentJob != lastJobFilename))
                         {
                             Console.WriteLine($"[MoonrakerPoller] New print detected: {currentJob}");
@@ -115,14 +115,18 @@ namespace PrintStreamer.Services
                             }
                             else
                             {
-                                // Just start local stream
-                                try
+                                // Manual mode: ensure a local stream is running continuously; avoid restarting if already streaming
+                                if (!_orchestrator.IsStreaming)
                                 {
-                                    await _orchestrator.StartLocalStreamAsync(cancellationToken);
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"[MoonrakerPoller] Error starting local stream: {ex.Message}");
+                                    try
+                                    {
+                                        Console.WriteLine("[MoonrakerPoller] Manual mode: starting local stream (no auto-broadcast)");
+                                        await _orchestrator.StartLocalStreamAsync(cancellationToken);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"[MoonrakerPoller] Error starting local stream: {ex.Message}");
+                                    }
                                 }
                             }
 
@@ -183,21 +187,30 @@ namespace PrintStreamer.Services
                             Console.WriteLine($"[MoonrakerPoller] Print finished (state: {lastState} -> {state}), stopping broadcast");
                             lastJobFilename = null;
 
-                            try
+                            // Only auto-stop the broadcast in auto-broadcast mode. In manual mode, keep it running until the user stops it.
+                            var autoBroadcastEnabled = _config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
+                            if (autoBroadcastEnabled)
                             {
-                                var (success, message) = await _orchestrator.StopBroadcastAsync(CancellationToken.None);
-                                if (success)
+                                try
                                 {
-                                    Console.WriteLine("[MoonrakerPoller] Broadcast stopped");
+                                    var (success, message) = await _orchestrator.StopBroadcastAsync(CancellationToken.None);
+                                    if (success)
+                                    {
+                                        Console.WriteLine("[MoonrakerPoller] Broadcast stopped");
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine($"[MoonrakerPoller] Error stopping broadcast: {message}");
+                                    }
                                 }
-                                else
+                                catch (Exception ex)
                                 {
-                                    Console.WriteLine($"[MoonrakerPoller] Error stopping broadcast: {message}");
+                                    Console.WriteLine($"[MoonrakerPoller] Exception stopping broadcast: {ex.Message}");
                                 }
                             }
-                            catch (Exception ex)
+                            else
                             {
-                                Console.WriteLine($"[MoonrakerPoller] Exception stopping broadcast: {ex.Message}");
+                                Console.WriteLine("[MoonrakerPoller] Manual mode: auto-broadcast disabled; leaving broadcast running.");
                             }
 
                             // Finalize timelapse if still active
@@ -231,6 +244,21 @@ namespace PrintStreamer.Services
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[MoonrakerPoller] Error: {ex.Message}");
+                    }
+
+                    // Keep-alive: In manual mode, ensure a continuous local stream is running even when not printing
+                    try
+                    {
+                        var autoBroadcastEnabledLoop = _config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
+                        if (!autoBroadcastEnabledLoop && lastState != "printing" && !_orchestrator.IsStreaming)
+                        {
+                            Console.WriteLine("[MoonrakerPoller] Manual mode: ensuring local stream is running");
+                            await _orchestrator.StartLocalStreamAsync(cancellationToken);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[MoonrakerPoller] Keep-alive stream error: {ex.Message}");
                     }
 
                     await Task.Delay(pollInterval, cancellationToken);

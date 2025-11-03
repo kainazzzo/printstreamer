@@ -79,19 +79,14 @@ if [[ ! -f "$TOKEN_FILE_HOST" ]]; then
   echo '{}' > "$TOKEN_FILE_HOST"
 fi
 echo "  Token file  : ${TOKEN_FILE_HOST} -> /app/tokens/youtube_token.json (+compat link at /app/youtube_token.json)"
+# Only detach if not running interactively
+DOCKER_DETACH_FLAG=""
+if [[ "${DOCKER_INTERACTIVE_FLAGS}" != *"-i"* && "${DOCKER_INTERACTIVE_FLAGS}" != *"-t"* ]]; then
+  DOCKER_DETACH_FLAG="-d"
+fi
 
-echo "docker run command: docker run ${DOCKER_INTERACTIVE_FLAGS} \
-  --name \"${CONTAINER_NAME}\" \
-  --restart \"${RESTART_POLICY}\" \
-  -p \"${HOST_PORT}:8080\" \
-  -e \"ASPNETCORE_ENVIRONMENT=Home\" \
-  -v \"$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro\" \
-  -v \"${HOST_DATA_DIR}:/usr/local/share/data\" \
-  -v \"$REPO_ROOT/tokens:/app/tokens\" \
-  -v \"${TOKEN_FILE_HOST}:/app/youtube_token.json\" \
-  \"${IMAGE_NAME}\""
-
-docker run ${DOCKER_INTERACTIVE_FLAGS} \
+# Build command array so we can print a safely quoted, copy/pasteable command
+DOCKER_CMD=(docker run ${DOCKER_DETACH_FLAG} ${DOCKER_INTERACTIVE_FLAGS} \
   --name "${CONTAINER_NAME}" \
   --restart "${RESTART_POLICY}" \
   -p "${HOST_PORT}:8080" \
@@ -100,7 +95,17 @@ docker run ${DOCKER_INTERACTIVE_FLAGS} \
   -v "${HOST_DATA_DIR}:/usr/local/share/data" \
   -v "$REPO_ROOT/tokens:/app/tokens" \
   -v "${TOKEN_FILE_HOST}:/app/youtube_token.json" \
-  "${IMAGE_NAME}"
+  "${IMAGE_NAME}")
+
+# Print the command in a shell-quoted form so it's obvious what will run
+printf "docker run command:"
+for arg in "${DOCKER_CMD[@]}"; do
+  printf ' %q' "$arg"
+done
+printf "\n\n"
+
+# Execute the built command
+"${DOCKER_CMD[@]}"
 
 echo
 echo "✓ Container started. Access: http://localhost:${HOST_PORT}"

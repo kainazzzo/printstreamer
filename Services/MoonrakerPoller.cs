@@ -577,22 +577,31 @@ namespace PrintStreamer.Services
                         lastCompletedJobFilename = finishedJobFilename;
                         lastJobFilename = null;
                         
-                        // Properly stop the broadcast (ends YouTube stream and cleans up)
-                        try
+                        // Properly stop the broadcast (ends YouTube stream and cleans up) only in auto-broadcast mode.
+                        // In manual mode (auto-broadcast disabled), keep the YouTube broadcast running until the user stops it.
+                        var autoBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
+                        if (autoBroadcastEnabled)
                         {
-                            var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None);
-                            if (ok)
+                            try
                             {
-                                Console.WriteLine("[Watcher] Broadcast stopped successfully");
+                                var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None);
+                                if (ok)
+                                {
+                                    Console.WriteLine("[Watcher] Broadcast stopped successfully");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"[Watcher] Error stopping broadcast: {msg}");
+                                }
                             }
-                            else
+                            catch (Exception ex)
                             {
-                                Console.WriteLine($"[Watcher] Error stopping broadcast: {msg}");
+                                Console.WriteLine($"[Watcher] Exception stopping broadcast: {ex.Message}");
                             }
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            Console.WriteLine($"[Watcher] Exception stopping broadcast: {ex.Message}");
+                            Console.WriteLine("[Watcher] Auto-broadcast is disabled; leaving live broadcast running (manual mode).");
                         }
                         
                         // Clean up local stream references
