@@ -43,12 +43,34 @@ public sealed class OverlayTextService : IDisposable
         if (refreshMs < 200) refreshMs = 200;
         _interval = TimeSpan.FromMilliseconds(refreshMs);
 
-    // Use the application base directory (stable under publish/run) instead of CWD so
-    // the overlay file is placed where the runtime expects it regardless of how
-    // the process was started.
-    _textFileDir = Path.Combine(AppContext.BaseDirectory, "overlay");
-    try { Directory.CreateDirectory(_textFileDir); } catch { }
-    _textFilePath = Path.Combine(_textFileDir, "overlay.txt");
+        // Choose a writable directory for the overlay text file with graceful fallbacks
+        // 1) AppContext.BaseDirectory/overlay (publish/run stable)
+        // 2) CurrentDirectory/overlay
+        // 3) $TMPDIR/printstreamer/overlay
+        string[] candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "overlay"),
+            Path.Combine(Directory.GetCurrentDirectory(), "overlay"),
+            Path.Combine(Path.GetTempPath(), "printstreamer", "overlay")
+        };
+
+        _textFileDir = candidates[0];
+        foreach (var dir in candidates)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                _textFileDir = dir;
+                break;
+            }
+            catch
+            {
+                // try next candidate
+            }
+        }
+
+        _textFilePath = Path.Combine(_textFileDir, "overlay.txt");
+        try { Console.WriteLine($"[Overlay] Text file path: {_textFilePath}"); } catch { }
     }
 
     public void Start()
@@ -60,7 +82,7 @@ public sealed class OverlayTextService : IDisposable
     private async Task RunAsync(CancellationToken ct)
     {
         // Ensure file exists with placeholder
-    try { await SafeWriteAsync(Render(new OverlayData()), ct); } catch { }
+        try { await SafeWriteAsync(Render(new OverlayData()), ct); } catch { }
 
         while (!ct.IsCancellationRequested)
         {
@@ -424,26 +446,43 @@ public sealed class OverlayTextService : IDisposable
         }
         catch { }
 
-        // Escape backslashes and colons minimally for drawtext textfile content safety
-        // Newlines are supported; keep as-is
-        return s.Replace("\r", string.Empty);
+    // Final sanitize for ffmpeg drawtext textfile:
+    // - Remove CRs (keep LFs)
+    // - Escape literal percent signs which drawtext treats as expansion markers
+    //   See: drawtext expansion syntax (e.g., %{localtime}); unescaped % triggers "Stray %" errors.
+    s = s.Replace("\r", string.Empty);
+    s = s.Replace("%", "\\%");
+    return s;
     }
 
     private async Task SafeWriteAsync(string content, CancellationToken ct)
     {
         // Always write to the same absolute file path computed at construction time
-        try
-        {
-            Directory.CreateDirectory(_textFileDir);
-        }
-        catch { }
-
         var path = _textFilePath;
-        var tmp = path + ".tmp";
+
+        // Attempt to ensure directory exists before writing
+        try { Directory.CreateDirectory(_textFileDir); } catch { }
+
+        // Use a unique temp file per write to avoid races between overlapping writes
+        var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
         try
         {
+            // Also ensure parent directory of tmp exists (defensive)
+            try { var parent = Path.GetDirectoryName(tmp); if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent); } catch { }
+
             await File.WriteAllTextAsync(tmp, content, Encoding.UTF8, ct);
-            File.Move(tmp, path, overwrite: true);
+            // Move into place; if File.Move with overwrite fails on some FS, fall back to Replace
+            try
+            {
+                File.Move(tmp, path, overwrite: true);
+            }
+            catch
+            {
+                try { File.Replace(tmp, path, null, ignoreMetadataErrors: true); }
+                catch { File.Copy(tmp, path, overwrite: true); }
+                finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
+            }
         }
         catch (Exception ex)
         {

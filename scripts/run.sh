@@ -69,14 +69,23 @@ HOST_DATA_DIR="${HOST_DATA_DIR:-${HOME}/PrintStreamerData}"
 mkdir -p "${HOST_DATA_DIR}"
 echo "  Data mount  : ${HOST_DATA_DIR} -> /usr/local/share/data"
 
+echo "docker run command: docker run ${DOCKER_INTERACTIVE_FLAGS} \
+  --name \"${CONTAINER_NAME}\" \
+  --restart \"${RESTART_POLICY}\" \
+  -p \"${HOST_PORT}:8080\" \
+  -e \"ASPNETCORE_ENVIRONMENT=Home\" \
+  -v \"$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro\" \
+  -v \"${HOST_DATA_DIR}:/usr/local/share/data\" \
+  \"${IMAGE_NAME}\""
+
+read -rp "Press Enter to continue..."
+
 docker run ${DOCKER_INTERACTIVE_FLAGS} \
   --name "${CONTAINER_NAME}" \
   --restart "${RESTART_POLICY}" \
   -p "${HOST_PORT}:8080" \
   -e "ASPNETCORE_ENVIRONMENT=Home" \
   -v "$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro" \
-  -v "$HOST_DATA_DIR/timelapse:/app/timelapse" \
-  -v "$HOST_DATA_DIR/tokens:/app/tokens" \
   -v "${HOST_DATA_DIR}:/usr/local/share/data" \
   "${IMAGE_NAME}"
 

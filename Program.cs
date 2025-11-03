@@ -81,6 +81,8 @@ if (!File.Exists(fallbackImagePath))
 
 // Register application services
 webBuilder.Services.AddSingleton<TimelapseManager>();
+// Expose TimelapseManager as ITimelapseMetadataProvider for overlay text enrichment
+webBuilder.Services.AddSingleton<PrintStreamer.Overlay.ITimelapseMetadataProvider>(sp => sp.GetRequiredService<TimelapseManager>());
 webBuilder.Services.AddSingleton<PrintStreamer.Services.WebCamManager>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamOrchestrator>();
@@ -88,6 +90,14 @@ webBuilder.Services.AddSingleton<PrintStreamer.Services.MoonrakerPollerService>(
 webBuilder.Services.AddHostedService<PrintStreamer.Services.MoonrakerHostedService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioBroadcastService>();
+// Overlay text generator (reads Moonraker, writes text for ffmpeg drawtext)
+webBuilder.Services.AddSingleton<PrintStreamer.Overlay.OverlayTextService>(sp =>
+{
+	var cfg = sp.GetRequiredService<IConfiguration>();
+	var tl = sp.GetService<PrintStreamer.Overlay.ITimelapseMetadataProvider>();
+	var audio = sp.GetRequiredService<PrintStreamer.Services.AudioService>();
+	return new PrintStreamer.Overlay.OverlayTextService(cfg, tl, () => audio.Current);
+});
 
 // Add Blazor Server services
 webBuilder.Services.AddRazorComponents()
@@ -169,11 +179,37 @@ if (serveEnabled)
 	// 2. Local HLS Stream - ffmpeg reads /stream and outputs HLS (always runs when Stream:Local:Enabled=true)
 	// 3. YouTube Live Broadcast - OAuth creates broadcast, restarts ffmpeg to add RTMP output
 	
-	// Note: HLS stream will be started AFTER the web server is listening (see below)
+	// Note: HLS stream will be started AFTER the web server is listenring (see below)
 
 // (Local HLS preview startup will be handled in the Serve static-file block below so we only declare the variables once.)
 
 	app.MapGet("/stream", async (HttpContext ctx) => await webcamManager.HandleStreamRequest(ctx));
+	// Overlay MJPEG endpoint: prefer the new IStreamer-based OverlayMjpegStreamer (per-request)
+	// Fall back to the legacy OverlayMjpegManager if needed (kept registered for compatibility)
+	var overlayTextSvc = app.Services.GetRequiredService<PrintStreamer.Overlay.OverlayTextService>();
+	// Ensure overlay text writer is running
+	try { overlayTextSvc.Start(); } catch { }
+
+	app.MapGet("/stream/overlay", async (HttpContext ctx) =>
+	{
+		// Create a per-request streamer that depends on HttpContext
+		try
+		{
+			var cfg = ctx.RequestServices.GetRequiredService<IConfiguration>();
+			var overlayText = ctx.RequestServices.GetRequiredService<PrintStreamer.Overlay.OverlayTextService>();
+			var streamer = new PrintStreamer.Streamers.OverlayMjpegStreamer(cfg, overlayText, ctx);
+			await streamer.StartAsync(ctx.RequestAborted);
+			try { streamer.Dispose(); } catch { }
+		}
+		catch (Exception ex)
+		{
+			if (!ctx.Response.HasStarted)
+			{
+				ctx.Response.StatusCode = 500;
+				await ctx.Response.WriteAsync("Overlay streamer error: " + ex.Message);
+			}
+		}
+	});
 
 	// Serve the fallback black JPEG
 	app.MapGet("/fallback_black.jpg", async (HttpContext ctx) =>
