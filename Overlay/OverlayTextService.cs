@@ -15,6 +15,8 @@ public sealed class OverlayTextService : IDisposable
     private readonly string? _apiKey;
     private readonly string? _authHeader;
     private readonly string _template;
+    private readonly int _padSpeedWidth;
+    private readonly int _padFlowWidth;
     private readonly TimeSpan _interval;
     private readonly string _textFilePath;
     private readonly string _textFileDir;
@@ -36,8 +38,12 @@ public sealed class OverlayTextService : IDisposable
         _apiKey = config.GetValue<string>("Moonraker:ApiKey");
         _authHeader = config.GetValue<string>("Moonraker:AuthHeader");
 
-        _template = config.GetValue<string>("Overlay:Template") ??
-               "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpd:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
+     _template = config.GetValue<string>("Overlay:Template") ??
+         "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpeed:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
+
+     // Optional fixed-width padding to reduce overlay ‘bounce’ as digits change
+     _padSpeedWidth = config.GetValue<int?>("Overlay:PadSpeedWidth") ?? 3; // e.g., "  0", " 15", "120"
+     _padFlowWidth = config.GetValue<int?>("Overlay:PadFlowWidth") ?? 5;   // e.g., " 0.0", "12.3"
 
         var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
         if (refreshMs < 200) refreshMs = 200;
@@ -408,12 +414,27 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceStr(s, "filename", d.Filename ?? string.Empty);
         s = ReplaceStr(s, "slicer", d.Slicer ?? string.Empty);
         // Template contains units (e.g. "mm/s"); only insert the numeric value here to avoid duplicating units.
-        s = ReplaceStr(s, "speed", d.Speed.HasValue ? d.Speed.Value.ToString("0") : "0");
+        // Pad to fixed width to keep label alignment stable.
+        {
+            var speedStr = d.Speed.HasValue ? d.Speed.Value.ToString("0") : "0";
+            if (_padSpeedWidth > 0)
+            {
+                try { speedStr = speedStr.PadLeft(_padSpeedWidth); } catch { }
+            }
+            s = ReplaceStr(s, "speed", speedStr);
+        }
         s = ReplaceStr(s, "speedfactor", d.SpeedFactor.HasValue ? d.SpeedFactor.Value.ToString("0") + "%" : "-");
         // Flow is volumetric (mm^3/s) from Moonraker display_status.flow
         // Flow is volumetric (mm^3/s) from Moonraker: provide only the numeric value here
         // so the template can include units to avoid duplication.
-        s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "0.0");
+        {
+            var flowStr = d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "0.0";
+            if (_padFlowWidth > 0)
+            {
+                try { flowStr = flowStr.PadLeft(_padFlowWidth); } catch { }
+            }
+            s = ReplaceStr(s, "flow", flowStr);
+        }
         // Filament usage: d.Filament is provided in mm. Convert to meters here but do NOT append the unit
         // because the overlay template itself may include the unit (avoid doubling like "mm" -> "mm").
         s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") : "0.00");

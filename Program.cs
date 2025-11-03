@@ -1121,7 +1121,7 @@ if (serveEnabled)
 				{
 					Enabled = false,
 					RefreshMs = 500,
-					Template = "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpd:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}",
+					Template = "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpeed:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}",
 					FontFile = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 					FontSize = 16,
 					FontColor = "white",
