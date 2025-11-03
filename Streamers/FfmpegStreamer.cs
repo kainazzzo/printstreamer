@@ -305,7 +305,14 @@ namespace PrintStreamer.Streamers
 			string hlsPath = "";
 			if (!string.IsNullOrWhiteSpace(hlsFolder))
 			{
-				try { Directory.CreateDirectory(hlsFolder); } catch { }
+				// Normalize to an absolute path so ffmpeg always uses the expected directory
+				try
+				{
+					var abs = Path.GetFullPath(hlsFolder);
+					Directory.CreateDirectory(abs);
+					hlsFolder = abs;
+				}
+				catch { }
 				hlsPath = Path.Combine(hlsFolder, "stream.m3u8");
 				hlsArgs = $"-f hls -hls_time 2 -hls_list_size 5 -hls_flags delete_segments+append_list -hls_segment_filename \"{Path.Combine(hlsFolder, "seg_%03d.ts")}\" \"{hlsPath}\"";
 			}

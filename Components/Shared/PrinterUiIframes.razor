@@ -9,7 +9,9 @@
     private string? remoteMainsailUrl;
     private string? remoteFluiddUrl;
     private string selectedUi = "mainsail";
-    private bool showConsole => Nav.Uri.Contains("/console");
+    // Console is now the root route. Show console when the relative path is empty (root)
+    // or when it explicitly contains 'console' (for compatibility).
+    private bool showConsole => string.IsNullOrEmpty(Nav.ToBaseRelativePath(Nav.Uri)) || Nav.ToBaseRelativePath(Nav.Uri).StartsWith("console");
 
     protected override async Task OnInitializedAsync()
     {

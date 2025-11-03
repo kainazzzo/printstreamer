@@ -43,9 +43,11 @@ public sealed class OverlayTextService : IDisposable
         if (refreshMs < 200) refreshMs = 200;
         _interval = TimeSpan.FromMilliseconds(refreshMs);
 
-    // Fix the path to a stable absolute location based on construction-time CWD
-    _textFileDir = Path.Combine(Directory.GetCurrentDirectory(), "overlay");
-    Directory.CreateDirectory(_textFileDir);
+    // Use the application base directory (stable under publish/run) instead of CWD so
+    // the overlay file is placed where the runtime expects it regardless of how
+    // the process was started.
+    _textFileDir = Path.Combine(AppContext.BaseDirectory, "overlay");
+    try { Directory.CreateDirectory(_textFileDir); } catch { }
     _textFilePath = Path.Combine(_textFileDir, "overlay.txt");
     }
 
@@ -438,8 +440,17 @@ public sealed class OverlayTextService : IDisposable
 
         var path = _textFilePath;
         var tmp = path + ".tmp";
-        await File.WriteAllTextAsync(tmp, content, Encoding.UTF8, ct);
-        File.Move(tmp, path, overwrite: true);
+        try
+        {
+            await File.WriteAllTextAsync(tmp, content, Encoding.UTF8, ct);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            // Log and attempt to cleanup temp file; don't throw so overlay loop keeps running
+            Console.WriteLine($"[Overlay] SafeWrite failed: {ex.Message}");
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+        }
     }
 
     public void Dispose()

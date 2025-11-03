@@ -1,4 +1,4 @@
-@page "/console"
+@page "/"
 @rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -8,7 +8,7 @@
 
 <div class="wrap">
     <div class="nav">
-        <NavLink href="/">← Back to Control Panel</NavLink>
+        <NavLink href="/streaming">← Back to Stream</NavLink>
         <NavLink href="/config" style="margin-left:10px">⚙️ Configuration</NavLink>
     </div>
 </div>
