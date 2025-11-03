@@ -174,8 +174,8 @@ namespace PrintStreamer.Services
             try
             {
                 var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
-                var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
-                var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
+                var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 30;
+                var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 2500;
 
                 // Determine audio source for ffmpeg when serving locally
                 string? audioUrl = null;
@@ -1116,8 +1116,8 @@ namespace PrintStreamer.Services
                 }
                 var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
 
-                var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
-                var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
+                var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 30;
+                var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 2500;
 
                 // Determine audio source for ffmpeg when serving locally
                 string? audioUrl = null;

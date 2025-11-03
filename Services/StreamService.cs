@@ -89,8 +89,8 @@ namespace PrintStreamer.Services
                 throw new InvalidOperationException("Stream:Source is not configured");
             }
 
-            var targetFps = _config.GetValue<int?>("Stream:TargetFps") ?? 6;
-            var bitrateKbps = _config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
+            var targetFps = _config.GetValue<int?>("Stream:TargetFps") ?? 30;
+            var bitrateKbps = _config.GetValue<int?>("Stream:BitrateKbps") ?? 2500;
             var localStreamEnabled = _config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
 
             // Determine audio source for ffmpeg: prefer API endpoint when serving locally and enabled

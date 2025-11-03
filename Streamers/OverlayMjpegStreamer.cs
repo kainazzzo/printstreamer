@@ -54,6 +54,9 @@ namespace PrintStreamer.Streamers
             var fontColor = _config.GetValue<string>("Overlay:FontColor") ?? "white";
             var boxColor = _config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4";
             var boxBorderW = _config.GetValue<int?>("Overlay:BoxBorderW") ?? 8;
+            // MJPEG output quality (lower is better quality). Clamp to a reasonable range for balance
+            var mjpegQ = _config.GetValue<int?>("Overlay:Quality") ?? 5; // 1(best)-31(worst) but we keep 2..10 for balance
+            if (mjpegQ < 2) mjpegQ = 2; if (mjpegQ > 10) mjpegQ = 10;
             // X/Y from config (optional). We'll override to place inside the banner when not supplied.
             var xConfig = _config.GetValue<string>("Overlay:X");
             var yConfig = _config.GetValue<string>("Overlay:Y");
@@ -62,8 +65,10 @@ namespace PrintStreamer.Streamers
             // whether to honor an explicit config or compute a bottom-anchored value.
             var y = yConfig;
 
-            // Build filter chain
+            // Build filter chain: upscale/pad to 1080p first for sharp text, then draw overlays
             var filters = new List<string>();
+            filters.Add("scale=1920:1080:flags=lanczos:force_original_aspect_ratio=decrease");
+            filters.Add("pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black");
             filters.Add("format=yuv420p");
 
             // Keep the working drawbox (do not touch as requested)
@@ -96,17 +101,18 @@ namespace PrintStreamer.Streamers
 
             // Input args for HTTP MJPEG source
             var inputArgs = source.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                ? $"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{source}\""
+                ? $"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1 -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{source}\""
                 : $"-i \"{source}\"";
 
             var args = string.Join(" ", new[]
             {
-                "-hide_banner -nostats -loglevel error -nostdin",
+                "-hide_banner -nostats -loglevel error -nostdin -fflags nobuffer",
                 inputArgs,
                 "-vf",
                 $"\"{vf}\"",
                 "-an",
-                $"-f mpjpeg -boundary_tag {boundary} -q:v 5 pipe:1"
+                $"-c:v mjpeg -huffman optimal -q:v {mjpegQ}",
+                $"-f mpjpeg -boundary_tag {boundary} pipe:1"
             });
 
             _proc = new Process

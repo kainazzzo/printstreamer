@@ -166,12 +166,8 @@ namespace PrintStreamer.Streamers
 			// instead of forcing an output frame rate. Only add -r when an explicit target fps is desired.
 			// Detect HTTP source early
 			var isHttpSource = srcArg.StartsWith("http", StringComparison.OrdinalIgnoreCase);
-			int effectiveFps = fps <= 0 ? 0 : fps;
-			if (isHttpSource)
-			{
-				// For HTTP/MJPEG inputs, avoid forcing the output -r so ffmpeg follows input timing
-				effectiveFps = 0;
-			}
+			// Enforce a constant output framerate for stability with live RTMP (prevents drift/creep)
+			int effectiveFps = fps <= 0 ? 30 : fps;
 			var gop = Math.Max(2, (effectiveFps > 0 ? effectiveFps * 2 : Math.Max(2, fps * 2)));
 			// Use keyint equal to GOP, set pix_fmt and genpts to help timestamping for variable sources
 			// (video encoding args constructed later when mux targets are known)
@@ -212,7 +208,7 @@ namespace PrintStreamer.Streamers
 				var audioReconnect = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
 				// Add analyzeduration and probesize to handle variable/unstable streams
 				// Set max_delay to help with sync recovery after input issues
-				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -fflags +genpts+discardcorrupt -analyzeduration 2M -probesize 5M -i \"{audioUrl}\"";
+				inputArgs = $"{baseFlags} {reconnectArgs} -re -thread_queue_size 1024 -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -re -thread_queue_size 1024 -fflags +genpts+discardcorrupt -analyzeduration 2M -probesize 5M -i \"{audioUrl}\"";
 				// Map audio from second input
 				audioMap = "-map 1:a:0";
 				audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
@@ -223,7 +219,7 @@ namespace PrintStreamer.Streamers
 				// Increase reconnect attempts and use analyzeduration/probesize to handle stream issues better
 				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
 				// Add fflags to discard corrupted frames and continue processing
-				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
+				inputArgs = $"{baseFlags} {reconnectArgs} -re -thread_queue_size 1024 -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
 				// audio is the second input
 				audioMap = "-map 1:a:0";
 				audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
@@ -247,16 +243,7 @@ namespace PrintStreamer.Streamers
 
 			// No drawtext/drawbox here: the video already includes overlay from /stream/overlay
 
-			// If we're outputting to RTMP (YouTube), upscale the final composed frame to 1080p
-			// without altering the original source or overlay logic. We preserve aspect ratio
-			// and pad to 1920x1080 to avoid stretching.
-			if (!string.IsNullOrWhiteSpace(rtmpUrl))
-			{
-				vfFilters.Add("scale=1920:1080:flags=lanczos:force_original_aspect_ratio=decrease");
-				vfFilters.Add("pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black");
-				// Re-assert pixel format to be safe after scale/pad
-				vfFilters.Add("format=yuv420p");
-			}
+			// No additional scaling here; the overlay pipeline outputs 1080p already.
 
 			var vfChain = string.Join(",", vfFilters);
 			// Build filter_complex for a single labelled output [vout]
@@ -286,7 +273,7 @@ namespace PrintStreamer.Streamers
 			// -avoid_negative_ts make_zero: clamp negative timestamps to zero
 			// -fflags +genpts: regenerate presentation timestamps where missing
 			// -vsync 2: variable frame-rate handling (vfr) to avoid forcing duplicate/lost frames
-			cmd.Append("-avoid_negative_ts make_zero -fflags +genpts -vsync 2 ");
+			cmd.Append("-avoid_negative_ts make_zero -fflags +genpts -vsync 1 -max_interleave_delta 1000000 -muxpreload 0 -muxdelay 0 -max_muxing_queue_size 1024 ");
 			cmd.Append(colorRange);
 			cmd.Append(' ');
 
