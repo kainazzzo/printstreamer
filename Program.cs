@@ -623,7 +623,7 @@ if (serveEnabled)
 		}
 	});
 
-	app.MapGet("/api/live/status", (HttpContext ctx) =>
+	app.MapGet("/api/live/status", async (HttpContext ctx) =>
 	{
 		try
 		{
@@ -632,12 +632,30 @@ if (serveEnabled)
 			var broadcastId = orchestrator.CurrentBroadcastId;
 			var streamerRunning = orchestrator.IsStreaming;
 			var waitingForIngestion = orchestrator.IsWaitingForIngestion;
+			string? privacy = null;
 
-			return Results.Json(new { isLive, broadcastId, streamerRunning, waitingForIngestion });
+			// Try to fetch current privacy status if broadcast is active
+			if (isLive && !string.IsNullOrWhiteSpace(broadcastId))
+			{
+				try
+				{
+					using var yt = new YouTubeControlService(config);
+					if (await yt.AuthenticateAsync(ctx.RequestAborted))
+					{
+						privacy = await yt.GetBroadcastPrivacyAsync(broadcastId, ctx.RequestAborted);
+					}
+				}
+				catch
+				{
+					// Silently ignore errors fetching privacy status
+				}
+			}
+
+			return Results.Json(new { isLive, broadcastId, streamerRunning, waitingForIngestion, privacy });
 		}
 		catch (Exception ex)
 		{
-			return Results.Json(new { isLive = false, broadcastId = (string?)null, streamerRunning = false, waitingForIngestion = false, error = ex.Message });
+			return Results.Json(new { isLive = false, broadcastId = (string?)null, streamerRunning = false, waitingForIngestion = false, privacy = (string?)null, error = ex.Message });
 		}
 	});
 
@@ -649,6 +667,39 @@ if (serveEnabled)
 			var (ok, message) = await orchestrator.StopBroadcastAsync(ctx.RequestAborted);
 			if (ok) return Results.Json(new { success = true });
 			return Results.Json(new { success = false, error = message });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// Update broadcast privacy status
+	app.MapPost("/api/live/privacy", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			if (!orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(orchestrator.CurrentBroadcastId))
+			{
+				return Results.Json(new { success = false, error = "No active broadcast" });
+			}
+
+			var body = await ctx.Request.ReadFromJsonAsync<PrivacyUpdateRequest>();
+			if (body == null || string.IsNullOrWhiteSpace(body.Privacy))
+			{
+				return Results.Json(new { success = false, error = "Privacy status is required" });
+			}
+
+			var broadcastId = orchestrator.CurrentBroadcastId!;
+			using var yt = new YouTubeControlService(config);
+			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
+			{
+				return Results.Json(new { success = false, error = "YouTube authentication failed" });
+			}
+
+			var ok = await yt.UpdateBroadcastPrivacyAsync(broadcastId, body.Privacy, ctx.RequestAborted);
+			return Results.Json(new { success = ok });
 		}
 		catch (Exception ex)
 		{
@@ -1807,4 +1858,10 @@ try{
 			Console.WriteLine($"[WS Proxy] Pump error: {ex.Message}");
 		}
 	}
+}
+
+// Request models
+internal class PrivacyUpdateRequest
+{
+	public string? Privacy { get; set; }
 }

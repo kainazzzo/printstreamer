@@ -15,7 +15,7 @@
         <StreamControlPanel IsLive="@isLive" IsStreamPlaying="@isStreamPlaying" IsGoingLive="@isGoingLive"
         StreamerRunning="@streamerRunning" WaitingForIngestion="@waitingForIngestion" CameraEnabled="@(!cameraDisabled)"
         AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" BroadcastId="@(isLive ? broadcastId : null)"
-        StatusMessage="@statusMessage" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
+        StatusMessage="@statusMessage" CurrentPrivacy="@currentPrivacy" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
         OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" />
 
     <StreamContainer>
@@ -51,6 +51,7 @@
     private bool waitingForIngestion = false;
     private string? broadcastId = null;
     private string? statusMessage = null;
+    private string? currentPrivacy = null;
     private bool cameraDisabled = false;
     private bool autoBroadcastEnabled = false;
     private bool autoUploadEnabled = false;
@@ -185,6 +186,7 @@
                 broadcastId = response.BroadcastId;
                 streamerRunning = response.StreamerRunning;
                 waitingForIngestion = response.WaitingForIngestion;
+                currentPrivacy = response.Privacy;
                 UpdateLiveStatusTimer();
             }
         }
@@ -591,6 +593,7 @@
         public string? BroadcastId { get; set; }
         public bool StreamerRunning { get; set; }
         public bool WaitingForIngestion { get; set; }
+        public string? Privacy { get; set; }
     }
 
     private class ApiResponse

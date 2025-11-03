@@ -1281,6 +1281,114 @@ internal class YouTubeControlService : IDisposable
     }
 
     /// <summary>
+    /// Update the privacy status of a live broadcast (public, unlisted, or private).
+    /// </summary>
+    public async Task<bool> UpdateBroadcastPrivacyAsync(string broadcastId, string privacyStatus, CancellationToken cancellationToken = default)
+    {
+        if (_youtubeService == null)
+        {
+            Console.WriteLine("Error: Not authenticated.");
+            return false;
+        }
+
+        // Validate privacy status
+        var validStatuses = new[] { "public", "unlisted", "private" };
+        if (!validStatuses.Contains(privacyStatus.ToLowerInvariant()))
+        {
+            Console.WriteLine($"Invalid privacy status: {privacyStatus}. Must be one of: {string.Join(", ", validStatuses)}");
+            return false;
+        }
+
+        try
+        {
+            Console.WriteLine($"Updating broadcast {broadcastId} privacy to {privacyStatus}...");
+
+            // First, fetch the current broadcast to get all required fields
+            var listRequest = _youtubeService.LiveBroadcasts.List("id,snippet,status,contentDetails");
+            listRequest.Id = broadcastId;
+            var listResponse = await listRequest.ExecuteAsync(cancellationToken);
+
+            if (listResponse.Items == null || listResponse.Items.Count == 0)
+            {
+                Console.WriteLine($"Broadcast {broadcastId} not found.");
+                return false;
+            }
+
+            var broadcast = listResponse.Items[0];
+            
+            // Update the privacy status
+            broadcast.Status.PrivacyStatus = privacyStatus.ToLowerInvariant();
+
+            // Update the broadcast
+            var updateRequest = _youtubeService.LiveBroadcasts.Update(broadcast, "id,snippet,status,contentDetails");
+            var result = await updateRequest.ExecuteAsync(cancellationToken);
+
+            Console.WriteLine($"Broadcast privacy updated to {result.Status.PrivacyStatus}");
+            return true;
+        }
+        catch (Google.GoogleApiException gae)
+        {
+            Console.WriteLine($"Failed to update broadcast privacy: {gae.Message}");
+            Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+            if (gae.Error != null)
+            {
+                Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                if (gae.Error.Errors != null)
+                {
+                    Console.WriteLine("Details:");
+                    foreach (var e in gae.Error.Errors)
+                    {
+                        Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine(gae.ToString());
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to update broadcast privacy: {ex.Message}");
+            Console.WriteLine(ex.ToString());
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Get the current privacy status of a live broadcast.
+    /// </summary>
+    public async Task<string?> GetBroadcastPrivacyAsync(string broadcastId, CancellationToken cancellationToken = default)
+    {
+        if (_youtubeService == null)
+        {
+            Console.WriteLine("Error: Not authenticated.");
+            return null;
+        }
+
+        try
+        {
+            var listRequest = _youtubeService.LiveBroadcasts.List("id,status");
+            listRequest.Id = broadcastId;
+            var listResponse = await listRequest.ExecuteAsync(cancellationToken);
+
+            if (listResponse.Items == null || listResponse.Items.Count == 0)
+            {
+                Console.WriteLine($"Broadcast {broadcastId} not found.");
+                return null;
+            }
+
+            return listResponse.Items[0].Status?.PrivacyStatus;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to get broadcast privacy: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Wait for ingestion to be active and attempt to transition the broadcast to live with retries and diagnostics.
     /// </summary>
     public async Task<bool> TransitionBroadcastToLiveWhenReadyAsync(string broadcastId, TimeSpan? maxWait = null, int maxAttempts = 12, CancellationToken cancellationToken = default)

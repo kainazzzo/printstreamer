@@ -149,6 +149,24 @@
                 @($"https://www.youtube.com/watch?v={BroadcastId}")
             </a>
         </div>
+        
+        <!-- Privacy Control -->
+        <div class="privacy-control">
+            <label for="privacy-select" style="margin-right:8px;font-weight:600">Privacy:</label>
+            <select id="privacy-select" 
+                    @bind="SelectedPrivacy" 
+                    @bind:after="OnPrivacyChanged"
+                    class="privacy-dropdown"
+                    disabled="@IsUpdatingPrivacy">
+                <option value="public">Public</option>
+                <option value="unlisted">Unlisted</option>
+                <option value="private">Private</option>
+            </select>
+            @if (IsUpdatingPrivacy)
+            {
+                <span class="privacy-spinner"></span>
+            }
+        </div>
     }
 </div>
 
@@ -306,6 +324,45 @@
     .status-message, .broadcast-url {
         padding: 8px 0;
     }
+    
+    .privacy-control {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+    }
+    
+    .privacy-dropdown {
+        padding: 6px 12px;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background: #2a2a2a;
+        color: #fff;
+        font-size: 0.95em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .privacy-dropdown:hover:not(:disabled) {
+        border-color: #66ccff;
+        box-shadow: 0 0 8px rgba(102, 204, 255, 0.3);
+    }
+    
+    .privacy-dropdown:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    
+    .privacy-spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid #66ccff;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
 </style>
 
 @code {
@@ -319,6 +376,7 @@
     [Parameter] public bool AutoUploadEnabled { get; set; }
     [Parameter] public string? BroadcastId { get; set; }
     [Parameter] public string? StatusMessage { get; set; }
+    [Parameter] public string? CurrentPrivacy { get; set; }
     
     [Parameter] public EventCallback OnGoLive { get; set; }
     [Parameter] public EventCallback OnStopLive { get; set; }
@@ -331,6 +389,10 @@
     private bool AutoBroadcastHover = false;
     private bool AutoUploadHover = false;
     
+    private string SelectedPrivacy = "unlisted";
+    private bool IsUpdatingPrivacy = false;
+    private string? LastBroadcastId = null;
+    
     private void OnCameraMouseOver() => CameraHover = true;
     private void OnCameraMouseOut() => CameraHover = false;
     private void OnLiveMouseOver() => LiveHover = true;
@@ -339,6 +401,58 @@
     private void OnAutoBroadcastMouseOut() => AutoBroadcastHover = false;
     private void OnAutoUploadMouseOver() => AutoUploadHover = true;
     private void OnAutoUploadMouseOut() => AutoUploadHover = false;
+    
+    protected override void OnParametersSet()
+    {
+        // Reset privacy selection when broadcast changes or update from current privacy
+        if (BroadcastId != LastBroadcastId)
+        {
+            LastBroadcastId = BroadcastId;
+            SelectedPrivacy = CurrentPrivacy ?? "unlisted";
+        }
+        else if (!string.IsNullOrWhiteSpace(CurrentPrivacy) && CurrentPrivacy != SelectedPrivacy && !IsUpdatingPrivacy)
+        {
+            // Update from server if it changed externally
+            SelectedPrivacy = CurrentPrivacy;
+        }
+    }
+    
+    private async Task OnPrivacyChanged()
+    {
+        if (string.IsNullOrEmpty(BroadcastId) || IsUpdatingPrivacy)
+            return;
+            
+        IsUpdatingPrivacy = true;
+        StateHasChanged();
+        
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var requestBody = new { privacy = SelectedPrivacy };
+            var response = await client.PostAsJsonAsync("api/live/privacy", requestBody);
+            var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            
+            if (result?.Success != true)
+            {
+                Console.WriteLine($"Failed to update privacy: {result?.Error ?? "unknown"}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating privacy: {ex.Message}");
+        }
+        finally
+        {
+            IsUpdatingPrivacy = false;
+            StateHasChanged();
+        }
+    }
+    
+    private class ApiResponse
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+    }
     
     private async Task ToggleAutoBroadcast()
     {
