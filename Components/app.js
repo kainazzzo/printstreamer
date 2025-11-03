@@ -1,7 +1,6 @@
 // PrintStreamer JavaScript Interop
-// Provides HLS player, MJPEG stream monitoring, and toast notifications
+// Provides MJPEG stream monitoring and toast notifications
 
-// HLS removed: we no longer maintain hlsInstance or retry timers
 let isStreamPlaying = false; // legacy; real status comes from window._printstreamer_mjpeg_ready
 
 // Toast notification system
@@ -32,25 +31,16 @@ window.showToast = function (message, type = 'info') {
     }, duration);
 };
 
-// Initialize MJPEG stream (HLS removed)
+// Initialize MJPEG stream
 window.initializeStreams = function () {
-    console.log('[Streams] Initializing MJPEG only (HLS removed)');
+    console.log('[Streams] Initializing MJPEG');
 
     const mjpegImg = document.getElementById('mjpeg');
     // Track MJPEG readiness for UI health checks
     window._printstreamer_mjpeg_ready = false;
 
     if (mjpegImg) {
-        // Sync layout height if a container exists
-        const hlsContainer = document.getElementById('hlsContainer');
-        function syncHeights() {
-            if (mjpegImg.complete && mjpegImg.naturalHeight > 0 && hlsContainer) {
-                hlsContainer.style.minHeight = mjpegImg.offsetHeight + 'px';
-            }
-        }
-
         mjpegImg.addEventListener('load', () => {
-            syncHeights();
             window._printstreamer_mjpeg_ready = true;
         });
 
@@ -59,9 +49,6 @@ window.initializeStreams = function () {
             window._printstreamer_mjpeg_ready = false;
             setTimeout(() => { mjpegImg.src = '/stream?ts=' + Date.now(); }, 2000);
         });
-
-        window.addEventListener('resize', syncHeights);
-        setTimeout(syncHeights, 100);
     }
 };
 
@@ -73,20 +60,13 @@ window.reloadStreams = function () {
     }
 };
 
-// HLS functionality removed
-
-function cleanup() { /* no-op (HLS removed) */ }
-
 // Expose functions for Blazor
-// HLS attach removed; expose detach and MJPEG-based playing status
-window.detachHls = cleanup;
 window.getStreamPlayingStatus = function() {
     try { return !!window._printstreamer_mjpeg_ready; } catch (e) { return false; }
 };
 
-// HLS player control helpers exposed for Blazor UI
-window.hlsControls = {
-    // HLS removed; provide minimal MJPEG-aware controls
+// Player control helpers exposed for Blazor UI
+window.streamControls = {
     play: function() {},
     pause: function() {},
     toggleMute: function() { return true; },

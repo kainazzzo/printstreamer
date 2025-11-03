@@ -444,7 +444,7 @@ textarea {
     border-radius: 6px;
 }
 
-/* Wider preview variant for HLS player (16:9) */
+/* Wider preview variant (16:9) */
 .preview-wide {
     width: 100%;
     /* Allow wider player: cap at 960px or 80vw */
@@ -460,17 +460,7 @@ textarea {
     border-radius: 6px;
 }
 
-/* Ensure video in wide preview preserves aspect and doesn't get cropped */
-.preview-wide video#hlsPlayer {
-    width: 100%;
-    height: 100%;
-    object-fit: contain; /* preserve aspect, letterbox as needed */
-    display: block;
-    border: none;
-    background: #000;
-}
-
-/* Ensure MJPEG image also matches the wide preview aspect (16:9) */
+/* Ensure MJPEG image matches the wide preview aspect (16:9) */
 .preview-wide img#mjpeg {
     width: 100%;
     height: 100%;
@@ -481,8 +471,7 @@ textarea {
 }
 
 /* Make the MJPEG image fill the square while preserving aspect ratio */
-.preview-square img#mjpeg,
-.preview-square video#hlsPlayer {
+.preview-square img#mjpeg {
     width: 100%;
     height: 100%;
     object-fit: contain; /* preserve aspect, letterbox as needed */

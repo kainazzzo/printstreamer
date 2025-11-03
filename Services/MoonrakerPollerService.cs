@@ -221,8 +221,6 @@ namespace PrintStreamer.Services
                                 pollInterval = fastPollInterval;
                             }
                         }
-
-                        // No HLS-based self-heal: HLS was removed from the pipeline.
                     }
                     catch (Exception ex)
                     {

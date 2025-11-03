@@ -40,19 +40,6 @@
                     <InputNumber id="stream-bitratekbps" @bind-Value="config.Stream.BitrateKbps" />
                     <div class="help-text">Video bitrate in kilobits per second</div>
                 </div>
-                
-                <h3>Local HLS Preview</h3>
-                <div class="checkbox-group">
-                    <InputCheckbox id="stream-local-enabled" @bind-Value="config.Stream.Local.Enabled" />
-                    <label for="stream-local-enabled">Enable Local HLS</label>
-                </div>
-                <div class="help-text">Generate local HLS stream for preview</div>
-                
-                <div class="form-group">
-                    <label for="stream-local-hlsfolder">HLS Folder</label>
-                    <InputText id="stream-local-hlsfolder" @bind-Value="config.Stream.Local.HlsFolder" />
-                    <div class="help-text">Directory for HLS output files</div>
-                </div>
             </div>
             
             <!-- Moonraker Settings -->
@@ -455,7 +442,6 @@
     private class LocalStreamConfig
     {
         public bool Enabled { get; set; }
-        public string HlsFolder { get; set; } = "";
     }
 
     private class AudioConfig

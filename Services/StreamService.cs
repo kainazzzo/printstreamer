@@ -41,7 +41,7 @@ namespace PrintStreamer.Services
         /// <summary>
         /// Start a new stream. If one is already running, it will be stopped first.
         /// </summary>
-        /// <param name="rtmpUrl">Optional RTMP URL (e.g., rtmp://a.rtmp.youtube.com/live2/streamkey). If null, only HLS local preview.</param>
+        /// <param name="rtmpUrl">Optional RTMP URL (e.g., rtmp://a.rtmp.youtube.com/live2/streamkey). If null, local preview only.</param>
         /// <param name="overlayProvider">Optional metadata provider for overlay text</param>
         /// <param name="cancellationToken">Cancellation token</param>
         public async Task StartStreamAsync(string? rtmpUrl, ITimelapseMetadataProvider? overlayProvider, CancellationToken cancellationToken)
@@ -92,7 +92,6 @@ namespace PrintStreamer.Services
             var targetFps = _config.GetValue<int?>("Stream:TargetFps") ?? 6;
             var bitrateKbps = _config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
             var localStreamEnabled = _config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
-            var hlsFolder = _config.GetValue<string>("Stream:Local:HlsFolder");
 
             // Determine audio source for ffmpeg: prefer API endpoint when serving locally and enabled
             string? audioUrl = null;
@@ -138,7 +137,7 @@ namespace PrintStreamer.Services
             }
 
             // Create new streamer
-            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null, audioUrl);
+            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             lock (_lock)
@@ -153,7 +152,7 @@ namespace PrintStreamer.Services
             {
                 try
                 {
-                    Console.WriteLine($"[StreamService] Starting stream to {(rtmpUrl != null ? "RTMP+HLS" : "HLS-only")}");
+                    Console.WriteLine($"[StreamService] Starting stream to {(rtmpUrl != null ? "RTMP" : "local")}");
                     await streamer.StartAsync(cts.Token);
                 }
                 catch (OperationCanceledException)

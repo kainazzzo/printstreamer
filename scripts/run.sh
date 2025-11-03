@@ -64,7 +64,7 @@ if [[ "${INTERACTIVE:-0}" == "1" ]]; then
   DOCKER_INTERACTIVE_FLAGS="-it"
 fi
 
-# Host data directory for persistent HLS/timelapses
+# Host data directory for persistent data (timelapses, audio, tokens)
 HOST_DATA_DIR="${HOST_DATA_DIR:-${HOME}/PrintStreamerData}"
 mkdir -p "${HOST_DATA_DIR}"
 echo "  Data mount  : ${HOST_DATA_DIR} -> /usr/local/share/data"

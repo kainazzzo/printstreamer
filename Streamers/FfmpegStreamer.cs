@@ -10,7 +10,6 @@ namespace PrintStreamer.Streamers
 		private readonly string _source;
 		private readonly string? _audioUrl;
 		private readonly string? _rtmpUrl;
-		private readonly string? _hlsFolder;
 		private readonly int _targetFps;
 		private readonly int _bitrateKbps;
 		private readonly FfmpegOverlayOptions? _overlay;
@@ -19,14 +18,13 @@ namespace PrintStreamer.Streamers
 
 		public Task ExitTask => _exitTcs?.Task ?? Task.CompletedTask;
 
-		public FfmpegStreamer(string source, string? rtmpUrl, int targetFps = 30, int bitrateKbps = 2500, FfmpegOverlayOptions? overlay = null, string? hlsFolder = null, string? audioUrl = null)
+		public FfmpegStreamer(string source, string? rtmpUrl, int targetFps = 30, int bitrateKbps = 2500, FfmpegOverlayOptions? overlay = null, string? audioUrl = null)
 		{
 			_source = source;
 			_rtmpUrl = rtmpUrl;
 			_targetFps = targetFps <= 0 ? 30 : targetFps;
 			_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 			_overlay = overlay;
-			_hlsFolder = hlsFolder;
 			_audioUrl = audioUrl;
 		}
 
@@ -63,7 +61,7 @@ namespace PrintStreamer.Streamers
 				}
 			}
 
-			var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _hlsFolder, _audioUrl);
+			var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _audioUrl);
 
 			Console.WriteLine($"Starting ffmpeg with args: {ffmpegArgs}");
 
@@ -88,7 +86,31 @@ namespace PrintStreamer.Streamers
 				};
 
 				_proc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
-				_proc.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
+				
+				// Improved error handling: suppress benign decode warnings that don't affect stream quality
+				var lastBenignWarning = DateTime.MinValue;
+				_proc.ErrorDataReceived += (s, e) => 
+				{ 
+					if (e.Data != null)
+					{
+						var line = e.Data;
+						// Suppress common benign MJPEG warnings that don't indicate real problems
+						if (line.Contains("unable to decode APP fields") || 
+						    line.Contains("Last message repeated"))
+						{
+							var now = DateTime.UtcNow;
+							if ((now - lastBenignWarning).TotalSeconds > 30)
+							{
+								Console.WriteLine("[ffmpeg] Suppressing benign MJPEG decode warnings (last 30s)");
+								lastBenignWarning = now;
+							}
+						}
+						else
+						{
+							Console.WriteLine(line);
+						}
+					}
+				};
 
 				if (!_proc.Start())
 				{
@@ -137,8 +159,8 @@ namespace PrintStreamer.Streamers
 					{
 						Console.WriteLine($"Warning: failed to send quit to ffmpeg stdin: {ex.Message}");
 					}
-					// wait briefly for ffmpeg to exit on its own (reduced to 500ms for faster shutdown)
-					if (!_proc.WaitForExit(500))
+					// wait briefly for ffmpeg to exit on its own
+					if (!_proc.WaitForExit(5000))
 					{
 						Console.WriteLine("ffmpeg did not exit within timeout, killing...");
 						_proc.Kill(true);
@@ -151,7 +173,7 @@ namespace PrintStreamer.Streamers
 			}
 		}
 
-		private static string BuildFfmpegArgs(string source, string? rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? hlsFolder, string? audioUrl)
+		private static string BuildFfmpegArgs(string source, string? rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? audioUrl)
 		{
 			// Basic ffmpeg args that should work for many MJPEG/http or v4l2 inputs.
 			// -re to read input at native frame rate
@@ -212,9 +234,12 @@ namespace PrintStreamer.Streamers
 			if (!string.IsNullOrWhiteSpace(audioUrl))
 			{
 				// Video input + HTTP MP3 audio input from API endpoint
-				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
-				var audioReconnect = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
-				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -fflags +genpts -i \"{audioUrl}\"";
+				// Increase reconnect attempts and use analyzeduration/probesize to handle stream issues better
+				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
+				var audioReconnect = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
+				// Add analyzeduration and probesize to handle variable/unstable streams
+				// Set max_delay to help with sync recovery after input issues
+				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -fflags +genpts -i \"{audioUrl}\"";
 				// Map audio from second input
 				audioMap = "-map 1:a:0";
 				audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
@@ -222,8 +247,10 @@ namespace PrintStreamer.Streamers
 			else if (addSilentAudio)
 			{
 				// Add reconnect logic for HTTP sources and add a silent audio track
-				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
-				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
+				// Increase reconnect attempts and use analyzeduration/probesize to handle stream issues better
+				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
+				// Add fflags to discard corrupted frames and continue processing
+				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100";
 				// audio is the second input
 				audioMap = "-map 1:a:0";
 				audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
@@ -301,7 +328,6 @@ namespace PrintStreamer.Streamers
 
 			var vfChain = string.Join(",", vfFilters);
 			// Build filter_complex for a single labelled output [vout]
-			// HLS output has been removed: we only produce RTMP (if configured) or no output.
 			string filterComplex = $"-filter_complex \"[0:v]{vfChain}[vout]\"";
 			var colorRange = "-color_range tv";
 			var profile = "-profile:v high -level 4.1";
@@ -336,7 +362,7 @@ namespace PrintStreamer.Streamers
 				return cmd.ToString();
 			}
 
-			// No RTMP requested: drop to null sink (no HLS preview is generated)
+			// No RTMP requested: drop to null sink (no output generated)
 			cmd.Append($"-map [vout] {videoEnc} {audioEncArgs} {audioMap} -f null -");
 			return cmd.ToString();
 		}

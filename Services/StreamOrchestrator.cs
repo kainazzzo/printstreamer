@@ -162,44 +162,18 @@ namespace PrintStreamer.Services
         }
 
         /// <summary>
-        /// Ensure the streaming pipelines are healthy. If HLS is missing or stale, restart
-        /// the appropriate stream: RTMP+HLS when broadcasting, or HLS-only otherwise.
+        /// Ensure the streaming pipelines are healthy. If stream is not running, restart it.
         /// If broadcasting and ingestion does not become active after restart, end the broadcast
-        /// but keep a local HLS stream running so the user can retry.
+        /// but keep a local stream running so the user can retry.
         /// </summary>
-        public async Task<bool> EnsureStreamingHealthyAsync(bool requireHls, CancellationToken cancellationToken)
+        public async Task<bool> EnsureStreamingHealthyAsync(CancellationToken cancellationToken)
         {
             try
             {
-                // Determine whether we should require HLS to be present.
-                // Backwards-compatible: callers pass `requireHls`, but honor explicit configuration
-                // Stream:Local:GenerateHls (bool) which when set to false indicates ffmpeg will not
-                // produce HLS output and the orchestrator should not treat missing HLS as fatal.
-                var configGeneratesHls = _config.GetValue<bool?>("Stream:Local:GenerateHls") ?? true;
-                bool finalRequireHls = requireHls && configGeneratesHls && (_config.GetValue<bool?>("Stream:Local:Enabled") ?? false);
-
-                // Determine HLS health (if required)
-                bool hlsOk = true;
-                if (finalRequireHls)
+                // Check if stream service is running
+                if (!_streamService.IsStreaming)
                 {
-                    var hlsFolder = _config.GetValue<string>("Stream:Local:HlsFolder") ?? "hls";
-                    var manifest = Path.Combine(Directory.GetCurrentDirectory(), hlsFolder, "stream.m3u8");
-                    hlsOk = File.Exists(manifest);
-                    if (hlsOk)
-                    {
-                        try
-                        {
-                            var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(manifest);
-                            if (age > TimeSpan.FromSeconds(15)) hlsOk = false;
-                        }
-                        catch { }
-                    }
-                }
-
-                // If stream service not running, or HLS not ok when required, restart
-                if (!_streamService.IsStreaming || !hlsOk)
-                {
-                    Console.WriteLine("[Orchestrator] Stream health check failed (IsStreaming=" + _streamService.IsStreaming + ", HLS=" + hlsOk + ") — restarting...");
+                    Console.WriteLine("[Orchestrator] Stream health check failed (IsStreaming=False) — restarting...");
                     string? rtmp = null;
                     string? bid = null;
                     YouTubeControlService? yt;
@@ -210,10 +184,10 @@ namespace PrintStreamer.Services
                         rtmp = (!string.IsNullOrWhiteSpace(_currentBroadcastId)) ? _currentRtmpUrl : null;
                     }
 
-                    // Restart the stream with current mode (RTMP+HLS when broadcasting; otherwise HLS-only)
+                    // Restart the stream with current mode (RTMP when broadcasting; otherwise local-only)
                     await _streamService.StartStreamAsync(rtmp, null, cancellationToken);
 
-                    // If broadcasting, nudge ingestion; if it fails, end broadcast but keep local HLS
+                    // If broadcasting, nudge ingestion; if it fails, end broadcast but keep local stream
                     if (!string.IsNullOrWhiteSpace(bid) && yt != null)
                     {
                         try
@@ -222,7 +196,7 @@ namespace PrintStreamer.Services
                             var ok = await yt.TransitionBroadcastToLiveWhenReadyAsync(bid!, TimeSpan.FromSeconds(60), 6, cancellationToken);
                             if (!ok)
                             {
-                                Console.WriteLine("[Orchestrator] Ingestion failed after restart; ending broadcast but keeping local HLS running");
+                                Console.WriteLine("[Orchestrator] Ingestion failed after restart; ending broadcast but keeping local stream running");
                                 await StopBroadcastKeepLocalAsync(cancellationToken);
                             }
                         }
@@ -247,7 +221,7 @@ namespace PrintStreamer.Services
         }
 
         /// <summary>
-        /// End the current YouTube broadcast but keep a local HLS stream running.
+        /// End the current YouTube broadcast but keep a local stream running.
         /// </summary>
         public async Task StopBroadcastKeepLocalAsync(CancellationToken cancellationToken)
         {
@@ -279,14 +253,14 @@ namespace PrintStreamer.Services
                 }
             }
 
-            // Ensure local HLS is running after ending broadcast
+            // Ensure local stream is running after ending broadcast
             try
             {
                 await _streamService.StartStreamAsync(null, null, cancellationToken);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Orchestrator] Failed to start local HLS after ending broadcast: {ex.Message}");
+                Console.WriteLine($"[Orchestrator] Failed to start local stream after ending broadcast: {ex.Message}");
             }
         }
 
@@ -360,11 +334,11 @@ namespace PrintStreamer.Services
         }
 
         /// <summary>
-        /// Start a local HLS-only stream (no YouTube broadcast)
+        /// Start a local stream (no YouTube broadcast)
         /// </summary>
         public async Task StartLocalStreamAsync(CancellationToken cancellationToken)
         {
-            Console.WriteLine("[Orchestrator] Starting local HLS-only stream");
+            Console.WriteLine("[Orchestrator] Starting local stream");
             await _streamService.StartStreamAsync(null, null, cancellationToken);
         }
 

@@ -28,7 +28,7 @@ The app's runtime behavior is controlled by configuration keys rather than a sin
 dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream"
 ```
 
-Open the control panel at http://localhost:8080 to view the raw MJPEG source and the local HLS preview.
+Open the control panel at http://localhost:8080 to view the raw MJPEG source.
 
  2) Stream to YouTube (OAuth)
 

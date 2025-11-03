@@ -113,7 +113,10 @@ namespace PrintStreamer.Services
             try
             {
                 proc.Start();
-                var copyTask = proc.StandardOutput.BaseStream.CopyToAsync(ctx.Response.Body, 64 * 1024, ctx.RequestAborted);
+                
+                // Monitor stderr for critical errors (suppress benign warnings)
+                var errorCount = 0;
+                var lastErrorTime = DateTime.UtcNow;
                 _ = Task.Run(async () =>
                 {
                     var buf = new char[1024];
@@ -125,18 +128,40 @@ namespace PrintStreamer.Services
                             if (n > 0)
                             {
                                 var s = new string(buf, 0, n).Trim();
-                                if (!string.IsNullOrWhiteSpace(s)) Console.WriteLine($"[OverlayMJPEG ffmpeg] {s}");
+                                if (!string.IsNullOrWhiteSpace(s))
+                                {
+                                    // Suppress repetitive "unable to decode APP fields" errors which are common
+                                    // with MJPEG streams and don't indicate fatal problems
+                                    if (s.Contains("unable to decode APP fields") || 
+                                        s.Contains("Last message repeated"))
+                                    {
+                                        // Only log these occasionally to avoid spam
+                                        var now = DateTime.UtcNow;
+                                        if ((now - lastErrorTime).TotalSeconds > 10)
+                                        {
+                                            Console.WriteLine($"[OverlayMJPEG] Suppressing benign decode warnings (last 10s)");
+                                            lastErrorTime = now;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine($"[OverlayMJPEG ffmpeg] {s}");
+                                        errorCount++;
+                                    }
+                                }
                             }
                         }
                     }
                     catch { }
                 });
-                await copyTask;
+                
+                // Copy output with error recovery - if copy fails, the client disconnected
+                await proc.StandardOutput.BaseStream.CopyToAsync(ctx.Response.Body, 64 * 1024, ctx.RequestAborted);
                 try { await ctx.Response.Body.FlushAsync(ctx.RequestAborted); } catch { }
             }
             catch (OperationCanceledException)
             {
-                // ignore
+                // Client disconnected or request cancelled - this is normal
             }
             catch (Exception ex)
             {
@@ -144,6 +169,11 @@ namespace PrintStreamer.Services
                 {
                     ctx.Response.StatusCode = 502;
                     await ctx.Response.WriteAsync($"Overlay pipeline error: {ex.Message}", cancellationToken);
+                }
+                else
+                {
+                    // Response already started, log the error but don't try to write to response
+                    Console.WriteLine($"[OverlayMJPEG] Pipeline error after response started: {ex.Message}");
                 }
             }
             finally

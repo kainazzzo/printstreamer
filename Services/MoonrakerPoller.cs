@@ -81,7 +81,7 @@ namespace PrintStreamer.Services
     public static bool IsWaitingForIngestion => _isWaitingForIngestion;
 
         /// <summary>
-        /// Promote the currently-running encoder (HLS-only) to a YouTube live broadcast by creating
+        /// Promote the currently-running encoder to a YouTube live broadcast by creating
         /// the broadcast resources and restarting the ffmpeg process to include RTMP output.
         /// Returns true on success.
         /// </summary>
@@ -118,7 +118,7 @@ namespace PrintStreamer.Services
                     return (false, "OAuth client credentials not configured", null);
                 }
 
-            // In some flows the local HLS streamer may be restarting (e.g., camera toggle or prior stop).
+            // In some flows the local streamer may be restarting (e.g., camera toggle or prior stop).
             // Give it a short grace period to appear; if still null, we'll start a fresh encoder below.
             if (_currentStreamer == null)
             {
@@ -148,7 +148,7 @@ namespace PrintStreamer.Services
             var newKey = res.streamKey;
             var newBroadcastId = res.broadcastId;
 
-            // Restart streamer if one is running: cancel current, then start a new one with RTMP+HLS
+            // Restart streamer if one is running: cancel current, then start a new one with RTMP
             IStreamer? old; CancellationTokenSource? oldCts;
             lock (_streamLock)
             {
@@ -170,11 +170,10 @@ namespace PrintStreamer.Services
             }
             catch { }
 
-            // Start new ffmpeg streamer with RTMP and HLS
+            // Start new ffmpeg streamer with RTMP
             try
             {
                 var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
-                var hlsFolder = config.GetValue<string>("Stream:Local:HlsFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "hls");
                 var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
                 var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
 
@@ -224,7 +223,7 @@ namespace PrintStreamer.Services
                     yt.Dispose();
                     return (false, "Stream:Source is not configured", null);
                 }
-                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null, audioUrl);
+                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, audioUrl);
                 var cts = new CancellationTokenSource();
 
                 lock (_streamLock)
@@ -934,7 +933,7 @@ namespace PrintStreamer.Services
                     if (IsBroadcastActive)
                     {
                         Console.WriteLine("[YouTube] Broadcast already active, using existing broadcast for stream");
-                        // Don't create a new broadcast, just use HLS-only mode or attach to existing
+                        // Don't create a new broadcast, just use local mode or attach to existing
                         rtmpUrl = null;
                         streamKey = null;
                     }
@@ -957,7 +956,7 @@ namespace PrintStreamer.Services
                     // Authenticate
                     if (!await ytService.AuthenticateAsync(cancellationToken))
                     {
-                        Console.WriteLine("[YouTube] Authentication failed. Starting local HLS-only stream.");
+                        Console.WriteLine("[YouTube] Authentication failed. Starting local stream only.");
                         ytService?.Dispose();
                         ytService = null;
                         rtmpUrl = null;
@@ -969,7 +968,7 @@ namespace PrintStreamer.Services
                         var result = await ytService.CreateLiveBroadcastAsync(cancellationToken);
                         if (result.rtmpUrl == null || result.streamKey == null)
                         {
-                            Console.WriteLine("[YouTube] Failed to create broadcast. Starting local HLS-only stream.");
+                            Console.WriteLine("[YouTube] Failed to create broadcast. Starting local stream only.");
                             ytService?.Dispose();
                             ytService = null;
                             rtmpUrl = null;
@@ -1103,8 +1102,8 @@ namespace PrintStreamer.Services
                 }
                 else
                 {
-                    // No YouTube OAuth configured or broadcast disabled - run local HLS-only stream
-                    Console.WriteLine("[Stream] Starting local HLS-only stream (no YouTube broadcast)");
+                    // No YouTube OAuth configured or broadcast disabled - run local stream only
+                    Console.WriteLine("[Stream] Starting local stream only (no YouTube broadcast)");
                     rtmpUrl = null;
                     streamKey = null;
                 }
@@ -1116,7 +1115,6 @@ namespace PrintStreamer.Services
                     fullRtmpUrl = $"{rtmpUrl}/{streamKey}";
                 }
                 var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
-                var hlsFolder = config.GetValue<string>("Stream:Local:HlsFolder");
 
                 var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
                 var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
@@ -1131,9 +1129,9 @@ namespace PrintStreamer.Services
                     if (string.IsNullOrWhiteSpace(audioUrl)) audioUrl = "http://127.0.0.1:8080/api/audio/stream";
                 }
 
-                // Always use the ffmpeg-based streamer. If fullRtmpUrl is null, ffmpeg will produce HLS-only preview.
-                Console.WriteLine($"Starting ffmpeg streamer to {(fullRtmpUrl != null ? rtmpUrl + "/***" : "HLS-only")} (fps={targetFps}, kbps={bitrateKbps})");
-                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null, audioUrl);
+                // Always use the ffmpeg-based streamer. If fullRtmpUrl is null, ffmpeg will produce local preview only.
+                Console.WriteLine($"Starting ffmpeg streamer to {(fullRtmpUrl != null ? rtmpUrl + "/***" : "local preview")} (fps={targetFps}, kbps={bitrateKbps})");
+                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl);
                 
                 // Store streamer reference so it can be promoted to live later
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

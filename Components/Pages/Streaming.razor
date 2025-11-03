@@ -45,7 +45,6 @@
     private bool _jsReady = false;
     private List<(string Message, string Type)> _pendingToasts = new();
     private bool isLive = false;
-    private bool hlsAvailable = false;
     private bool isStreamPlaying = false;
     private bool isGoingLive = false;
     private bool streamerRunning = false;
@@ -95,7 +94,7 @@
                 }
                 _pendingToasts.Clear();
             }
-            // Initialize HLS player and MJPEG stream monitoring
+            // Initialize MJPEG stream monitoring
             try { await JS.InvokeVoidAsync("initializeStreams"); } catch { }
 
             // Start periodic stream status check (with initial delay to ensure JS is loaded)
@@ -152,11 +151,11 @@
             }
             catch
             {
-                // If JS HLS probe fails (HLS removed), fall back to server-side streamerRunning
+                // Fall back to server-side streamerRunning
                 playing = false;
             }
 
-            // If HLS is not available but the backend ffmpeg streamer is running, treat that as "playing"
+            // If the backend ffmpeg streamer is running, treat that as "playing"
             if (!playing && streamerRunning)
             {
                 playing = true;
@@ -186,7 +185,6 @@
                 broadcastId = response.BroadcastId;
                 streamerRunning = response.StreamerRunning;
                 waitingForIngestion = response.WaitingForIngestion;
-                hlsAvailable = response.HlsAvailable;
                 UpdateLiveStatusTimer();
             }
         }
@@ -593,7 +591,6 @@
         public string? BroadcastId { get; set; }
         public bool StreamerRunning { get; set; }
         public bool WaitingForIngestion { get; set; }
-        public bool HlsAvailable { get; set; }
     }
 
     private class ApiResponse

@@ -176,12 +176,8 @@ if (serveEnabled)
 
 	// Architecture Overview:
 	// 1. WebCam Proxy (/stream) - Proxies MJPEG webcam, handles camera simulation
-	// 2. Local HLS Stream - ffmpeg reads /stream and outputs HLS (always runs when Stream:Local:Enabled=true)
+	// 2. Local Stream - ffmpeg reads /stream for encoding
 	// 3. YouTube Live Broadcast - OAuth creates broadcast, restarts ffmpeg to add RTMP output
-	
-	// Note: HLS stream will be started AFTER the web server is listenring (see below)
-
-// (Local HLS preview startup will be handled in the Serve static-file block below so we only declare the variables once.)
 
 	app.MapGet("/stream", async (HttpContext ctx) => await webcamManager.HandleStreamRequest(ctx));
 	// Overlay MJPEG endpoint: prefer the new IStreamer-based OverlayMjpegStreamer (per-request)
@@ -533,25 +529,11 @@ if (serveEnabled)
 			var streamerRunning = orchestrator.IsStreaming;
 			var waitingForIngestion = orchestrator.IsWaitingForIngestion;
 
-			// Check if HLS manifest exists
-			var hlsFolder = ctx.RequestServices.GetRequiredService<IConfiguration>().GetValue<string>("Stream:Local:HlsFolder") ?? "hls";
-			var hlsManifest = Path.Combine(Directory.GetCurrentDirectory(), hlsFolder, "stream.m3u8");
-			var hlsAvailable = File.Exists(hlsManifest);
-
-			// Kick a background self-heal if HLS is missing but streaming is expected
-			if (!hlsAvailable && (streamerRunning || isLive))
-			{
-				_ = Task.Run(async () =>
-				{
-					try { await orchestrator.EnsureStreamingHealthyAsync(true, CancellationToken.None); } catch { }
-				});
-			}
-
-			return Results.Json(new { isLive, broadcastId, streamerRunning, waitingForIngestion, hlsAvailable });
+			return Results.Json(new { isLive, broadcastId, streamerRunning, waitingForIngestion });
 		}
 		catch (Exception ex)
 		{
-			return Results.Json(new { isLive = false, broadcastId = (string?)null, streamerRunning = false, waitingForIngestion = false, hlsAvailable = false, error = ex.Message });
+			return Results.Json(new { isLive = false, broadcastId = (string?)null, streamerRunning = false, waitingForIngestion = false, error = ex.Message });
 		}
 	});
 
@@ -570,13 +552,13 @@ if (serveEnabled)
 		}
 	});
 
-	// Manual repair endpoint: ensure HLS/stream health and recover broadcast if possible
+	// Manual repair endpoint: ensure stream health and recover broadcast if possible
 	app.MapPost("/api/live/repair", async (HttpContext ctx) =>
 	{
 		try
 		{
 			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
-			var ok = await orchestrator.EnsureStreamingHealthyAsync(true, ctx.RequestAborted);
+			var ok = await orchestrator.EnsureStreamingHealthyAsync(ctx.RequestAborted);
 			return Results.Json(new { success = ok });
 		}
 		catch (Exception ex)
@@ -869,8 +851,7 @@ if (serveEnabled)
 				BitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800,
 					Local = new
 					{
-						Enabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false,
-						HlsFolder = config.GetValue<string>("Stream:Local:HlsFolder") ?? "hls"
+						Enabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false
 					},
 					Audio = new
 					{
@@ -1306,13 +1287,13 @@ if (serveEnabled)
         timelapseManager?.Dispose();
     });
 
-	// Start local HLS stream AFTER the web server is listening (to avoid race condition)
+	// Start local stream AFTER the web server is listening (to avoid race condition)
 	lifetime.ApplicationStarted.Register(() =>
 	{
 		if (config.GetValue<bool?>("Stream:Local:Enabled") ?? false)
 		{
-			Console.WriteLine("[Stream] Web server ready, starting local HLS preview stream...");
-			// Start a local HLS-only stream on startup for preview
+			Console.WriteLine("[Stream] Web server ready, starting local preview stream...");
+			// Start a local stream on startup for preview
 			// Ensure audio broadcaster is constructed so the API audio endpoint is available
 			try
 			{
@@ -1329,7 +1310,7 @@ if (serveEnabled)
 					var streamService = app.Services.GetRequiredService<StreamService>();
 					if (!streamService.IsStreaming)
 					{
-						Console.WriteLine("[Stream] Starting local HLS preview stream");
+						Console.WriteLine("[Stream] Starting local preview stream");
 						await streamService.StartStreamAsync(null, null, CancellationToken.None);
 					}
 				}
@@ -1341,171 +1322,17 @@ if (serveEnabled)
 		}
 	});
 
-	// Serve local HLS output if configured
-	var localStreamEnabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
-	var hlsFolderRaw = config.GetValue<string>("Stream:Local:HlsFolder");
-	// default to ./hls but ensure we use an absolute path for the file provider
-	var hlsFolder = Path.GetFullPath(hlsFolderRaw ?? Path.Combine(Directory.GetCurrentDirectory(), "hls"));
-	if (localStreamEnabled)
+	// Serve Blazor component assets (CSS, JS)
+	var componentsFolder = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Components"));
+	if (Directory.Exists(componentsFolder))
 	{
-		Console.WriteLine($"[Serve] Serving local HLS at /hls from {hlsFolder}");
-		Directory.CreateDirectory(hlsFolder);
-
-		// Wipe any existing HLS files on startup so we start with a clean slate.
-		try
-		{
-			if (Directory.Exists(hlsFolder))
-			{
-				foreach (var f in Directory.EnumerateFiles(hlsFolder))
-				{
-					try { File.Delete(f); } catch { }
-				}
-				foreach (var d in Directory.EnumerateDirectories(hlsFolder))
-				{
-					try { Directory.Delete(d, true); } catch { }
-				}
-			}
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"[HLS] Failed to wipe HLS folder on startup: {ex.Message}");
-		}
-
-		// Start a background cleanup task to keep the HLS folder tidy.
-		// Configurable options:
-		// Stream:Local:HlsMaxSegments (int) - keep at most this many segment files (default 20)
-		// Stream:Local:HlsCleanupIntervalSeconds (int) - cleanup interval in seconds (default 10)
-		var hlsMaxSegments = config.GetValue<int?>("Stream:Local:HlsMaxSegments") ?? 20;
-		var hlsCleanupInterval = config.GetValue<int?>("Stream:Local:HlsCleanupIntervalSeconds") ?? 10;
-
-		_ = Task.Run(async () =>
-		{
-			try
-			{
-				while (!appCts.IsCancellationRequested)
-				{
-					try
-					{
-						if (Directory.Exists(hlsFolder))
-						{
-							// Collect segment files (seg_*.ts) and manifest files (*.m3u8)
-							var segFiles = Directory.GetFiles(hlsFolder, "seg_*.ts").Select(p => new FileInfo(p)).OrderByDescending(f => f.CreationTimeUtc).ToArray();
-							if (segFiles.Length > hlsMaxSegments)
-							{
-								// Keep newest hlsMaxSegments and delete the rest
-								var toDelete = segFiles.Skip(hlsMaxSegments).ToArray();
-								foreach (var f in toDelete)
-								{
-									try { File.Delete(f.FullName); } catch { }
-								}
-							}
-							// Also remove any orphaned temporary files or old manifests older than a minute
-							var oldFiles = Directory.GetFiles(hlsFolder).Select(p => new FileInfo(p)).Where(fi => (DateTime.UtcNow - fi.CreationTimeUtc).TotalSeconds > 60).ToArray();
-							foreach (var of in oldFiles)
-							{
-								if (of.Name.StartsWith("seg_") || of.Extension.Equals(".tmp", StringComparison.OrdinalIgnoreCase) || of.Extension.Equals(".old", StringComparison.OrdinalIgnoreCase))
-								{
-									try { File.Delete(of.FullName); } catch { }
-								}
-							}
-						}
-					}
-					catch { }
-					await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, hlsCleanupInterval)), appCts.Token).ContinueWith(_ => { });
-				}
-			}
-			catch (OperationCanceledException) { }
-			catch (Exception ex)
-			{
-				Console.WriteLine($"[HLS Cleanup] Error: {ex.Message}");
-			}
-		});
 		app.UseStaticFiles(new StaticFileOptions
 		{
-			FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(hlsFolder),
-			RequestPath = "/hls",
-			ServeUnknownFileTypes = true
+			FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(componentsFolder),
+			RequestPath = "/Components",
+			ServeUnknownFileTypes = false
 		});
-
-		// Serve Blazor component assets (CSS, JS)
-		var componentsFolder = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Components"));
-		if (Directory.Exists(componentsFolder))
-		{
-			app.UseStaticFiles(new StaticFileOptions
-			{
-				FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(componentsFolder),
-				RequestPath = "/Components",
-				ServeUnknownFileTypes = false
-			});
-		}
-
-		// Note: local HLS preview will be produced by the same ffmpeg process that streams to YouTube
-		// when Stream:Local:Enabled is true. We intentionally avoid running a second encoder process.
 	}
-
-	// Fallback HLS endpoint: serve manifests and segments from the HLS folder even
-	// if static files middleware doesn't handle them in some hosting scenarios.
-	app.MapGet("/hls/{**path}", async (string path, HttpContext ctx) =>
-	{
-		try
-		{
-			// Normalize path: remove any leading directory separators so Path.Combine treats it as relative
-			if (string.IsNullOrWhiteSpace(path)) path = "stream.m3u8";
-			path = path.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '/', '\\');
-
-			var requested = Path.GetFullPath(Path.Combine(hlsFolder, path));
-			var folderFull = Path.GetFullPath(hlsFolder);
-			if (!requested.StartsWith(folderFull))
-			{
-				Console.WriteLine($"[HLS] Forbidden path traversal attempt: {path} -> {requested}");
-				ctx.Response.StatusCode = 403;
-				return;
-			}
-
-			if (!File.Exists(requested))
-			{
-				Console.WriteLine($"[HLS] Not found: {requested}");
-				ctx.Response.StatusCode = 404;
-				return;
-			}
-
-			// Set content type for HLS manifests and ts segments
-			var ext = Path.GetExtension(requested).ToLowerInvariant();
-			switch (ext)
-			{
-				case ".m3u8": ctx.Response.ContentType = "application/vnd.apple.mpegurl"; break;
-				case ".ts": ctx.Response.ContentType = "video/MP2T"; break;
-				default: ctx.Response.ContentType = "application/octet-stream"; break;
-			}
-
-			await ctx.Response.SendFileAsync(requested);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"[HLS] Serve error: {ex.Message}");
-			ctx.Response.StatusCode = 500;
-		}
-	});
-
-		// Debug endpoint: list files in the configured HLS folder (useful to diagnose 404s)
-		app.MapGet("/api/hls/list", (HttpContext ctx) =>
-		{
-			try
-			{
-				if (!localStreamEnabled)
-				{
-					return Results.Json(new { enabled = false, files = Array.Empty<string>() });
-				}
-				var files = Directory.Exists(hlsFolder)
-					? Directory.EnumerateFiles(hlsFolder).Select(p => Path.GetFileName(p)).ToArray()
-					: Array.Empty<string>();
-				return Results.Json(new { enabled = true, folder = hlsFolder, files });
-			}
-			catch (Exception ex)
-			{
-				return Results.Json(new { enabled = localStreamEnabled, error = ex.Message });
-			}
-		});
 
 }
 
@@ -1533,8 +1360,8 @@ static void PrintHelp()
 	Console.WriteLine();
 	Console.WriteLine("Architecture:");
 	Console.WriteLine("  1. WebCam Proxy (/stream) - Proxies MJPEG webcam, handles camera simulation");
-	Console.WriteLine("  2. Local HLS Stream - ffmpeg reads /stream and outputs HLS segments");
-	Console.WriteLine("  3. YouTube Live Broadcast - OAuth creates broadcast, adds RTMP output to HLS stream");
+	Console.WriteLine("  2. Local Stream - ffmpeg reads /stream and outputs to RTMP");
+	Console.WriteLine("  3. YouTube Live Broadcast - OAuth creates broadcast, configures RTMP output");
 	Console.WriteLine();
 	Console.WriteLine("Configuration Methods:");
 	Console.WriteLine("  1. appsettings.json (base configuration)");
@@ -1543,7 +1370,7 @@ static void PrintHelp()
 	Console.WriteLine();
 	Console.WriteLine("Required Configuration:");
 	Console.WriteLine("  Stream:Source                     - MJPEG webcam URL (required)");
-	Console.WriteLine("  Stream:Local:Enabled              - Enable local HLS stream (true/false)");
+	Console.WriteLine("  Stream:Local:Enabled              - Enable local stream preview (true/false)");
 	Console.WriteLine();
 	Console.WriteLine("YouTube Live Broadcast (Optional):");
 	Console.WriteLine("  YouTube:OAuth:ClientId            - OAuth client ID for YouTube API");
