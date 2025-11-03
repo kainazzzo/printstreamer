@@ -58,9 +58,12 @@ echo "  Port        : ${HOST_PORT} -> 8080"
 echo "  Environment : Home"
 echo "  Config      : appsettings.Home.json"
 
-# Allow interactive auth (-it) when INTERACTIVE=1 (useful to paste OAuth codes once)
+# Allow interactive auth: enable TTY/STDIN by default when attached to a terminal,
+# or when INTERACTIVE=1 is set explicitly.
 DOCKER_INTERACTIVE_FLAGS=""
-if [[ "${INTERACTIVE:-0}" == "1" ]]; then
+if [[ "${INTERACTIVE:-auto}" == "1" ]]; then
+  DOCKER_INTERACTIVE_FLAGS="-it"
+elif [[ "${INTERACTIVE:-auto}" == "auto" && -t 0 ]]; then
   DOCKER_INTERACTIVE_FLAGS="-it"
 fi
 
@@ -69,6 +72,14 @@ HOST_DATA_DIR="${HOST_DATA_DIR:-${HOME}/PrintStreamerData}"
 mkdir -p "${HOST_DATA_DIR}"
 echo "  Data mount  : ${HOST_DATA_DIR} -> /usr/local/share/data"
 
+# Ensure a host token file exists and bind it into the container so OAuth tokens persist
+mkdir -p "$REPO_ROOT/tokens"
+TOKEN_FILE_HOST="$REPO_ROOT/tokens/youtube_token.json"
+if [[ ! -f "$TOKEN_FILE_HOST" ]]; then
+  echo '{}' > "$TOKEN_FILE_HOST"
+fi
+echo "  Token file  : ${TOKEN_FILE_HOST} -> /app/tokens/youtube_token.json (+compat link at /app/youtube_token.json)"
+
 echo "docker run command: docker run ${DOCKER_INTERACTIVE_FLAGS} \
   --name \"${CONTAINER_NAME}\" \
   --restart \"${RESTART_POLICY}\" \
@@ -76,9 +87,9 @@ echo "docker run command: docker run ${DOCKER_INTERACTIVE_FLAGS} \
   -e \"ASPNETCORE_ENVIRONMENT=Home\" \
   -v \"$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro\" \
   -v \"${HOST_DATA_DIR}:/usr/local/share/data\" \
+  -v \"$REPO_ROOT/tokens:/app/tokens\" \
+  -v \"${TOKEN_FILE_HOST}:/app/youtube_token.json\" \
   \"${IMAGE_NAME}\""
-
-read -rp "Press Enter to continue..."
 
 docker run ${DOCKER_INTERACTIVE_FLAGS} \
   --name "${CONTAINER_NAME}" \
@@ -87,6 +98,8 @@ docker run ${DOCKER_INTERACTIVE_FLAGS} \
   -e "ASPNETCORE_ENVIRONMENT=Home" \
   -v "$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro" \
   -v "${HOST_DATA_DIR}:/usr/local/share/data" \
+  -v "$REPO_ROOT/tokens:/app/tokens" \
+  -v "${TOKEN_FILE_HOST}:/app/youtube_token.json" \
   "${IMAGE_NAME}"
 
 echo

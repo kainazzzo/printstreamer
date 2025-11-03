@@ -127,6 +127,8 @@ export Stream__Source="http://printer.local/webcam/?action=stream"
 2. **See [DOCKER_RELEASE.md](./DOCKER_RELEASE.md)** for secure deployment and secrets management.
 3. **See [ARCHITECTURE.md](./ARCHITECTURE.md)** for technical details and configuration options.
 
+Tip: Use `./scripts/run.sh` to run in Docker interactively for first-time OAuth. It auto-binds `tokens/youtube_token.json` so future runs are headless.
+
 ---
 
 ## Need Help?

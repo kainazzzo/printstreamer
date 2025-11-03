@@ -177,8 +177,7 @@ namespace PrintStreamer.Streamers
 		{
 			// Basic ffmpeg args that should work for many MJPEG/http or v4l2 inputs.
 			// -re to read input at native frame rate
-			// Video: libx264, preset veryfast for low-latency encoding
-			// Audio: disabled by default (YouTube expects audio); we disable audio to avoid added complexity.
+			// Video: libx264, preset ultrafast for low-latency encoding
 
 			// If source looks like a v4l2 device on Linux, pass -f v4l2
 			var srcArg = source;
@@ -239,7 +238,7 @@ namespace PrintStreamer.Streamers
 				var audioReconnect = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
 				// Add analyzeduration and probesize to handle variable/unstable streams
 				// Set max_delay to help with sync recovery after input issues
-				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -fflags +genpts -i \"{audioUrl}\"";
+				inputArgs = $"{baseFlags} {reconnectArgs} -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -fflags +genpts+discardcorrupt -analyzeduration 2M -probesize 5M -i \"{audioUrl}\"";
 				// Map audio from second input
 				audioMap = "-map 1:a:0";
 				audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
@@ -337,7 +336,10 @@ namespace PrintStreamer.Streamers
 			// Only include -r when effectiveFps > 0; otherwise don't force output framerate and let ffmpeg use input timing.
 			var rArg = effectiveFps > 0 ? $"-r {effectiveFps} " : string.Empty;
 			// Use a faster preset suitable for streaming but with better quality than ultrafast
-			var videoEnc = $"-c:v libx264 -preset veryfast -tune zerolatency {profile} -pix_fmt yuv420p {rArg}-g {gop} -keyint_min {gop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
+			// Enforce consistent keyframe behavior for YouTube: 2s GOP, no scenecut, and force keyframes every 2s
+			var x264Params = $"-x264-params \"keyint={gop}:min-keyint={gop}:scenecut=0\"";
+			var forceKf = $"-force_key_frames \"expr:gte(t,n_forced*2)\"";
+			var videoEnc = $"-c:v libx264 -preset ultrafast -tune zerolatency {profile} -pix_fmt yuv420p {rArg}-g {gop} -keyint_min {gop} -sc_threshold 0 {x264Params} {forceKf} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
 
 
 			// Build the final command so both outputs explicitly map the filtered [vout] and audio map.
@@ -358,7 +360,8 @@ namespace PrintStreamer.Streamers
 			// Only RTMP requested -> map [vout] to RTMP/flv output
 			if (!string.IsNullOrWhiteSpace(rtmpUrl))
 			{
-				cmd.Append($"-map [vout] {videoEnc} {audioEncArgs} {flvFlags} {audioMap} -f flv {rtmpUrl}");
+				// For RTMP output, explicitly set live mode to help some endpoints
+				cmd.Append($"-map [vout] {videoEnc} {audioEncArgs} {flvFlags} {audioMap} -f flv -rtmp_live live {rtmpUrl}");
 				return cmd.ToString();
 			}
 

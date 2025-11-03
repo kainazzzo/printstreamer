@@ -1,6 +1,8 @@
 ﻿using PrintStreamer.Timelapse;
 using PrintStreamer.Services;
 using System.Diagnostics;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Antiforgery;
 
 // Moonraker polling and streaming helpers moved to Services/MoonrakerPoller.cs
 
@@ -40,6 +42,31 @@ if (!string.IsNullOrWhiteSpace(customConfigFile))
 }
 
 var config = webBuilder.Configuration;
+
+// Persist ASP.NET Core DataProtection keys so antiforgery cookies survive container restarts
+try
+{
+	var dpKeyDir = config.GetValue<string>("DataProtection:KeyDirectory") ?? "/usr/local/share/data/dpkeys";
+	Directory.CreateDirectory(dpKeyDir);
+	webBuilder.Services
+		.AddDataProtection()
+		.PersistKeysToFileSystem(new DirectoryInfo(dpKeyDir))
+		.SetApplicationName("PrintStreamer");
+	Console.WriteLine($"[Startup] DataProtection key ring at: {dpKeyDir}");
+}
+catch (Exception ex)
+{
+	Console.WriteLine($"[Startup] Warning: Could not initialize DataProtection key persistence: {ex.Message}");
+}
+
+// Configure antiforgery cookie with a stable, known name so we can refresh it on invalid states
+webBuilder.Services.AddAntiforgery(options =>
+{
+	options.Cookie.Name = "printstreamer.AntiForgery";
+	options.Cookie.HttpOnly = true;
+	options.HeaderName = "X-CSRF-TOKEN";
+	options.SuppressXFrameOptionsHeader = true; // We proxy iframes explicitly
+});
 
 // Generate fallback_black.jpg at startup if it doesn't exist
 // This file is used by WebCamManager when the camera source is unavailable
@@ -154,6 +181,33 @@ var app = webBuilder.Build();
 
 // Add Blazor Server middleware
 app.UseAntiforgery();
+
+// Early middleware to proactively issue a fresh antiforgery cookie on GETs and clear stale ones
+app.Use(async (ctx, next) =>
+{
+	try
+	{
+		var af = ctx.RequestServices.GetRequiredService<IAntiforgery>();
+		if (string.Equals(ctx.Request.Method, "GET", StringComparison.OrdinalIgnoreCase))
+		{
+			// Issue/refresh the antiforgery cookie for this client; overwrites old/stale cookies
+			af.GetAndStoreTokens(ctx);
+		}
+	}
+	catch (AntiforgeryValidationException)
+	{
+		// If decryption failed (e.g., stale key), delete our known cookie and re-issue
+		try { ctx.Response.Cookies.Delete("printstreamer.AntiForgery"); } catch { }
+		try
+		{
+			var af = ctx.RequestServices.GetRequiredService<IAntiforgery>();
+			af.GetAndStoreTokens(ctx);
+		}
+		catch { }
+	}
+	catch { }
+	await next();
+});
 
 if (serveEnabled)
 {
@@ -512,6 +566,56 @@ if (serveEnabled)
 			var (ok, message, broadcastId) = await orchestrator.StartBroadcastAsync(ctx.RequestAborted);
 			if (ok) return Results.Json(new { success = true, broadcastId });
 			return Results.Json(new { success = false, error = message });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// Manual force Go Live if YouTube Studio shows data but it's stuck in preview/testing
+	app.MapPost("/api/live/force-go-live", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			if (!orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(orchestrator.CurrentBroadcastId))
+			{
+				return Results.Json(new { success = false, error = "No active broadcast" });
+			}
+			var bid = orchestrator.CurrentBroadcastId!;
+			using var yt = new YouTubeControlService(config);
+			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
+			{
+				return Results.Json(new { success = false, error = "YouTube authentication failed" });
+			}
+			var ok = await yt.TransitionBroadcastToLiveWhenReadyAsync(bid, TimeSpan.FromSeconds(180), 12, ctx.RequestAborted);
+			return Results.Json(new { success = ok });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// Dump diagnostics for the current broadcast/stream (helps when stuck in preview)
+	app.MapGet("/api/live/debug", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			if (!orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(orchestrator.CurrentBroadcastId))
+			{
+				return Results.Json(new { success = false, error = "No active broadcast" });
+			}
+			var bid = orchestrator.CurrentBroadcastId!;
+			using var yt = new YouTubeControlService(config);
+			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
+			{
+				return Results.Json(new { success = false, error = "YouTube authentication failed" });
+			}
+			await yt.LogBroadcastAndStreamResourcesAsync(bid, null, ctx.RequestAborted);
+			return Results.Json(new { success = true });
 		}
 		catch (Exception ex)
 		{

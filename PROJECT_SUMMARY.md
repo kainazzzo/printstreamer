@@ -267,7 +267,7 @@ ffmpeg -version
 -b:v 2500k → -b:v 5000k  # Higher quality
 
 # Or adjust preset
--preset veryfast → -preset medium  # Better quality, slower
+-preset ultrafast → -preset medium  # Better quality, slower
 ```
 
 ## 📚 Documentation

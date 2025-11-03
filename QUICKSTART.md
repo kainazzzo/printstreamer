@@ -108,6 +108,23 @@ docker run -p 8080:8080 \
 ```
 **Warning:** Never pass your client secret directly in production! Use Docker secrets or a secrets manager. See `DOCKER_RELEASE.md` for secure deployment.
 
+#### Interactive OAuth inside Docker
+On first-time YouTube authentication, the app may print an authorization URL and wait for you to paste the code. To make this work inside Docker:
+
+- Use the helper script which enables interactive mode when a TTY is present and persists your token to `tokens/youtube_token.json`:
+
+```bash
+./scripts/run.sh
+```
+
+- If your environment doesn't allocate a TTY automatically, force interactive mode:
+
+```bash
+INTERACTIVE=1 ./scripts/run.sh
+```
+
+The first run will ask you to open a link and paste a code; the resulting token is saved to `tokens/youtube_token.json` so future runs are headless.
+
 ---
 
 ## 🆘 Quick Troubleshooting
