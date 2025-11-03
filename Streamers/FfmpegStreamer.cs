@@ -300,42 +300,9 @@ namespace PrintStreamer.Streamers
 			}
 
 			var vfChain = string.Join(",", vfFilters);
-			// Ensure HLS folder exists when requested (define hlsArgs before it's used)
-			string hlsArgs = "";
-			string hlsPath = "";
-			if (!string.IsNullOrWhiteSpace(hlsFolder))
-			{
-				// Normalize to an absolute path so ffmpeg always uses the expected directory
-				try
-				{
-					var abs = Path.GetFullPath(hlsFolder);
-					Directory.CreateDirectory(abs);
-					hlsFolder = abs;
-				}
-				catch { }
-				hlsPath = Path.Combine(hlsFolder, "stream.m3u8");
-				hlsArgs = $"-f hls -hls_time 2 -hls_list_size 5 -hls_flags delete_segments+append_list -hls_segment_filename \"{Path.Combine(hlsFolder, "seg_%03d.ts")}\" \"{hlsPath}\"";
-			}
-
-			// If we need to emit the filtered video to multiple outputs (RTMP + HLS), use split to create separate labels
-			// This avoids the "label ... already used elsewhere" error from ffmpeg when mapping the same filter output multiple times.
-			var needsSplit = !string.IsNullOrWhiteSpace(hlsArgs) && !string.IsNullOrWhiteSpace(rtmpUrl);
-			string filterComplex;
-
-			// The video input starts from the primary video input [0:v]
-			string videoInputStart = "[0:v]";
-
-			if (needsSplit)
-			{
-				// produce two outputs: [vout0] for RTMP and [vout1] for HLS
-				// quote the entire filter_complex argument to avoid shell parsing issues
-				filterComplex = $"-filter_complex \"{videoInputStart}{vfChain},split=2[vout0][vout1]\"";
-			}
-			else
-			{
-				// single labelled output [vout]
-				filterComplex = $"-filter_complex \"{videoInputStart}{vfChain}[vout]\"";
-			}
+			// Build filter_complex for a single labelled output [vout]
+			// HLS output has been removed: we only produce RTMP (if configured) or no output.
+			string filterComplex = $"-filter_complex \"[0:v]{vfChain}[vout]\"";
 			var colorRange = "-color_range tv";
 			var profile = "-profile:v high -level 4.1";
 			var flvFlags = "-flvflags no_duration_filesize";
@@ -354,34 +321,22 @@ namespace PrintStreamer.Streamers
 			cmd.Append(' ');
 			cmd.Append(filterComplex);
 			cmd.Append(' ');
+			// Add muxer/timestamp safeties to avoid non-monotonic DTS when inputs have unstable or missing timestamps.
+			// -avoid_negative_ts make_zero: clamp negative timestamps to zero
+			// -fflags +genpts: regenerate presentation timestamps where missing
+			// -vsync 2: variable frame-rate handling (vfr) to avoid forcing duplicate/lost frames
+			cmd.Append("-avoid_negative_ts make_zero -fflags +genpts -vsync 2 ");
 			cmd.Append(colorRange);
 			cmd.Append(' ');
 
-			// If both RTMP and HLS are requested, emit two outputs, each with explicit mapping
-			if (!string.IsNullOrWhiteSpace(hlsArgs) && !string.IsNullOrWhiteSpace(rtmpUrl))
-			{
-				// RTMP output maps the first split output
-				cmd.Append($"-map [vout0] {videoEnc} {audioEncArgs} {flvFlags} {audioMap} -f flv {rtmpUrl} ");
-				// HLS output maps the second split output (map filtered video + audio)
-				cmd.Append($"-map [vout1] {videoEnc} {audioEncArgs} {audioMap} {hlsArgs}");
-				return cmd.ToString();
-			}
-
-			// Only HLS requested
-			if (!string.IsNullOrWhiteSpace(hlsArgs))
-			{
-				cmd.Append($"-map [vout] {videoEnc} {audioEncArgs} {audioMap} {hlsArgs}");
-				return cmd.ToString();
-			}
-
-			// Only RTMP requested
+			// Only RTMP requested -> map [vout] to RTMP/flv output
 			if (!string.IsNullOrWhiteSpace(rtmpUrl))
 			{
 				cmd.Append($"-map [vout] {videoEnc} {audioEncArgs} {flvFlags} {audioMap} -f flv {rtmpUrl}");
 				return cmd.ToString();
 			}
 
-			// Neither RTMP nor HLS: drop to null sink
+			// No RTMP requested: drop to null sink (no HLS preview is generated)
 			cmd.Append($"-map [vout] {videoEnc} {audioEncArgs} {audioMap} -f null -");
 			return cmd.ToString();
 		}

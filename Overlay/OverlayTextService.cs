@@ -36,8 +36,8 @@ public sealed class OverlayTextService : IDisposable
         _apiKey = config.GetValue<string>("Moonraker:ApiKey");
         _authHeader = config.GetValue<string>("Moonraker:AuthHeader");
 
-    _template = config.GetValue<string>("Overlay:Template") ??
-           "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpd:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
+        _template = config.GetValue<string>("Overlay:Template") ??
+               "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpd:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
 
         var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
         if (refreshMs < 200) refreshMs = 200;
@@ -105,10 +105,10 @@ public sealed class OverlayTextService : IDisposable
     private async Task<OverlayData> QueryAsync(CancellationToken ct)
     {
         // Query Moonraker for temps, print status, and time estimates
-    var url = _moonrakerBase + "/printer/objects/query" +
-        "?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,filename,info,print_duration,filament_used,total_duration" +
-        "&display_status=progress,flow,speed,volumetric_flow&virtual_sdcard=progress,file_position,print_duration" +
-        "&gcode_move=speed,speed_factor,extrude_factor&motion_report";
+        var url = _moonrakerBase + "/printer/objects/query" +
+            "?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,filename,info,print_duration,filament_used,total_duration" +
+            "&display_status=progress,flow,speed,volumetric_flow&virtual_sdcard=progress,file_position,print_duration" +
+            "&gcode_move=speed,speed_factor,extrude_factor&motion_report";
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         if (!string.IsNullOrWhiteSpace(_apiKey))
         {
@@ -131,18 +131,18 @@ public sealed class OverlayTextService : IDisposable
         var bed = status.TryGetProperty("heater_bed", out var hb) ? hb : default;
         var print = status.TryGetProperty("print_stats", out var ps) ? ps : default;
 
-    double nozzle = TryDouble(extruder, "temperature");
+        double nozzle = TryDouble(extruder, "temperature");
         double nozzleTarget = TryDouble(extruder, "target");
         double bedTemp = TryDouble(bed, "temperature");
         double bedTarget = TryDouble(bed, "target");
 
         string state = TryString(print, "state") ?? string.Empty;
-        
+
         // Determine if there's an active print job (state is "printing" or "paused")
         bool isPrinting = state.Equals("printing", StringComparison.OrdinalIgnoreCase);
         bool isPaused = state.Equals("paused", StringComparison.OrdinalIgnoreCase);
         bool isActiveJob = isPrinting || isPaused;
-        
+
         // Try to get layer info for more accurate progress (only if actively printing)
         int? currentLayer = null;
         int? totalLayers = null;
@@ -164,7 +164,7 @@ public sealed class OverlayTextService : IDisposable
             var vflow = TryDouble(displayStatus, "volumetric_flow");
             if (!double.IsNaN(vflow) && vflow > 0) flowVolume = vflow;
         }
-        
+
         // Get virtual_sdcard for more reliable progress
         var vsd = status.TryGetProperty("virtual_sdcard", out var vsdElem) ? vsdElem : default;
         if (vsd.ValueKind != JsonValueKind.Undefined)
@@ -181,16 +181,16 @@ public sealed class OverlayTextService : IDisposable
         double? speedMmS = null;
         double? speedFactor = null;
         double? extrudeFactor = null;
-        
+
         if (gcodeMove.ValueKind != JsonValueKind.Undefined)
         {
             var spd = TryDouble(gcodeMove, "speed");
             // Empirically: reported speed aligns with mm/min; convert to mm/s
             if (!double.IsNaN(spd) && spd > 0) speedMmS = spd / 60.0;
-            
+
             var spdFactor = TryDouble(gcodeMove, "speed_factor");
             if (!double.IsNaN(spdFactor)) speedFactor = spdFactor * 100.0; // Convert to percentage
-            
+
             var extFactor = TryDouble(gcodeMove, "extrude_factor");
             if (!double.IsNaN(extFactor)) extrudeFactor = extFactor;
         }
@@ -201,7 +201,7 @@ public sealed class OverlayTextService : IDisposable
             // Convert fallback speed to mm/s as well
             if (!double.IsNaN(dspSpd) && dspSpd > 0) speedMmS = dspSpd / 60.0;
         }
-        
+
         // Get motion_report for live toolhead velocity (not historical speed from gcode_move)
         var motionReport = status.TryGetProperty("motion_report", out var mr) ? mr : default;
         double? extruderVelocity = null;
@@ -210,7 +210,7 @@ public sealed class OverlayTextService : IDisposable
         {
             var extVel = TryDouble(motionReport, "live_extruder_velocity");
             if (!double.IsNaN(extVel)) extruderVelocity = extVel;
-            
+
             // Get actual live toolhead velocity (live_velocity in mm/s)
             var thVel = TryDouble(motionReport, "live_velocity");
             if (!double.IsNaN(thVel) && thVel >= 0) toolheadVelocity = thVel;
@@ -255,7 +255,7 @@ public sealed class OverlayTextService : IDisposable
             }
             catch { }
         }
-        
+
         // Calculate volumetric flow if Klipper doesn't provide it
         // Formula: volumetric_flow (mm³/s) = extruder_velocity (mm/s) × π × (filament_diameter/2)²
         // Only calculate when there's an active job
@@ -266,12 +266,12 @@ public sealed class OverlayTextService : IDisposable
             var filDiam = 1.75;
             var radius = filDiam / 2.0;
             var crossSectionArea = Math.PI * radius * radius;
-            
+
             // Apply extrude_factor if available (flow rate multiplier from M221)
             var flowMultiplier = extrudeFactor ?? 1.0;
             flowVolume = extruderVelocity.Value * crossSectionArea * flowMultiplier;
         }
-        
+
         // Clear flow if no active job
         if (!isActiveJob)
         {
@@ -406,17 +406,17 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceDate(s, "time", d.Time);
         s = ReplaceStr(s, "state", d.State ?? string.Empty);
         s = ReplaceStr(s, "filename", d.Filename ?? string.Empty);
-    s = ReplaceStr(s, "slicer", d.Slicer ?? string.Empty);
-    // Template contains units (e.g. "mm/s"); only insert the numeric value here to avoid duplicating units.
-    s = ReplaceStr(s, "speed", d.Speed.HasValue ? d.Speed.Value.ToString("0") : "0");
-    s = ReplaceStr(s, "speedfactor", d.SpeedFactor.HasValue ? d.SpeedFactor.Value.ToString("0") + "%" : "-");
-    // Flow is volumetric (mm^3/s) from Moonraker display_status.flow
-    // Flow is volumetric (mm^3/s) from Moonraker: provide only the numeric value here
-    // so the template can include units to avoid duplication.
-    s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "0.0");
-    // Filament usage: d.Filament is provided in mm. Convert to meters here but do NOT append the unit
-    // because the overlay template itself may include the unit (avoid doubling like "mm" -> "mm").
-    s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") : "0.00");
+        s = ReplaceStr(s, "slicer", d.Slicer ?? string.Empty);
+        // Template contains units (e.g. "mm/s"); only insert the numeric value here to avoid duplicating units.
+        s = ReplaceStr(s, "speed", d.Speed.HasValue ? d.Speed.Value.ToString("0") : "0");
+        s = ReplaceStr(s, "speedfactor", d.SpeedFactor.HasValue ? d.SpeedFactor.Value.ToString("0") + "%" : "-");
+        // Flow is volumetric (mm^3/s) from Moonraker display_status.flow
+        // Flow is volumetric (mm^3/s) from Moonraker: provide only the numeric value here
+        // so the template can include units to avoid duplication.
+        s = ReplaceStr(s, "flow", d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "0.0");
+        // Filament usage: d.Filament is provided in mm. Convert to meters here but do NOT append the unit
+        // because the overlay template itself may include the unit (avoid doubling like "mm" -> "mm").
+        s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") : "0.00");
         // ETA with time format if available
         if (d.ETA.HasValue)
         {
@@ -428,7 +428,7 @@ public sealed class OverlayTextService : IDisposable
         }
 
         // If the template didn't ask for layers explicitly, append them so they're always visible
-    if (!System.Text.RegularExpressions.Regex.IsMatch(_template, @"\{(?:layer|layermax|layers)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        if (!System.Text.RegularExpressions.Regex.IsMatch(_template, @"\{(?:layer|layermax|layers)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
         {
             var left = d.Layer.HasValue ? d.Layer.Value.ToString() : "-";
             var right = d.LayerMax.HasValue ? d.LayerMax.Value.ToString() : "-";
@@ -446,13 +446,12 @@ public sealed class OverlayTextService : IDisposable
         }
         catch { }
 
-    // Final sanitize for ffmpeg drawtext textfile:
-    // - Remove CRs (keep LFs)
-    // - Escape literal percent signs which drawtext treats as expansion markers
-    //   See: drawtext expansion syntax (e.g., %{localtime}); unescaped % triggers "Stray %" errors.
-    s = s.Replace("\r", string.Empty);
-    s = s.Replace("%", "\\%");
-    return s;
+        // Final sanitize for ffmpeg drawtext textfile:
+        // - Remove CRs (keep LFs)
+        // - Escape literal percent signs which drawtext treats as expansion markers
+        //   See: drawtext expansion syntax (e.g., %{localtime}); unescaped % triggers "Stray %" errors.
+        s = s.Replace("\r", string.Empty);
+        return s;
     }
 
     private async Task SafeWriteAsync(string content, CancellationToken ct)

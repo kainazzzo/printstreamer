@@ -222,19 +222,7 @@ namespace PrintStreamer.Services
                             }
                         }
 
-                        // Self-heal: ensure HLS is healthy and stream is running when expected
-                        try
-                        {
-                            var requireHls = _config.GetValue<bool?>("Stream:Local:Enabled") ?? false;
-                            if (requireHls)
-                            {
-                                await _orchestrator.EnsureStreamingHealthyAsync(true, cancellationToken);
-                            }
-                        }
-                        catch (Exception hex)
-                        {
-                            Console.WriteLine($"[MoonrakerPoller] EnsureStreamingHealthyAsync error: {hex.Message}");
-                        }
+                        // No HLS-based self-heal: HLS was removed from the pipeline.
                     }
                     catch (Exception ex)
                     {

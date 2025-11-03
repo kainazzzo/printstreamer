@@ -171,9 +171,16 @@ namespace PrintStreamer.Services
         {
             try
             {
+                // Determine whether we should require HLS to be present.
+                // Backwards-compatible: callers pass `requireHls`, but honor explicit configuration
+                // Stream:Local:GenerateHls (bool) which when set to false indicates ffmpeg will not
+                // produce HLS output and the orchestrator should not treat missing HLS as fatal.
+                var configGeneratesHls = _config.GetValue<bool?>("Stream:Local:GenerateHls") ?? true;
+                bool finalRequireHls = requireHls && configGeneratesHls && (_config.GetValue<bool?>("Stream:Local:Enabled") ?? false);
+
                 // Determine HLS health (if required)
                 bool hlsOk = true;
-                if (requireHls && (_config.GetValue<bool?>("Stream:Local:Enabled") ?? false))
+                if (finalRequireHls)
                 {
                     var hlsFolder = _config.GetValue<string>("Stream:Local:HlsFolder") ?? "hls";
                     var manifest = Path.Combine(Directory.GetCurrentDirectory(), hlsFolder, "stream.m3u8");

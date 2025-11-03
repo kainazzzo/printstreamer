@@ -1,9 +1,8 @@
 // PrintStreamer JavaScript Interop
 // Provides HLS player, MJPEG stream monitoring, and toast notifications
 
-let hlsInstance = null;
-let retryTimeout = null;
-let isStreamPlaying = false;
+// HLS removed: we no longer maintain hlsInstance or retry timers
+let isStreamPlaying = false; // legacy; real status comes from window._printstreamer_mjpeg_ready
 
 // Toast notification system
 window.showToast = function (message, type = 'info') {
@@ -33,42 +32,37 @@ window.showToast = function (message, type = 'info') {
     }, duration);
 };
 
-// Initialize MJPEG stream and HLS player
+// Initialize MJPEG stream (HLS removed)
 window.initializeStreams = function () {
-    console.log('[Streams] Initializing...');
-    
+    console.log('[Streams] Initializing MJPEG only (HLS removed)');
+
     const mjpegImg = document.getElementById('mjpeg');
-    const hlsContainer = document.getElementById('hlsContainer');
-    
+    // Track MJPEG readiness for UI health checks
+    window._printstreamer_mjpeg_ready = false;
+
     if (mjpegImg) {
-        let imgReady = false;
-        
-        // Sync HLS container height with MJPEG image
+        // Sync layout height if a container exists
+        const hlsContainer = document.getElementById('hlsContainer');
         function syncHeights() {
             if (mjpegImg.complete && mjpegImg.naturalHeight > 0 && hlsContainer) {
                 hlsContainer.style.minHeight = mjpegImg.offsetHeight + 'px';
             }
         }
-        
+
         mjpegImg.addEventListener('load', () => {
             syncHeights();
-            if (!imgReady) {
-                imgReady = true;
-                try { attachHls(); } catch (e) { console.error('[Streams] HLS init error:', e); }
-            }
+            window._printstreamer_mjpeg_ready = true;
         });
-        
+
         mjpegImg.addEventListener('error', () => {
             console.log('[Streams] MJPEG error, retrying in 2s');
+            window._printstreamer_mjpeg_ready = false;
             setTimeout(() => { mjpegImg.src = '/stream?ts=' + Date.now(); }, 2000);
         });
-        
+
         window.addEventListener('resize', syncHeights);
         setTimeout(syncHeights, 100);
     }
-    
-    // Start HLS attachment
-    attachHls();
 };
 
 // Reload streams (after camera toggle)
@@ -77,243 +71,28 @@ window.reloadStreams = function () {
     if (mjpegImg) {
         mjpegImg.src = '/stream?ts=' + Date.now();
     }
-    setTimeout(() => { try { attachHls(); } catch (e) {} }, 800);
 };
 
-// HLS player management
-async function attachHls() {
-    cleanup();
-    
-    const video = document.getElementById('hlsPlayer');
-    const hlsUrl = '/hls/stream.m3u8';
-    
-    if (!video) {
-        console.warn('[HLS] Video element not found');
-        return;
-    }
-    
-    hlsStatus('checking for stream...');
-    
-    // Check if manifest exists
-    const manifestCheck = await checkManifest(hlsUrl);
-    if (!manifestCheck.ok) {
-        if (manifestCheck.status === 404) {
-            hlsStatus('waiting for stream (404)');
-        } else if (manifestCheck.error) {
-            hlsStatus('waiting for stream (error)');
-        } else {
-            hlsStatus('waiting for stream (' + manifestCheck.status + ')');
-        }
-        retryTimeout = setTimeout(() => attachHls(), 3000);
-        return;
-    }
-    
-    hlsStatus('stream found, attaching...');
-    
-    try {
-        // Load hls.js if not already loaded
-        if (!window.Hls) {
-            await loadHls();
-        }
-        
-        if (window.Hls && window.Hls.isSupported()) {
-            // Use hls.js
-            hlsInstance = new window.Hls({
-                liveSyncDuration: 2,
-                maxBufferLength: 10,
-                enableWorker: true,
-                lowLatencyMode: true
-            });
-            
-            hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, function() {
-                hlsStatus('playing');
-                isStreamPlaying = true;
-                video.muted = true;
-                video.play().catch((e) => {
-                    console.warn('[HLS] Play failed:', e);
-                    hlsStatus('play failed (interaction needed)');
-                });
-            });
-            
-            hlsInstance.on(window.Hls.Events.ERROR, function(event, data) {
-                console.warn('[HLS] Error:', data);
-                
-                if (data.fatal) {
-                    hlsStatus('error: ' + (data.details || 'unknown'));
-                    isStreamPlaying = false;
-                    
-                    switch(data.type) {
-                        case window.Hls.ErrorTypes.NETWORK_ERROR:
-                            hlsStatus('network error, retrying...');
-                            retryTimeout = setTimeout(() => attachHls(), 3000);
-                            break;
-                        case window.Hls.ErrorTypes.MEDIA_ERROR:
-                            hlsStatus('media error, attempting recovery...');
-                            try {
-                                hlsInstance.recoverMediaError();
-                            } catch (e) {
-                                retryTimeout = setTimeout(() => attachHls(), 3000);
-                            }
-                            break;
-                        default:
-                            hlsStatus('fatal error, retrying...');
-                            retryTimeout = setTimeout(() => attachHls(), 3000);
-                            break;
-                    }
-                }
-            });
-            
-            hlsInstance.loadSource(hlsUrl);
-            hlsInstance.attachMedia(video);
-            
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Use native HLS (Safari)
-            video.src = hlsUrl;
-            video.addEventListener('loadedmetadata', function() {
-                hlsStatus('playing (native)');
-                isStreamPlaying = true;
-                video.muted = true;
-                video.play().catch(() => {});
-            });
-            video.addEventListener('error', function() {
-                hlsStatus('error, retrying...');
-                isStreamPlaying = false;
-                retryTimeout = setTimeout(() => attachHls(), 3000);
-            });
-        } else {
-            hlsStatus('HLS not supported');
-            isStreamPlaying = false;
-        }
-        
-    } catch (err) {
-        console.warn('[HLS] Attach failed:', err);
-        hlsStatus('attach failed, retrying...');
-        retryTimeout = setTimeout(() => attachHls(), 3000);
-    }
-}
+// HLS functionality removed
 
-function cleanup() {
-    if (hlsInstance) {
-        try {
-            hlsInstance.destroy();
-        } catch (e) {
-            console.warn('[HLS] Error destroying instance:', e);
-        }
-        hlsInstance = null;
-    }
-    if (retryTimeout) {
-        clearTimeout(retryTimeout);
-        retryTimeout = null;
-    }
-    isStreamPlaying = false;
-}
-
-async function checkManifest(hlsUrl) {
-    try {
-        const resp = await fetch(hlsUrl, { cache: 'no-store' });
-        if (resp.ok) {
-            const ct = resp.headers.get('content-type') || '';
-            if (ct.includes('mpegurl') || ct.includes('vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) {
-                return { ok: true, contentType: ct };
-            }
-            console.warn('[HLS] Unexpected manifest content-type:', ct);
-            return { ok: true, contentType: ct };
-        }
-        return { ok: false, status: resp.status };
-    } catch (err) {
-        return { ok: false, error: err.message };
-    }
-}
-
-function loadHls() {
-    return new Promise((resolve, reject) => {
-        if (window.Hls) return resolve(window.Hls);
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.0/dist/hls.min.js';
-        s.onload = () => resolve(window.Hls);
-        s.onerror = () => reject(new Error('Failed to load hls.js'));
-        document.head.appendChild(s);
-    });
-}
-
-function hlsStatus(text) {
-    try {
-        const statusEl = document.getElementById('hlsStatus');
-        if (statusEl) {
-            statusEl.textContent = 'HLS status: ' + text;
-        }
-    } catch (e) {}
-    console.log('[HLS] ' + text);
-}
-
-// Monitor playback health
-setInterval(() => {
-    try {
-        const video = document.getElementById('hlsPlayer');
-        if (!video) return;
-        
-        if (video.readyState < 2) {
-            // Not enough data
-            if (hlsInstance && typeof hlsInstance.stopLoad === 'function') {
-                hlsInstance.stopLoad();
-                hlsInstance.startLoad();
-            }
-        } else if (!video.paused && video.readyState >= 3) {
-            hlsStatus('playing');
-        }
-    } catch (e) {
-        console.warn('[HLS] Health check error:', e);
-    }
-}, 5000);
+function cleanup() { /* no-op (HLS removed) */ }
 
 // Expose functions for Blazor
-window.attachHls = attachHls;
+// HLS attach removed; expose detach and MJPEG-based playing status
 window.detachHls = cleanup;
 window.getStreamPlayingStatus = function() {
-    return isStreamPlaying;
+    try { return !!window._printstreamer_mjpeg_ready; } catch (e) { return false; }
 };
 
 // HLS player control helpers exposed for Blazor UI
 window.hlsControls = {
-    play: function() {
-        try {
-            const v = document.getElementById('hlsPlayer');
-            if (!v) return;
-            v.play().catch(() => {});
-        } catch (e) { }
-    },
-    pause: function() {
-        try {
-            const v = document.getElementById('hlsPlayer');
-            if (!v) return;
-            v.pause();
-        } catch (e) { }
-    },
-    toggleMute: function() {
-        try {
-            const v = document.getElementById('hlsPlayer');
-            if (!v) return;
-            v.muted = !v.muted;
-            try { if (!v.muted) v.play().catch(() => {}); } catch {}
-            return v.muted;
-        } catch (e) { return true; }
-    },
-    setVolume: function(vol) {
-        try {
-            const v = document.getElementById('hlsPlayer');
-            if (!v) return;
-            // Clamp 0.0 - 1.0
-            const f = Math.max(0, Math.min(1, parseFloat(vol) || 0));
-            v.volume = f;
-            if (f > 0 && v.muted) v.muted = false;
-        } catch (e) {}
-    },
-    isMuted: function() {
-        try { const v = document.getElementById('hlsPlayer'); return v ? v.muted : true; } catch { return true; }
-    },
-    isPlaying: function() {
-        try { const v = document.getElementById('hlsPlayer'); return v && !v.paused && !v.ended; } catch { return false; }
-    }
+    // HLS removed; provide minimal MJPEG-aware controls
+    play: function() {},
+    pause: function() {},
+    toggleMute: function() { return true; },
+    setVolume: function(vol) {},
+    isMuted: function() { return true; },
+    isPlaying: function() { try { return !!window._printstreamer_mjpeg_ready; } catch { return false; } }
 };
 
 // Register a YouTube iframe end handler that seeks to the last frame and pauses

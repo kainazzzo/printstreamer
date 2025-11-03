@@ -178,6 +178,18 @@ namespace PrintStreamer.Services
                 var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
                 var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
 
+                // Determine audio source for ffmpeg when serving locally
+                string? audioUrl = null;
+                var useApiAudio = config.GetValue<bool?>("Stream:Audio:UseApiStream") ?? true;
+                var audioFeatureEnabled = config.GetValue<bool?>("Audio:Enabled") ?? config.GetValue<bool?>("audio:enabled") ?? true;
+                if ((config.GetValue<bool?>("Serve:Enabled") ?? true) && useApiAudio && audioFeatureEnabled)
+                {
+                    audioUrl = config.GetValue<string>("Stream:Audio:Url");
+                    if (string.IsNullOrWhiteSpace(audioUrl)) audioUrl = "http://127.0.0.1:8080/api/audio/stream";
+                }
+
+                
+
                 // Overlay options
                 FfmpegOverlayOptions? overlayOptions = null;
                 if (config.GetValue<bool?>("Overlay:Enabled") ?? false)
@@ -200,18 +212,19 @@ namespace PrintStreamer.Services
 
                 var source = config.GetValue<string>("Stream:Source");
                 var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
-                // Always use local proxy when web server is enabled - this ensures overlays work and provides consistency
+                // Always use local overlay proxy when web server is enabled - this ensures overlays and camera simulation work
+                // and provides consistency for ffmpeg pulling the composited stream over HTTP.
                 if (serveEnabled)
                 {
-                    source = "http://127.0.0.1:8080/stream";
-                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (ensures overlay/simulation support)");
+                    source = "http://127.0.0.1:8080/stream/overlay";
+                    Console.WriteLine("[Stream] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
                 }
                 if (string.IsNullOrWhiteSpace(source))
                 {
                     yt.Dispose();
                     return (false, "Stream:Source is not configured", null);
                 }
-                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null);
+                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null, audioUrl);
                 var cts = new CancellationTokenSource();
 
                 lock (_streamLock)
@@ -868,11 +881,12 @@ namespace PrintStreamer.Services
                 // Read source from config
                 var source = config.GetValue<string>("Stream:Source");
                 var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
-                // Always use local proxy when web server is enabled - this ensures overlays work and provides consistency
+                // Always use local overlay proxy when web server is enabled - this ensures overlays and camera simulation work
+                // and provides consistency for ffmpeg pulling the composited stream over HTTP.
                 if (serveEnabled)
                 {
-                    source = "http://127.0.0.1:8080/stream";
-                    Console.WriteLine("[Stream] Using local proxy stream as ffmpeg source (ensures overlay/simulation support)");
+                    source = "http://127.0.0.1:8080/stream/overlay";
+                    Console.WriteLine("[Stream] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
                 }
 
                 // Respect config flag: whether automatic LiveBroadcast creation is enabled
@@ -1107,9 +1121,19 @@ namespace PrintStreamer.Services
                 var targetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6;
                 var bitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800;
 
+                // Determine audio source for ffmpeg when serving locally
+                string? audioUrl = null;
+                var useApiAudio = config.GetValue<bool?>("Stream:Audio:UseApiStream") ?? true;
+                var audioFeatureEnabled = config.GetValue<bool?>("Audio:Enabled") ?? config.GetValue<bool?>("audio:enabled") ?? true;
+                if ((config.GetValue<bool?>("Serve:Enabled") ?? true) && useApiAudio && audioFeatureEnabled)
+                {
+                    audioUrl = config.GetValue<string>("Stream:Audio:Url");
+                    if (string.IsNullOrWhiteSpace(audioUrl)) audioUrl = "http://127.0.0.1:8080/api/audio/stream";
+                }
+
                 // Always use the ffmpeg-based streamer. If fullRtmpUrl is null, ffmpeg will produce HLS-only preview.
                 Console.WriteLine($"Starting ffmpeg streamer to {(fullRtmpUrl != null ? rtmpUrl + "/***" : "HLS-only")} (fps={targetFps}, kbps={bitrateKbps})");
-                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null);
+                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, localStreamEnabled ? hlsFolder : null, audioUrl);
                 
                 // Store streamer reference so it can be promoted to live later
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

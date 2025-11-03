@@ -78,8 +78,10 @@ namespace PrintStreamer.Services
             var serveEnabled = _config.GetValue<bool?>("Serve:Enabled") ?? true;
             if (serveEnabled)
             {
-                source = "http://127.0.0.1:8080/stream";
-                Console.WriteLine("[StreamService] Using local proxy stream as ffmpeg source");
+                // Use the overlay MJPEG endpoint as the ffmpeg source so ffmpeg pulls the composited
+                // overlay over HTTP and can mix audio separately (YouTube ingestion will work as before).
+                source = "http://127.0.0.1:8080/stream/overlay";
+                Console.WriteLine("[StreamService] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
             }
 
             if (string.IsNullOrWhiteSpace(source))

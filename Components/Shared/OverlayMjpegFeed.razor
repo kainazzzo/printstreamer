@@ -1,21 +1,27 @@
 @inject IJSRuntime JS
 @inject NavigationManager Nav
-
 <div style="flex:1;display:flex;flex-direction:column">
-    <h3 style="margin:6px 0;font-size:1em">Preview (MJPEG)</h3>
-    <div class="preview-wide" style="background:#000;display:flex;align-items:center;justify-content:center">
-    <img id="mjpeg-overlay" src="/stream/overlay" alt="MJPEG stream" style="max-width:100%;height:auto;display:block" />
+    <h3 style="margin:6px 0;font-size:1em">Source (raw MJPEG)</h3>
+    <div class="preview-wide">
+        <img id="mjpeg-overlay" src="/stream/overlay" alt="MJPEG stream"
+            style="max-width:100%;height:auto;display:block" />
     </div>
 
     <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
         <!-- audioPreview id reused to leverage existing audioPreview JS helpers in Components/app.js -->
-        <audio id="audioPreview" controls autoplay preload="auto" src="/api/audio/stream" style="flex:1;min-width:220px"></audio>
+        <audio id="audioPreview" controls muted autoplay preload="auto" src="/api/audio/stream"
+            style="flex:1;min-width:220px"></audio>
 
         <div style="display:flex;gap:8px;align-items:center">
-            <button @onclick="PrevAudio" title="Next" style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">⏭</button>
-            <button @onclick="PlayAudio" title="Play" style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">▶</button>
-            <button @onclick="PauseAudio" title="Pause" style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">⏸</button>
-            <button @onclick="ToggleShuffle" title="Toggle Shuffle" style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:@(_shuffleEnabled ? "#28a745" : "#222");color:#fff;cursor:pointer">Shuffle: @(_shuffleEnabled ? "On" : "Off")</button>
+            <button @onclick="PrevAudio" title="Next"
+                style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">⏭</button>
+            <button @onclick="PlayAudio" title="Play"
+                style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">▶</button>
+            <button @onclick="PauseAudio" title="Pause"
+                style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;cursor:pointer">⏸</button>
+            <button @onclick="ToggleShuffle" title="Toggle Shuffle"
+                style="padding:6px 10px;border-radius:6px;border:1px solid #444;background:@(_shuffleEnabled ? "#28a745" : "#222");color:#fff;cursor:pointer">Shuffle:
+                @(_shuffleEnabled ? "On" : "Off")</button>
         </div>
     </div>
 
