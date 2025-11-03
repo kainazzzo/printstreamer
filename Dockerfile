@@ -8,11 +8,12 @@ RUN dotnet restore
 RUN dotnet publish -c Release -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+RUN apt-get update && apt-get install -y ffmpeg
+
 WORKDIR /app
 RUN mkdir Components
 COPY --from=build /app/publish .
 COPY --from=build /src/Components/app.* ./Components/
-RUN apt-get update && apt-get install -y ffmpeg
 
 # Expose the proxy port
 EXPOSE 8080

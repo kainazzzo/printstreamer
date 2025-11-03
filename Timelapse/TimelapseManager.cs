@@ -13,12 +13,14 @@ namespace PrintStreamer.Timelapse
     private readonly ConcurrentDictionary<string, TimelapseSession> _activeSessions = new();
     private readonly Timer _captureTimer;
     private bool _disposed = false;
+    private readonly bool _verboseLogs;
 
     public TimelapseManager(IConfiguration config)
     {
         _config = config;
         _mainTimelapseDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
         Directory.CreateDirectory(_mainTimelapseDir);
+    _verboseLogs = _config.GetValue<bool?>("Timelapse:VerboseLogs") ?? false;
 
         // Set up periodic capture timer (disabled by default, enabled when sessions are active)
         var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
@@ -136,7 +138,10 @@ namespace PrintStreamer.Timelapse
                     Console.WriteLine($"[TimelapseManager] Print reached last-layer threshold for session {sessionName} ({currentLayer}/{totalLayers}, offset={layerOffset}) - stopping further captures.");
                     // Mark session as stopped to prevent timer from capturing more frames
                     session.IsStopped = true;
-                    Console.WriteLine($"[TimelapseManager] Session {sessionName} marked as stopped (will be finalized by caller)");
+                    if (_verboseLogs)
+                    {
+                        Console.WriteLine($"[TimelapseManager] Session {sessionName} marked as stopped (will be finalized by caller)");
+                    }
                 }
             }
         }
@@ -166,7 +171,10 @@ namespace PrintStreamer.Timelapse
         if (_activeSessions.IsEmpty)
         {
             _captureTimer.Change(Timeout.Infinite, Timeout.Infinite);
-            Console.WriteLine($"[TimelapseManager] Stopped capture timer");
+            if (_verboseLogs)
+            {
+                Console.WriteLine($"[TimelapseManager] Stopped capture timer");
+            }
         }
 
     // Create video
@@ -289,7 +297,10 @@ namespace PrintStreamer.Timelapse
         // Diagnostic: show how many sessions are being scanned on each tick
         try
         {
-            Console.WriteLine($"[TimelapseManager] Timer tick: {_activeSessions.Count} active session(s)");
+            if (_verboseLogs)
+            {
+                Console.WriteLine($"[TimelapseManager] Timer tick: {_activeSessions.Count} active session(s)");
+            }
         }
         catch { }
 
@@ -298,7 +309,10 @@ namespace PrintStreamer.Timelapse
             // Skip sessions that have been marked as stopped
             if (session.IsStopped)
             {
-                Console.WriteLine($"[TimelapseManager] Skipping frame capture for stopped session: {session.Name}");
+                if (_verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Skipping frame capture for stopped session: {session.Name}");
+                }
                 continue;
             }
             
@@ -313,7 +327,10 @@ namespace PrintStreamer.Timelapse
             // Guard: if session was marked stopped, don't attempt capture
             if (session.IsStopped)
             {
-                Console.WriteLine($"[TimelapseManager] Session {session.Name} is stopped; skipping capture.");
+                if (_verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Session {session.Name} is stopped; skipping capture.");
+                }
                 return;
             }
 
@@ -327,16 +344,25 @@ namespace PrintStreamer.Timelapse
                 // Guard again right before saving in case stop flag flipped during fetch
                 if (session.IsStopped)
                 {
-                    Console.WriteLine($"[TimelapseManager] Session {session.Name} was stopped after fetch; dropping frame.");
+                    if (_verboseLogs)
+                    {
+                        Console.WriteLine($"[TimelapseManager] Session {session.Name} was stopped after fetch; dropping frame.");
+                    }
                     return;
                 }
                 await session.Service.SaveFrameAsync(frame, CancellationToken.None);
                 session.LastCaptureTime = DateTime.UtcNow;
-                Console.WriteLine($"[TimelapseManager] Captured frame for {session.Name}");
+                if (_verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Captured frame for {session.Name}");
+                }
             }
             else
             {
-                Console.WriteLine($"[TimelapseManager] Failed to capture frame for {session.Name}");
+                if (_verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Failed to capture frame for {session.Name}");
+                }
             }
         }
         catch (Exception ex)

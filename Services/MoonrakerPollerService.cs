@@ -11,6 +11,7 @@ namespace PrintStreamer.Services
         private readonly IConfiguration _config;
         private readonly StreamOrchestrator _orchestrator;
         private readonly TimelapseManager _timelapseManager;
+        private readonly bool _verbosePollerLogs;
 
         public MoonrakerPollerService(
             IConfiguration config,
@@ -20,6 +21,7 @@ namespace PrintStreamer.Services
             _config = config;
             _orchestrator = orchestrator;
             _timelapseManager = timelapseManager;
+            _verbosePollerLogs = _config.GetValue<bool?>("Moonraker:VerboseLogs") ?? false;
         }
 
         /// <summary>
@@ -59,7 +61,11 @@ namespace PrintStreamer.Services
                         var currentLayer = info?.CurrentLayer;
                         var totalLayers = info?.TotalLayers;
 
-                        Console.WriteLine($"[MoonrakerPoller] State: {state}, Job: {currentJob}, Progress: {progressPct?.ToString("F1") ?? "n/a"}%");
+                        // Suppress noisy per-iteration state logging unless explicitly enabled
+                        if (_verbosePollerLogs)
+                        {
+                            Console.WriteLine($"[MoonrakerPoller] State: {state}, Job: {currentJob}, Progress: {progressPct?.ToString("F1") ?? "n/a"}%");
+                        }
 
                         // Detect state transition from printing to not-printing (complete/standby/etc)
                         bool printJustFinished = lastState == "printing" && state != "printing";
