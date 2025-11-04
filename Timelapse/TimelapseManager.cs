@@ -101,6 +101,11 @@ namespace PrintStreamer.Timelapse
         {
             Console.WriteLine($"[TimelapseManager] Started timelapse session: {actualFolderName}");
             Console.WriteLine($"[TimelapseManager]   Output directory: {session.Service.OutputDir}");
+            
+            if (session.StartAfterLayer1)
+            {
+                Console.WriteLine($"[TimelapseManager]   Gating enabled: frames will start when layer >= 1");
+            }
 
             // Capture initial frame only if not gating start until layer 1
             if (!session.StartAfterLayer1)
@@ -132,8 +137,7 @@ namespace PrintStreamer.Timelapse
 
     /// <summary>
     /// Notify the manager of current print layer progress for a named session.
-    /// When currentLayer >= totalLayers the manager will stop capturing further frames
-    /// for that session (to avoid capturing the bed-lower cooldown frames).
+    /// When currentLayer >= 1 capture is enabled. When currentLayer >= (totalLayers - offset) capture stops.
     /// </summary>
     public void NotifyPrintProgress(string? sessionName, int? currentLayer, int? totalLayers)
     {
@@ -151,9 +155,10 @@ namespace PrintStreamer.Timelapse
                     session.LoggedWaitingForLayer = false;
                     Console.WriteLine($"[TimelapseManager] Starting frame capture at layer {currentLayer} for session {sessionName}");
                 }
-                else if (!session.LoggedWaitingForLayer && _verboseLogs)
+                else if (!session.LoggedWaitingForLayer)
                 {
-                    Console.WriteLine($"[TimelapseManager] Deferring timelapse frames until layer 1 (current: {currentLayer?.ToString() ?? "n/a"}) for session {sessionName}");
+                    // Log once that we're waiting for layer info (always log, not just verbose)
+                    Console.WriteLine($"[TimelapseManager] Waiting for layer >= 1 before capturing frames for {sessionName} (current: {currentLayer?.ToString() ?? "n/a"})");
                     session.LoggedWaitingForLayer = true;
                 }
             }
@@ -369,15 +374,15 @@ namespace PrintStreamer.Timelapse
                         continue;
                     }
 
-            // Defer capture until we reach layer 1 if configured
-            if (session.StartAfterLayer1 && !session.CaptureEnabled)
-            {
-                if (_verboseLogs)
-                {
-                    Console.WriteLine($"[TimelapseManager] Waiting for layer 1 before capturing frames for session: {session.Name}");
-                }
-                continue;
-            }
+                    // Defer capture until we reach layer 1 if configured
+                    if (session.StartAfterLayer1 && !session.CaptureEnabled)
+                    {
+                        if (_verboseLogs)
+                        {
+                            Console.WriteLine($"[TimelapseManager] Waiting for layer 1 before capturing frames for session: {session.Name}");
+                        }
+                        continue;
+                    }
                     
                     await CaptureFrameForSessionAsync(session);
                 }
