@@ -20,7 +20,7 @@ namespace PrintStreamer.Timelapse
         _config = config;
         _mainTimelapseDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
         Directory.CreateDirectory(_mainTimelapseDir);
-    _verboseLogs = _config.GetValue<bool?>("Timelapse:VerboseLogs") ?? false;
+        _verboseLogs = _config.GetValue<bool?>("Timelapse:VerboseLogs") ?? false;
 
         // Set up periodic capture timer (disabled by default, enabled when sessions are active)
         var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
@@ -40,12 +40,17 @@ namespace PrintStreamer.Timelapse
         var service = new TimelapseService(_mainTimelapseDir, sanitizedBase);
         var actualFolderName = Path.GetFileName(service.OutputDir) ?? sanitizedBase;
 
+        // Config: gate start until layer 1 by default
+        var startAfterLayer1 = _config.GetValue<bool?>("Timelapse:StartAfterLayer1") ?? true;
+
         var session = new TimelapseSession
         {
             Name = actualFolderName,
             Service = service,
             StartTime = DateTime.UtcNow,
-            LastCaptureTime = null
+            LastCaptureTime = null,
+            StartAfterLayer1 = startAfterLayer1,
+            CaptureEnabled = !startAfterLayer1
         };
 
         // If a Moonraker filename was provided, try to download it once and cache contents + parsed layer markers
@@ -97,8 +102,11 @@ namespace PrintStreamer.Timelapse
             Console.WriteLine($"[TimelapseManager] Started timelapse session: {actualFolderName}");
             Console.WriteLine($"[TimelapseManager]   Output directory: {session.Service.OutputDir}");
 
-            // Capture initial frame
-            await CaptureFrameForSessionAsync(session);
+            // Capture initial frame only if not gating start until layer 1
+            if (!session.StartAfterLayer1)
+            {
+                await CaptureFrameForSessionAsync(session);
+            }
 
             // Start the timer if this is the first session
             if (_activeSessions.Count == 1)
@@ -134,6 +142,22 @@ namespace PrintStreamer.Timelapse
 
         try
         {
+            // Enable capture once we reach layer 1 (skip leveling at layer 0)
+            if (session.StartAfterLayer1 && !session.CaptureEnabled)
+            {
+                if (currentLayer.HasValue && currentLayer.Value >= 1)
+                {
+                    session.CaptureEnabled = true;
+                    session.LoggedWaitingForLayer = false;
+                    Console.WriteLine($"[TimelapseManager] Starting frame capture at layer {currentLayer} for session {sessionName}");
+                }
+                else if (!session.LoggedWaitingForLayer && _verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Deferring timelapse frames until layer 1 (current: {currentLayer?.ToString() ?? "n/a"}) for session {sessionName}");
+                    session.LoggedWaitingForLayer = true;
+                }
+            }
+
             // If we have the total layers and current layer is at or past the configured threshold, stop the session
             var layerOffset = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
             if (layerOffset < 0) layerOffset = 0;
@@ -344,6 +368,16 @@ namespace PrintStreamer.Timelapse
                         }
                         continue;
                     }
+
+            // Defer capture until we reach layer 1 if configured
+            if (session.StartAfterLayer1 && !session.CaptureEnabled)
+            {
+                if (_verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Waiting for layer 1 before capturing frames for session: {session.Name}");
+                }
+                continue;
+            }
                     
                     await CaptureFrameForSessionAsync(session);
                 }
@@ -366,6 +400,16 @@ namespace PrintStreamer.Timelapse
                 if (_verboseLogs)
                 {
                     Console.WriteLine($"[TimelapseManager] Session {session.Name} is stopped; skipping capture.");
+                }
+                return;
+            }
+
+            // Guard: if gating until layer 1 and not yet enabled, skip
+            if (session.StartAfterLayer1 && !session.CaptureEnabled)
+            {
+                if (_verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Capture gated until layer 1 for session {session.Name}; skipping capture.");
                 }
                 return;
             }
@@ -508,6 +552,10 @@ namespace PrintStreamer.Timelapse
     public string? Slicer { get; set; }
     public double? EstimatedSeconds { get; set; }
     public bool IsStopped { get; set; } = false;
+    // Gating: start capturing only when first printing layer begins
+    public bool StartAfterLayer1 { get; set; } = true;
+    public bool CaptureEnabled { get; set; } = false;
+    public bool LoggedWaitingForLayer { get; set; } = false;
     }
 
     public class TimelapseInfo
