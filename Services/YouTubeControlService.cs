@@ -15,6 +15,7 @@ using System.Text.Json.Nodes;
 internal class YouTubeControlService : IDisposable
 {
     private readonly IConfiguration _config;
+    private readonly ILogger<YouTubeControlService> _logger;
     private Google.Apis.YouTube.v3.YouTubeService? _youtubeService;
     private UserCredential? _credential; // Used for user OAuth flow
     private readonly string _tokenPath;
@@ -22,9 +23,10 @@ internal class YouTubeControlService : IDisposable
     private Task? _refreshTask;
     private CancellationTokenSource? _refreshCts;
 
-    public YouTubeControlService(IConfiguration config)
+    public YouTubeControlService(IConfiguration config, ILogger<YouTubeControlService> logger)
     {
         _config = config;
+        _logger = logger;
         _tokenPath = Path.Combine(Directory.GetCurrentDirectory(), "tokens", "youtube_token.json");
     }
 
@@ -35,20 +37,20 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            _logger.LogWarning("YouTube service not initialized. Call AuthenticateAsync first.");
             return false;
         }
         if (string.IsNullOrWhiteSpace(broadcastId))
         {
-            Console.WriteLine("Invalid broadcastId for thumbnail update.");
+            _logger.LogWarning("Invalid broadcastId for thumbnail update.");
             return false;
         }
         if (imageBytes == null || imageBytes.Length == 0)
         {
-            Console.WriteLine("Invalid image data for thumbnail update (null or empty).");
+            _logger.LogWarning("Invalid image data for thumbnail update (null or empty).");
             return false;
         }
-        Console.WriteLine($"Uploading thumbnail: broadcastId={broadcastId}, size={imageBytes.Length} bytes");
+        _logger.LogInformation("Uploading thumbnail: broadcastId={BroadcastId}, size={Size} bytes", broadcastId, imageBytes.Length);
         try
         {
             using var ms = new MemoryStream(imageBytes);

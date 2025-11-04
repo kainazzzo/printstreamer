@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using PrintStreamer.Interfaces;
 using System.Globalization;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Streamers
 {
@@ -13,12 +14,13 @@ namespace PrintStreamer.Streamers
 		private readonly int _targetFps;
 		private readonly int _bitrateKbps;
 		private readonly FfmpegOverlayOptions? _overlay;
+		private readonly ILogger<FfmpegStreamer> _logger;
 		private Process? _proc;
 		private TaskCompletionSource<object?>? _exitTcs;
 
 		public Task ExitTask => _exitTcs?.Task ?? Task.CompletedTask;
 
-		public FfmpegStreamer(string source, string? rtmpUrl, int targetFps = 30, int bitrateKbps = 2500, FfmpegOverlayOptions? overlay = null, string? audioUrl = null)
+		public FfmpegStreamer(string source, string? rtmpUrl, int targetFps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? audioUrl, ILogger<FfmpegStreamer> logger)
 		{
 			_source = source;
 			_rtmpUrl = rtmpUrl;
@@ -26,6 +28,7 @@ namespace PrintStreamer.Streamers
 			_bitrateKbps = bitrateKbps <= 0 ? 800 : bitrateKbps;
 			_overlay = overlay;
 			_audioUrl = audioUrl;
+			_logger = logger;
 		}
 
 		public Task StartAsync(CancellationToken cancellationToken = default)
@@ -37,7 +40,7 @@ namespace PrintStreamer.Streamers
 
 			var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _audioUrl);
 
-			Console.WriteLine($"Starting ffmpeg with args: {ffmpegArgs}");
+			_logger.LogInformation("Starting ffmpeg with args: {Args}", ffmpegArgs);
 
 			var psi = new ProcessStartInfo
 			{
@@ -55,11 +58,11 @@ namespace PrintStreamer.Streamers
 				_proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
 				_proc.Exited += (s, e) =>
 				{
-					Console.WriteLine($"ffmpeg exited with code {_proc?.ExitCode}");
+					_logger.LogInformation("ffmpeg exited with code {ExitCode}", _proc?.ExitCode);
 					_exitTcs.TrySetResult(null);
 				};
 
-				_proc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
+				_proc.OutputDataReceived += (s, e) => { if (e.Data != null) _logger.LogDebug("[ffmpeg stdout] {Data}", e.Data); };
 				
 				// Improved error handling: suppress benign decode warnings that don't affect stream quality
 				var lastBenignWarning = DateTime.MinValue;
@@ -75,20 +78,20 @@ namespace PrintStreamer.Streamers
 							var now = DateTime.UtcNow;
 							if ((now - lastBenignWarning).TotalSeconds > 30)
 							{
-								Console.WriteLine("[ffmpeg] Suppressing benign MJPEG decode warnings (last 30s)");
+								_logger.LogDebug("[ffmpeg] Suppressing benign MJPEG decode warnings (last 30s)");
 								lastBenignWarning = now;
 							}
 						}
 						else
 						{
-							Console.WriteLine(line);
+							_logger.LogWarning("[ffmpeg stderr] {Data}", line);
 						}
 					}
 				};
 
 				if (!_proc.Start())
 				{
-					Console.WriteLine("Failed to start ffmpeg process.");
+					_logger.LogError("Failed to start ffmpeg process");
 					_exitTcs.TrySetResult(null);
 					return _exitTcs.Task;
 				}
@@ -96,7 +99,7 @@ namespace PrintStreamer.Streamers
 				_proc.BeginOutputReadLine();
 				_proc.BeginErrorReadLine();
 
-				Console.WriteLine("Streaming... press Ctrl+C to stop.");
+				_logger.LogInformation("Streaming... press Ctrl+C to stop");
 
 				// Handle cancellation
 				cancellationToken.Register(() =>
@@ -106,7 +109,7 @@ namespace PrintStreamer.Streamers
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Error starting ffmpeg: {ex.Message}");
+				_logger.LogError(ex, "Error starting ffmpeg");
 				_exitTcs.TrySetResult(null);
 			}
 
@@ -119,7 +122,7 @@ namespace PrintStreamer.Streamers
 			{
 				if (_proc != null && !_proc.HasExited)
 				{
-					Console.WriteLine("Stopping ffmpeg...");
+					_logger.LogInformation("Stopping ffmpeg...");
 					try
 					{
 						// send 'q' to request ffmpeg to quit gracefully
@@ -131,19 +134,19 @@ namespace PrintStreamer.Streamers
 					}
 					catch (Exception ex)
 					{
-						Console.WriteLine($"Warning: failed to send quit to ffmpeg stdin: {ex.Message}");
+						_logger.LogWarning(ex, "Warning: failed to send quit to ffmpeg stdin");
 					}
 					// wait briefly for ffmpeg to exit on its own
 					if (!_proc.WaitForExit(5000))
 					{
-						Console.WriteLine("ffmpeg did not exit within timeout, killing...");
+						_logger.LogWarning("ffmpeg did not exit within timeout, killing...");
 						_proc.Kill(true);
 					}
 				}
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Error stopping ffmpeg: {ex.Message}");
+				_logger.LogError(ex, "Error stopping ffmpeg");
 			}
 		}
 

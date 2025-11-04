@@ -1,6 +1,7 @@
 using PrintStreamer.Interfaces;
 using PrintStreamer.Streamers;
 using PrintStreamer.Overlay;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Services
 {
@@ -17,11 +18,15 @@ namespace PrintStreamer.Services
         private CancellationTokenSource? _currentCts;
         private OverlayTextService? _overlayService;
         private bool _disposed = false;
+        private readonly ILogger<StreamService> _logger;
+        private readonly ILoggerFactory _loggerFactory;
 
-        public StreamService(IConfiguration config, AudioService audioService)
+        public StreamService(IConfiguration config, AudioService audioService, ILogger<StreamService> logger, ILoggerFactory loggerFactory)
         {
             _config = config;
             _audioService = audioService;
+            _logger = logger;
+            _loggerFactory = loggerFactory;
         }
 
         /// <summary>
@@ -66,7 +71,7 @@ namespace PrintStreamer.Services
             // Stop old stream outside the lock
             if (oldStreamer != null)
             {
-                Console.WriteLine("[StreamService] Stopping existing stream...");
+                _logger.LogInformation("[StreamService] Stopping existing stream...");
                 try { oldCts?.Cancel(); } catch { }
                 try { await Task.WhenAny(oldStreamer.ExitTask, Task.Delay(5000, cancellationToken)); } catch { }
                 try { oldStreamer.Stop(); } catch { }
@@ -81,7 +86,7 @@ namespace PrintStreamer.Services
                 // Use the overlay MJPEG endpoint as the ffmpeg source so ffmpeg pulls the composited
                 // overlay over HTTP and can mix audio separately (YouTube ingestion will work as before).
                 source = "http://127.0.0.1:8080/stream/overlay";
-                Console.WriteLine("[StreamService] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
+                _logger.LogInformation("[StreamService] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
             }
 
             if (string.IsNullOrWhiteSpace(source))
@@ -113,7 +118,7 @@ namespace PrintStreamer.Services
             {
                 try
                 {
-                    newOverlayService = new OverlayTextService(_config, overlayProvider, () => _audioService.Current);
+                    newOverlayService = new OverlayTextService(_config, overlayProvider, () => _audioService.Current, _loggerFactory.CreateLogger<OverlayTextService>());
                     newOverlayService.Start();
                     overlayOptions = new FfmpegOverlayOptions
                     {
@@ -128,16 +133,16 @@ namespace PrintStreamer.Services
                         Y = _config.GetValue<string>("Overlay:Y") ?? string.Empty,
                         BannerFraction = _config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2
                     };
-                    Console.WriteLine($"[StreamService] Overlay enabled (ffmpeg): {overlayOptions.TextFile}");
+                    _logger.LogInformation("[StreamService] Overlay enabled (ffmpeg): {TextFile}", overlayOptions.TextFile);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[StreamService] Failed to start overlay (ffmpeg): {ex.Message}");
+                    _logger.LogError(ex, "[StreamService] Failed to start overlay (ffmpeg)");
                 }
             }
 
             // Create new streamer
-            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl);
+            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl, _loggerFactory.CreateLogger<FfmpegStreamer>());
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             lock (_lock)
@@ -152,24 +157,24 @@ namespace PrintStreamer.Services
             {
                 try
                 {
-                    Console.WriteLine($"[StreamService] Starting stream to {(rtmpUrl != null ? "RTMP" : "local")}");
+                    _logger.LogInformation("[StreamService] Starting stream to {Destination}", rtmpUrl != null ? "RTMP" : "local");
                     await streamer.StartAsync(cts.Token);
                 }
                 catch (OperationCanceledException)
                 {
-                    Console.WriteLine("[StreamService] Stream cancelled");
+                    _logger.LogInformation("[StreamService] Stream cancelled");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[StreamService] Stream error: {ex.Message}");
+                    _logger.LogError(ex, "[StreamService] Stream error");
                 }
                 finally
                 {
-                    Console.WriteLine("[StreamService] Stream ended");
+                    _logger.LogInformation("[StreamService] Stream ended");
                 }
             }, cts.Token);
 
-            Console.WriteLine("[StreamService] Stream started successfully");
+            _logger.LogInformation("[StreamService] Stream started successfully");
         }
 
         /// <summary>
@@ -194,16 +199,16 @@ namespace PrintStreamer.Services
 
             if (streamer == null)
             {
-                Console.WriteLine("[StreamService] No active stream to stop");
+                _logger.LogInformation("[StreamService] No active stream to stop");
                 return;
             }
 
-            Console.WriteLine("[StreamService] Stopping stream...");
+            _logger.LogInformation("[StreamService] Stopping stream...");
             try { cts?.Cancel(); } catch { }
             try { await Task.WhenAny(streamer.ExitTask, Task.Delay(5000)); } catch { }
             try { streamer.Stop(); } catch { }
             try { overlay?.Dispose(); } catch { }
-            Console.WriteLine("[StreamService] Stream stopped");
+            _logger.LogInformation("[StreamService] Stream stopped");
         }
 
         public void Dispose()

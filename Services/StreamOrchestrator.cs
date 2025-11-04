@@ -10,6 +10,7 @@ namespace PrintStreamer.Services
     {
         private readonly StreamService _streamService;
         private readonly IConfiguration _config;
+        private readonly ILoggerFactory _loggerFactory;
         private readonly object _lock = new object();
         private YouTubeControlService? _currentYouTubeService;
         private string? _currentBroadcastId;
@@ -17,10 +18,11 @@ namespace PrintStreamer.Services
         private bool _isWaitingForIngestion = false;
         private bool _disposed = false;
 
-        public StreamOrchestrator(StreamService streamService, IConfiguration config)
+        public StreamOrchestrator(StreamService streamService, IConfiguration config, ILoggerFactory loggerFactory)
         {
             _streamService = streamService;
             _config = config;
+            _loggerFactory = loggerFactory;
         }
 
         /// <summary>
@@ -88,7 +90,8 @@ namespace PrintStreamer.Services
             }
 
             // Create YouTube service and authenticate
-            var ytService = new YouTubeControlService(_config);
+            var ytLogger = _loggerFactory.CreateLogger<YouTubeControlService>();
+            var ytService = new YouTubeControlService(_config, ytLogger);
             if (!await ytService.AuthenticateAsync(cancellationToken))
             {
                 ytService.Dispose();

@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using PrintStreamer.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Streamers
 {
@@ -15,14 +16,16 @@ namespace PrintStreamer.Streamers
         private readonly IConfiguration _config;
         private readonly Overlay.OverlayTextService _overlayText;
         private readonly HttpContext _ctx;
+        private readonly ILogger<OverlayMjpegStreamer> _logger;
         private Process? _proc;
         private TaskCompletionSource<object?> _exitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public OverlayMjpegStreamer(IConfiguration config, Overlay.OverlayTextService overlayText, HttpContext ctx)
+        public OverlayMjpegStreamer(IConfiguration config, Overlay.OverlayTextService overlayText, HttpContext ctx, ILogger<OverlayMjpegStreamer> logger)
         {
             _config = config;
             _overlayText = overlayText;
             _ctx = ctx;
+            _logger = logger;
         }
 
         public Task ExitTask => _exitTcs.Task;
@@ -145,7 +148,7 @@ namespace PrintStreamer.Streamers
                             if (n > 0)
                             {
                                 var s = new string(buf, 0, n).Trim();
-                                if (!string.IsNullOrWhiteSpace(s)) Console.WriteLine($"[OverlayMJPEG ffmpeg] {s}");
+                                if (!string.IsNullOrWhiteSpace(s)) _logger.LogWarning("[OverlayMJPEG ffmpeg] {Output}", s);
                             }
                         }
                     }

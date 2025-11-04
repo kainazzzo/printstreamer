@@ -28,13 +28,17 @@ if (args.Any(a => a == "--help" || a == "-h" || a == "/?" || a.Equals("help", St
 // Use the default WebApplication builder so standard configuration (appsettings.json, env, args) is loaded
 var webBuilder = WebApplication.CreateBuilder(args);
 
+// Get a logger for startup operations (before the app is built)
+using var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+var startupLogger = loggerFactory.CreateLogger("PrintStreamer.Startup");
+
 // Load custom configuration file (the filename itself comes from the config we just loaded)
 // This allows user-modified settings to be persisted to a separate file
 var customConfigFile = webBuilder.Configuration.GetValue<string>("CustomConfigFile");
 if (!string.IsNullOrWhiteSpace(customConfigFile))
 {
 	var customConfigPath = Path.Combine(Directory.GetCurrentDirectory(), customConfigFile);
-	Console.WriteLine($"[Config] Loading custom configuration from: {customConfigFile}");
+	startupLogger.LogInformation("Loading custom configuration from: {ConfigFile}", customConfigFile);
 	
 	// Add the custom config file to the configuration builder
 	// It will override values from appsettings.json if they exist
@@ -52,11 +56,11 @@ try
 		.AddDataProtection()
 		.PersistKeysToFileSystem(new DirectoryInfo(dpKeyDir))
 		.SetApplicationName("PrintStreamer");
-	Console.WriteLine($"[Startup] DataProtection key ring at: {dpKeyDir}");
+	startupLogger.LogInformation("DataProtection key ring at: {KeyDirectory}", dpKeyDir);
 }
 catch (Exception ex)
 {
-	Console.WriteLine($"[Startup] Warning: Could not initialize DataProtection key persistence: {ex.Message}");
+	startupLogger.LogWarning(ex, "Could not initialize DataProtection key persistence");
 }
 
 // Configure antiforgery cookie with a stable, known name so we can refresh it on invalid states
@@ -75,7 +79,7 @@ if (!File.Exists(fallbackImagePath))
 {
 	try
 	{
-		Console.WriteLine("[Startup] Generating fallback_black.jpg...");
+		startupLogger.LogInformation("Generating fallback_black.jpg...");
 		var psi = new ProcessStartInfo
 		{
 			FileName = "ffmpeg",
@@ -92,17 +96,17 @@ if (!File.Exists(fallbackImagePath))
 			await proc.WaitForExitAsync();
 			if (proc.ExitCode == 0)
 			{
-				Console.WriteLine("[Startup] fallback_black.jpg created successfully");
+				startupLogger.LogInformation("fallback_black.jpg created successfully");
 			}
 			else
 			{
-				Console.WriteLine($"[Startup] Warning: ffmpeg exited with code {proc.ExitCode} when creating fallback image");
+				startupLogger.LogWarning("ffmpeg exited with code {ExitCode} when creating fallback image", proc.ExitCode);
 			}
 		}
 	}
 	catch (Exception ex)
 	{
-		Console.WriteLine($"[Startup] Warning: Failed to generate fallback_black.jpg: {ex.Message}");
+		startupLogger.LogWarning(ex, "Failed to generate fallback_black.jpg");
 	}
 }
 
@@ -123,7 +127,8 @@ webBuilder.Services.AddSingleton<PrintStreamer.Overlay.OverlayTextService>(sp =>
 	var cfg = sp.GetRequiredService<IConfiguration>();
 	var tl = sp.GetService<PrintStreamer.Overlay.ITimelapseMetadataProvider>();
 	var audio = sp.GetRequiredService<PrintStreamer.Services.AudioService>();
-	return new PrintStreamer.Overlay.OverlayTextService(cfg, tl, () => audio.Current);
+	var overlayLogger = sp.GetRequiredService<ILogger<PrintStreamer.Overlay.OverlayTextService>>();
+	return new PrintStreamer.Overlay.OverlayTextService(cfg, tl, () => audio.Current, overlayLogger);
 });
 
 // Add Blazor Server services
@@ -147,7 +152,7 @@ bool hasYouTubeOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNu
 var appCts = new CancellationTokenSource();
 Console.CancelKeyPress += (s, e) =>
 {
-	Console.WriteLine("\nStopping (Ctrl+C)...");
+	startupLogger.LogInformation("Stopping (Ctrl+C)...");
 	e.Cancel = true; // Prevent immediate termination
 	try 
 	{ 
@@ -155,7 +160,7 @@ Console.CancelKeyPress += (s, e) =>
 	} 
 	catch (Exception ex) 
 	{ 
-		Console.WriteLine($"Error during cancellation: {ex.Message}"); 
+		startupLogger.LogError(ex, "Error during cancellation");
 	}
 };
 
@@ -178,6 +183,9 @@ CancellationTokenSource? streamCts = null;
 TimelapseManager? timelapseManager = null;
 
 var app = webBuilder.Build();
+
+// Get a logger for the application
+var logger = app.Services.GetRequiredService<ILogger<Program>>();
 
 // Add Blazor Server middleware
 app.UseAntiforgery();
@@ -216,7 +224,7 @@ if (serveEnabled)
 	// Start ASP.NET Core minimal server to proxy the MJPEG source to clients on /stream
 	if (string.IsNullOrWhiteSpace(source))
 	{
-		Console.WriteLine("Error: --source is required when running in --serve mode.\n");
+		logger.LogError("Error: --source is required when running in --serve mode.");
 		PrintHelp();
 		return;
 	}
@@ -247,7 +255,8 @@ if (serveEnabled)
 		{
 			var cfg = ctx.RequestServices.GetRequiredService<IConfiguration>();
 			var overlayText = ctx.RequestServices.GetRequiredService<PrintStreamer.Overlay.OverlayTextService>();
-			var streamer = new PrintStreamer.Streamers.OverlayMjpegStreamer(cfg, overlayText, ctx);
+			var logger = ctx.RequestServices.GetRequiredService<ILogger<PrintStreamer.Streamers.OverlayMjpegStreamer>>();
+			var streamer = new PrintStreamer.Streamers.OverlayMjpegStreamer(cfg, overlayText, ctx, logger);
 			await streamer.StartAsync(ctx.RequestAborted);
 			try { streamer.Dispose(); } catch { }
 		}
@@ -285,12 +294,12 @@ if (serveEnabled)
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-	app.MapPost("/api/camera/on", async (HttpContext ctx) =>
+	app.MapPost("/api/camera/on", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
 		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
 		webcamManager.SetDisabled(false);
-		Console.WriteLine("Camera simulation: enabled (camera on)");
+		logger.LogInformation("Camera simulation: enabled (camera on)");
 		// Restart stream if one is active so ffmpeg picks up the new upstream availability
 		if (streamService.IsStreaming)
 		{
@@ -301,18 +310,18 @@ if (serveEnabled)
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Failed to restart stream: {ex.Message}");
+				logger.LogError(ex, "Failed to restart stream");
 			}
 		}
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-	app.MapPost("/api/camera/off", async (HttpContext ctx) =>
+	app.MapPost("/api/camera/off", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
 		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
 		webcamManager.SetDisabled(true);
-		Console.WriteLine("Camera simulation: disabled (camera off)");
+		logger.LogInformation("Camera simulation: disabled (camera off)");
 		// Restart stream if one is active so ffmpeg will read from the local proxy and therefore see the fallback frames
 		if (streamService.IsStreaming)
 		{
@@ -323,19 +332,19 @@ if (serveEnabled)
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Failed to restart stream: {ex.Message}");
+				logger.LogError(ex, "Failed to restart stream");
 			}
 		}
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-	app.MapPost("/api/camera/toggle", async (HttpContext ctx) =>
+	app.MapPost("/api/camera/toggle", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
 		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
 		webcamManager.Toggle();
 		var newVal = webcamManager.IsDisabled;
-		Console.WriteLine($"Camera simulation: toggled -> disabled={newVal}");
+		logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
 		// Restart stream if one is active
 		if (streamService.IsStreaming)
 		{
@@ -346,17 +355,17 @@ if (serveEnabled)
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Failed to restart stream: {ex.Message}");
+				logger.LogError(ex, "Failed to restart stream");
 			}
 		}
 		return Results.Json(new { disabled = newVal });
 	});
 
 	// Reverse proxy for Mainsail/Fluidd to bypass X-Frame-Options and same-origin issues
-	app.MapGet("/proxy/mainsail/{**path}", async (HttpContext ctx, string? path) =>
+	app.MapGet("/proxy/mainsail/{**path}", async (HttpContext ctx, string? path, ILogger<Program> logger) =>
 	{
 		var target = config.GetValue<string>("PrinterUI:MainsailUrl");
-		Console.WriteLine($"[Proxy] GET /proxy/mainsail/{path ?? ""} -> target={target ?? "NOT CONFIGURED"}");
+		logger.LogDebug("GET /proxy/mainsail/{Path} -> target={Target}", path ?? "", target ?? "NOT CONFIGURED");
 		if (string.IsNullOrWhiteSpace(target))
 		{
 			ctx.Response.StatusCode = 404;
@@ -584,7 +593,7 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config);
+			using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -609,7 +618,7 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config);
+			using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -639,7 +648,7 @@ if (serveEnabled)
 			{
 				try
 				{
-					using var yt = new YouTubeControlService(config);
+					using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
 					if (await yt.AuthenticateAsync(ctx.RequestAborted))
 					{
 						privacy = await yt.GetBroadcastPrivacyAsync(broadcastId, ctx.RequestAborted);
@@ -692,7 +701,7 @@ if (serveEnabled)
 			}
 
 			var broadcastId = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config);
+			using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -859,7 +868,7 @@ if (serveEnabled)
 			var videoPath = videoFiles[0]; // Use first mp4 found
 
 			// Use YouTubeControlService to upload
-			using var ytService = new YouTubeControlService(config);
+			using var ytService = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
 			if (!await ytService.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });

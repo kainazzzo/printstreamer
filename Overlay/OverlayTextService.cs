@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using PrintStreamer.Services;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Overlay;
 
@@ -25,13 +26,15 @@ public sealed class OverlayTextService : IDisposable
     // Optional provider to get cached timelapse metadata (filename -> session data)
     private readonly ITimelapseMetadataProvider? _tlProvider;
     private readonly Func<string?>? _audioProvider;
+    private readonly ILogger<OverlayTextService> _logger;
 
     public string TextFilePath => _textFilePath;
 
-    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider = null, Func<string?>? audioProvider = null)
+    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider, Func<string?>? audioProvider, ILogger<OverlayTextService> logger)
     {
         _tlProvider = timelapseProvider;
         _audioProvider = audioProvider;
+        _logger = logger;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
 
         _moonrakerBase = (config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125").TrimEnd('/');
@@ -76,7 +79,7 @@ public sealed class OverlayTextService : IDisposable
         }
 
         _textFilePath = Path.Combine(_textFileDir, "overlay.txt");
-        try { Console.WriteLine($"[Overlay] Text file path: {_textFilePath}"); } catch { }
+        try { _logger.LogInformation("[Overlay] Text file path: {Path}", _textFilePath); } catch { }
     }
 
     public void Start()
@@ -101,7 +104,7 @@ public sealed class OverlayTextService : IDisposable
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Overlay] Error: {ex.Message}");
+                _logger.LogError(ex, "[Overlay] Error while updating overlay text");
             }
 
             try { await Task.Delay(_interval, ct); } catch { }
@@ -507,7 +510,7 @@ public sealed class OverlayTextService : IDisposable
         catch (Exception ex)
         {
             // Log and attempt to cleanup temp file; don't throw so overlay loop keeps running
-            Console.WriteLine($"[Overlay] SafeWrite failed: {ex.Message}");
+            _logger.LogError(ex, "[Overlay] SafeWrite failed");
             try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
         }
     }

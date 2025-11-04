@@ -26,7 +26,7 @@ namespace PrintStreamer.Services
         /// This is useful to force ffmpeg to re-read the configured source (for example when toggling
         /// camera simulation so the new streamer can use the local proxy endpoint).
         /// </summary>
-        public static void RestartCurrentStreamerWithConfig(IConfiguration config)
+        public static void RestartCurrentStreamerWithConfig(IConfiguration config, ILoggerFactory loggerFactory)
         {
             Task.Run(async () =>
             {
@@ -59,7 +59,7 @@ namespace PrintStreamer.Services
                     {
                         try
                         {
-                            await StartYouTubeStreamAsync(config, cts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: false);
+                            await StartYouTubeStreamAsync(config, loggerFactory, cts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: false);
                         }
                         catch (OperationCanceledException) { }
                         catch (Exception ex)
@@ -85,7 +85,7 @@ namespace PrintStreamer.Services
         /// the broadcast resources and restarting the ffmpeg process to include RTMP output.
         /// Returns true on success.
         /// </summary>
-        public static async Task<(bool ok, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, CancellationToken cancellationToken)
+        public static async Task<(bool ok, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
         {
             // Use semaphore to prevent concurrent broadcast creation
             if (!await _broadcastCreationLock.WaitAsync(0, cancellationToken))
@@ -130,7 +130,8 @@ namespace PrintStreamer.Services
             }
 
             // Authenticate and create broadcast
-            var yt = new YouTubeControlService(config);
+            var logger = loggerFactory.CreateLogger<YouTubeControlService>();
+            var yt = new YouTubeControlService(config, logger);
             if (!await yt.AuthenticateAsync(cancellationToken))
             {
                 yt.Dispose();
@@ -193,7 +194,7 @@ namespace PrintStreamer.Services
                 FfmpegOverlayOptions? overlayOptions = null;
                 if (!(config.GetValue<bool?>("Serve:Enabled") ?? true) && (config.GetValue<bool?>("Overlay:Enabled") ?? false))
                 {
-                    var overlayService = new OverlayTextService(config, null, null);
+                    var overlayService = new OverlayTextService(config, null, null, loggerFactory.CreateLogger<OverlayTextService>());
                     overlayService.Start();
                     overlayOptions = new FfmpegOverlayOptions
                     {
@@ -223,7 +224,7 @@ namespace PrintStreamer.Services
                     yt.Dispose();
                     return (false, "Stream:Source is not configured", null);
                 }
-                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, audioUrl);
+                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, audioUrl, loggerFactory.CreateLogger<FfmpegStreamer>());
                 var cts = new CancellationTokenSource();
 
                 lock (_streamLock)
@@ -372,7 +373,7 @@ namespace PrintStreamer.Services
         }
 
         // Entry point moved from Program.cs
-    public static async Task PollAndStreamJobsAsync(IConfiguration config, CancellationToken cancellationToken)
+    public static async Task PollAndStreamJobsAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
         {
             var moonrakerBase = config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125/";
             var apiKey = config.GetValue<string>("Moonraker:ApiKey");
@@ -405,7 +406,8 @@ namespace PrintStreamer.Services
                 var liveBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
                 if (useOAuth && liveBroadcastEnabled)
                 {
-                    ytService = new YouTubeControlService(config);
+                    var ytLogger = loggerFactory.CreateLogger<YouTubeControlService>();
+                    ytService = new YouTubeControlService(config, ytLogger);
                     var authOk = await ytService.AuthenticateAsync(cancellationToken);
                     if (!authOk)
                     {
@@ -475,7 +477,7 @@ namespace PrintStreamer.Services
                                 // In polling mode, disable internal timelapse in streaming path to avoid duplicate uploads
                                 // Also check if a broadcast is already active (from manual start); if so, don't create another
                                 var alreadyBroadcasting = IsBroadcastActive;
-                                await StartYouTubeStreamAsync(config, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: !alreadyBroadcasting);
+                                await StartYouTubeStreamAsync(config, loggerFactory, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: !alreadyBroadcasting);
                             }
                             catch (Exception ex)
                             {
@@ -850,7 +852,7 @@ namespace PrintStreamer.Services
         }
 
         // Stream helper moved from Program.cs
-    public static async Task StartYouTubeStreamAsync(IConfiguration config, CancellationToken cancellationToken, bool enableTimelapse = true, ITimelapseMetadataProvider? timelapseProvider = null, bool allowYouTube = true)
+    public static async Task StartYouTubeStreamAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken, bool enableTimelapse = true, ITimelapseMetadataProvider? timelapseProvider = null, bool allowYouTube = true)
         {
             string? rtmpUrl = null;
             string? streamKey = null;
@@ -906,7 +908,7 @@ namespace PrintStreamer.Services
                 {
                     try
                     {
-                        overlayService = new OverlayTextService(config, timelapseProvider, null);
+                        overlayService = new OverlayTextService(config, timelapseProvider, null, loggerFactory.CreateLogger<OverlayTextService>());
                         overlayService.Start();
                         overlayOptions = new FfmpegOverlayOptions
                         {
@@ -960,7 +962,8 @@ namespace PrintStreamer.Services
                             else
                             {
                                 Console.WriteLine("[YouTube] Creating live broadcast via OAuth...");
-                                ytService = new YouTubeControlService(config);
+                                var ytLogger = loggerFactory.CreateLogger<YouTubeControlService>();
+                    ytService = new YouTubeControlService(config, ytLogger);
 
                     // Authenticate
                     if (!await ytService.AuthenticateAsync(cancellationToken))
@@ -1140,7 +1143,7 @@ namespace PrintStreamer.Services
 
                 // Always use the ffmpeg-based streamer. If fullRtmpUrl is null, ffmpeg will produce local preview only.
                 Console.WriteLine($"Starting ffmpeg streamer to {(fullRtmpUrl != null ? rtmpUrl + "/***" : "local preview")} (fps={targetFps}, kbps={bitrateKbps})");
-                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl);
+                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl, loggerFactory.CreateLogger<FfmpegStreamer>());
                 
                 // Store streamer reference so it can be promoted to live later
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
