@@ -529,7 +529,8 @@ if (serveEnabled)
 	{
 		var autoBroadcastEnabled = config.GetValue<bool>("YouTube:LiveBroadcast:Enabled");
 		var autoUploadEnabled = config.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
-		return Results.Json(new { autoBroadcastEnabled, autoUploadEnabled });
+		var endStreamAfterPrintEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:EndStreamAfterPrint") ?? false;
+		return Results.Json(new { autoBroadcastEnabled, autoUploadEnabled, endStreamAfterPrintEnabled });
 	});
 
 	app.MapPost("/api/config/auto-broadcast", (HttpContext ctx) =>
@@ -556,6 +557,19 @@ if (serveEnabled)
 		}
 		config["YouTube:TimelapseUpload:Enabled"] = enabled.ToString();
 		Console.WriteLine($"Auto-upload timelapses: {(enabled ? "enabled" : "disabled")}");
+		return Results.Json(new { success = true, enabled });
+	});
+
+	app.MapPost("/api/config/end-stream-after-print", (HttpContext ctx) =>
+	{
+		var raw = ctx.Request.Query["enabled"].ToString();
+		bool enabled;
+		if (!bool.TryParse(raw, out enabled))
+		{
+			enabled = raw == "1";
+		}
+		config["YouTube:LiveBroadcast:EndStreamAfterPrint"] = enabled.ToString();
+		Console.WriteLine($"End stream after print: {(enabled ? "enabled" : "disabled")}");
 		return Results.Json(new { success = true, enabled });
 	});
 

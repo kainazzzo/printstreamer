@@ -14,9 +14,9 @@
 
         <StreamControlPanel IsLive="@isLive" IsStreamPlaying="@isStreamPlaying" IsGoingLive="@isGoingLive"
         StreamerRunning="@streamerRunning" WaitingForIngestion="@waitingForIngestion" CameraEnabled="@(!cameraDisabled)"
-        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" BroadcastId="@(isLive ? broadcastId : null)"
+        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" EndStreamAfterPrintEnabled="@endStreamAfterPrintEnabled" BroadcastId="@(isLive ? broadcastId : null)"
         StatusMessage="@statusMessage" CurrentPrivacy="@currentPrivacy" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
-        OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" />
+        OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" OnEndStreamAfterPrintChanged="@OnEndStreamAfterPrintChanged" />
 
     <StreamContainer>
         <MjpegFeed />
@@ -55,6 +55,7 @@
     private bool cameraDisabled = false;
     private bool autoBroadcastEnabled = false;
     private bool autoUploadEnabled = false;
+    private bool endStreamAfterPrintEnabled = true;
     private List<TimelapseInfo>? timelapses = null;
     private HashSet<string> processingTimelapses = new();
     private Timer? refreshTimer;
@@ -345,6 +346,7 @@
             {
                 autoBroadcastEnabled = configResponse.AutoBroadcastEnabled;
                 autoUploadEnabled = configResponse.AutoUploadEnabled;
+                endStreamAfterPrintEnabled = configResponse.EndStreamAfterPrintEnabled;
             }
         }
         catch (HttpRequestException)
@@ -374,6 +376,14 @@
         autoUploadEnabled = enabled;
         StateHasChanged();
         await SafeToast($"Auto-upload {(enabled ? "enabled" : "disabled")}", "success");
+        await RefreshConfigState();
+    }
+
+    private async Task OnEndStreamAfterPrintChanged(bool enabled)
+    {
+        endStreamAfterPrintEnabled = enabled;
+        StateHasChanged();
+        await SafeToast($"End stream after print {(enabled ? "enabled" : "disabled")}", "success");
         await RefreshConfigState();
     }
 
@@ -616,6 +626,7 @@
     {
         public bool AutoBroadcastEnabled { get; set; }
         public bool AutoUploadEnabled { get; set; }
+        public bool EndStreamAfterPrintEnabled { get; set; }
     }
 
     // Adjust live-status polling frequency: fast while going live, slow when stable

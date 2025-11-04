@@ -67,8 +67,9 @@ namespace PrintStreamer.Services
                             Console.WriteLine($"[MoonrakerPoller] State: {state}, Job: {currentJob}, Progress: {progressPct?.ToString("F1") ?? "n/a"}%");
                         }
 
-                        // Detect state transition from printing to not-printing (complete/standby/etc)
+                        // Detect state transitions
                         bool printJustFinished = lastState == "printing" && state != "printing";
+                        bool printJustStarted = lastState != "printing" && isPrinting;
                         
                         // Update last state for next iteration
                         lastState = state;
@@ -86,10 +87,10 @@ namespace PrintStreamer.Services
                             }
                         }
 
-                        // Start broadcast (or local stream) when printing begins
-                        if (isPrinting && !_orchestrator.IsBroadcastActive && (string.IsNullOrWhiteSpace(currentJob) || currentJob != lastJobFilename))
+                        // Start broadcast (or local stream) when a print begins (state transition)
+                        if (printJustStarted && !_orchestrator.IsBroadcastActive)
                         {
-                            Console.WriteLine($"[MoonrakerPoller] New print detected: {currentJob}");
+                            Console.WriteLine($"[MoonrakerPoller] Print started: {currentJob}");
                             lastJobFilename = currentJob ?? $"__printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
                             
                             // Start broadcast if auto-broadcast is enabled
@@ -180,37 +181,40 @@ namespace PrintStreamer.Services
                                 }, CancellationToken.None);
                             }
                         }
-                        // Stop broadcast when print finishes (state transition from printing to complete/standby)
-                        // Only if we have a lastJobFilename (meaning poller was tracking a print job)
-                        else if (printJustFinished && _orchestrator.IsBroadcastActive && lastJobFilename != null)
+                        // Stop/cleanup when print finishes (state transition from printing to complete/standby)
+                        // If we have a lastJobFilename, we were tracking a print and must reset regardless of broadcast state
+                        else if (printJustFinished && lastJobFilename != null)
                         {
-                            Console.WriteLine($"[MoonrakerPoller] Print finished (state: {lastState} -> {state}), stopping broadcast");
+                            Console.WriteLine($"[MoonrakerPoller] Print finished (state: printing -> {state ?? "unknown"}), cleaning up");
                             lastJobFilename = null;
 
-                            // Only auto-stop the broadcast in auto-broadcast mode. In manual mode, keep it running until the user stops it.
-                            var autoBroadcastEnabled = _config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
-                            if (autoBroadcastEnabled)
+                            // Optionally stop the broadcast if one is active and the end-after-print feature is enabled
+                            if (_orchestrator.IsBroadcastActive)
                             {
-                                try
+                                var endStreamAfterPrint = _config.GetValue<bool?>("YouTube:LiveBroadcast:EndStreamAfterPrint") ?? true;
+                                if (endStreamAfterPrint)
                                 {
-                                    var (success, message) = await _orchestrator.StopBroadcastAsync(CancellationToken.None);
-                                    if (success)
+                                    try
                                     {
-                                        Console.WriteLine("[MoonrakerPoller] Broadcast stopped");
+                                        var (success, message) = await _orchestrator.StopBroadcastAsync(CancellationToken.None);
+                                        if (success)
+                                        {
+                                            Console.WriteLine("[MoonrakerPoller] Broadcast stopped (end stream after print enabled)");
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine($"[MoonrakerPoller] Error stopping broadcast: {message}");
+                                        }
                                     }
-                                    else
+                                    catch (Exception ex)
                                     {
-                                        Console.WriteLine($"[MoonrakerPoller] Error stopping broadcast: {message}");
+                                        Console.WriteLine($"[MoonrakerPoller] Exception stopping broadcast: {ex.Message}");
                                     }
                                 }
-                                catch (Exception ex)
+                                else
                                 {
-                                    Console.WriteLine($"[MoonrakerPoller] Exception stopping broadcast: {ex.Message}");
+                                    Console.WriteLine("[MoonrakerPoller] End stream after print disabled; leaving broadcast running.");
                                 }
-                            }
-                            else
-                            {
-                                Console.WriteLine("[MoonrakerPoller] Manual mode: auto-broadcast disabled; leaving broadcast running.");
                             }
 
                             // Finalize timelapse if still active

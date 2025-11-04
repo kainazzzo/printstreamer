@@ -128,6 +128,30 @@
                 </span>
             }
         </button>
+        
+        <!-- End Stream After Print Toggle Button -->
+        <button class="btn @(EndStreamAfterPrintEnabled ? "btn-danger" : "btn-success")" 
+                @onclick="ToggleEndStreamAfterPrint"
+                title="@(EndStreamAfterPrintEnabled ? "Disable end stream after print" : "Enable end stream after print completes")"
+                @onmouseover="OnEndStreamAfterPrintMouseOver"
+                @onmouseout="OnEndStreamAfterPrintMouseOut">
+            @if (EndStreamAfterPrintHover)
+            {
+                <span class="icon">⏹️</span>
+                <span class="btn-label">
+                    <span class="btn-title">End After Print</span>
+                    <span class="btn-status">@(EndStreamAfterPrintEnabled ? "Disable" : "Enable")</span>
+                </span>
+            }
+            else
+            {
+                <span class="icon">⏹️</span>
+                <span class="btn-label">
+                    <span class="btn-title">End After Print</span>
+                    <span class="btn-status">@(EndStreamAfterPrintEnabled ? "ON" : "OFF")</span>
+                </span>
+            }
+        </button>
     </div>
     
     <!-- Status Message -->
@@ -374,6 +398,7 @@
     [Parameter] public bool CameraEnabled { get; set; }
     [Parameter] public bool AutoBroadcastEnabled { get; set; }
     [Parameter] public bool AutoUploadEnabled { get; set; }
+    [Parameter] public bool EndStreamAfterPrintEnabled { get; set; }
     [Parameter] public string? BroadcastId { get; set; }
     [Parameter] public string? StatusMessage { get; set; }
     [Parameter] public string? CurrentPrivacy { get; set; }
@@ -383,11 +408,13 @@
     [Parameter] public EventCallback OnToggleCamera { get; set; }
     [Parameter] public EventCallback<bool> OnAutoUploadChanged { get; set; }
     [Parameter] public EventCallback<bool> OnAutoBroadcastChanged { get; set; }
+    [Parameter] public EventCallback<bool> OnEndStreamAfterPrintChanged { get; set; }
     
     private bool CameraHover = false;
     private bool LiveHover = false;
     private bool AutoBroadcastHover = false;
     private bool AutoUploadHover = false;
+    private bool EndStreamAfterPrintHover = false;
     
     private string SelectedPrivacy = "unlisted";
     private bool IsUpdatingPrivacy = false;
@@ -401,6 +428,8 @@
     private void OnAutoBroadcastMouseOut() => AutoBroadcastHover = false;
     private void OnAutoUploadMouseOver() => AutoUploadHover = true;
     private void OnAutoUploadMouseOut() => AutoUploadHover = false;
+    private void OnEndStreamAfterPrintMouseOver() => EndStreamAfterPrintHover = true;
+    private void OnEndStreamAfterPrintMouseOut() => EndStreamAfterPrintHover = false;
     
     protected override void OnParametersSet()
     {
@@ -489,6 +518,25 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error toggling auto-upload: {ex.Message}");
+        }
+    }
+    
+    private async Task ToggleEndStreamAfterPrint()
+    {
+        try
+        {
+            var newValue = !EndStreamAfterPrintEnabled;
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/config/end-stream-after-print?enabled={newValue}", null);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                await OnEndStreamAfterPrintChanged.InvokeAsync(newValue);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling end-stream-after-print: {ex.Message}");
         }
     }
 }
