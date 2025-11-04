@@ -1,0 +1,115 @@
+### Moonraker API Test Collection for PrintStreamer
+### Base URL and common headers
+@baseUrl = http://192.168.1.117:7125
+@apiKey = 
+@authHeader = X-Api-Key
+
+###############################################################################
+# 1. PRINT STATS - Primary endpoint used by poller
+# Endpoint: /printer/objects/query?print_stats
+# Used for: Getting current print status, filename, state, progress, layers
+###############################################################################
+
+### Get Print Stats (primary poller endpoint)
+GET {{baseUrl}}/printer/objects/query?print_stats
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 2. DISPLAY STATUS - Fallback endpoint
+# Endpoint: /printer/objects/query?display_status
+# Used for: Fallback when print_stats doesn't provide enough info
+###############################################################################
+
+### Get Display Status (fallback)
+GET {{baseUrl}}/printer/objects/query?display_status
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 3. PRINTER PRINT - Another fallback endpoint
+# Endpoint: /printer/print
+# Used for: Alternative fallback for basic print info
+###############################################################################
+
+### Get Printer Print Info (fallback)
+GET {{baseUrl}}/printer/print
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 4. FILE METADATA - Used by TimelapseManager
+# Endpoint: /server/files/metadata?filename=<filename>
+# Used for: Getting G-code metadata (layers, filament, etc.)
+###############################################################################
+
+### Get File Metadata (without gcodes/ prefix)
+GET {{baseUrl}}/server/files/metadata?filename=test_cube.gcode
+{{authHeader}}: {{apiKey}}
+
+### Get File Metadata (with gcodes/ prefix)
+GET {{baseUrl}}/server/files/metadata?filename=gcodes/test_cube.gcode
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 5. COMPLETE PRINTER QUERY - All objects at once
+# Endpoint: /printer/objects/query (no filter)
+# Used for: Getting comprehensive printer state
+###############################################################################
+
+### Get All Printer Objects (comprehensive)
+GET {{baseUrl}}/printer/objects/query
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 6. SPECIFIC OBJECTS - Used by overlay for temperature/progress data
+# Endpoint: /printer/objects/query?<object>=<field>&<object2>=<field2>
+###############################################################################
+
+### Get Temperature Data (heater_bed, extruder)
+GET {{baseUrl}}/printer/objects/query?heater_bed&extruder
+{{authHeader}}: {{apiKey}}
+
+### Get Print Progress and Layer Info
+GET {{baseUrl}}/printer/objects/query?print_stats&display_status
+{{authHeader}}: {{apiKey}}
+
+### Get Motion System State (for speed/flow)
+GET {{baseUrl}}/printer/objects/query?gcode_move&motion_report
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 7. SERVER INFO - General server status
+# Endpoint: /server/info
+###############################################################################
+
+### Get Server Info
+GET {{baseUrl}}/server/info
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 8. PRINTER INFO - Printer configuration
+# Endpoint: /printer/info
+###############################################################################
+
+### Get Printer Info
+GET {{baseUrl}}/printer/info
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# NOTES FOR TESTING:
+# 
+# 1. Update @baseUrl with your printer's IP address
+# 2. Update @apiKey if your Moonraker instance requires authentication
+# 3. Update the filename in the metadata requests to match actual files on your printer
+# 
+# Key Fields from print_stats response:
+# - filename: Current print job filename
+# - state: printing/paused/complete/error/idle
+# - progress: 0.0-1.0 (multiply by 100 for percentage)
+# - info.CURRENT_LAYER / info.current_layer: Current layer number
+# - info.TOTAL_LAYER / info.total_layer: Total layer count
+# - info.time_remaining: Remaining time in seconds
+# - info.filament_type: Filament type (e.g., PLA, PETG)
+# - info.filament_color: Filament color
+# - info.filament_brand: Filament brand
+# - info.filament_used_mm: Filament used in millimeters
+# - info.filament_total_mm: Total filament length in millimeters
+###############################################################################
