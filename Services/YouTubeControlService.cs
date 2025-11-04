@@ -518,8 +518,6 @@ internal class YouTubeControlService : IDisposable
                 return false;
             }
 
-            Console.WriteLine("Authenticating with YouTube using user OAuth...");
-
             var secrets = new ClientSecrets { ClientId = clientId, ClientSecret = clientSecret };
 
             // Use a single-file token store pointing at a mounted tokens path by default.
@@ -534,22 +532,17 @@ internal class YouTubeControlService : IDisposable
             var refreshToken = _config["YouTube:OAuth:RefreshToken"];
             if (!string.IsNullOrWhiteSpace(refreshToken))
             {
-                Console.WriteLine("Seeding configured refresh token into youtube_token.json (headless)");
+                Console.WriteLine("[YouTube] Seeding configured refresh token into youtube_token.json (headless)");
                 await dataStore.StoreAsync("user", new TokenResponse { RefreshToken = refreshToken });
             }
 
             // Also allow loading a full token response from youtube_token.json (read via our store).
             TokenResponse? importedToken = await dataStore.GetAsync<TokenResponse>("user");
-            if (importedToken != null)
-            {
-                Console.WriteLine("Found existing token in youtube_token.json and loaded it.");
-            }
 
             // Check if a token already exists in the store (youtube_token.json). If so, use it and skip interactive flows.
             var existingToken = importedToken;
             if (existingToken != null && !string.IsNullOrWhiteSpace(existingToken.RefreshToken))
             {
-                Console.WriteLine("Found existing token in persistent store; using it for authentication.");
                 var flow = new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow(
                     new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow.Initializer
                     {
@@ -640,10 +633,9 @@ internal class YouTubeControlService : IDisposable
                 var tokStr = await _credential!.GetAccessTokenForRequestAsync(null, cancellationToken);
                 if (string.IsNullOrEmpty(tokStr))
                 {
-                    Console.WriteLine("Failed to obtain access token.");
+                    Console.WriteLine("[YouTube] Failed to obtain access token.");
                     return false;
                 }
-                Console.WriteLine("Authentication successful!");
                 _youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
                 {
                     HttpClientInitializer = _credential,
@@ -661,14 +653,14 @@ internal class YouTubeControlService : IDisposable
                 // the access token expires.
                 if (trex.Message != null && trex.Message.Contains("unauthorized_client") && _credential?.Token?.AccessToken != null)
                 {
-                    Console.WriteLine("Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
+                    Console.WriteLine("[YouTube] Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
                     var accessOnly = Google.Apis.Auth.OAuth2.GoogleCredential.FromAccessToken(_credential.Token.AccessToken);
                     _youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
                     {
                         HttpClientInitializer = accessOnly,
                         ApplicationName = "PrintStreamer"
                     });
-                    Console.WriteLine("Authentication successful (access_token only). Note: token will not be refreshed.");
+                    Console.WriteLine("[YouTube] Authentication successful (access_token only). Note: token will not be refreshed.");
                     return true;
                 }
                 // otherwise rethrow to be handled by outer catch

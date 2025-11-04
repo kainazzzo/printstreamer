@@ -95,6 +95,7 @@ namespace PrintStreamer.Timelapse
         if (_activeSessions.TryAdd(actualFolderName, session))
         {
             Console.WriteLine($"[TimelapseManager] Started timelapse session: {actualFolderName}");
+            Console.WriteLine($"[TimelapseManager]   Output directory: {session.Service.OutputDir}");
 
             // Capture initial frame
             await CaptureFrameForSessionAsync(session);
@@ -104,7 +105,13 @@ namespace PrintStreamer.Timelapse
             {
                 var timelapsePeriod = _config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
                 _captureTimer.Change(timelapsePeriod, timelapsePeriod);
-                Console.WriteLine($"[TimelapseManager] Started capture timer (period: {timelapsePeriod})");
+                Console.WriteLine($"[TimelapseManager] Started capture timer with period: {timelapsePeriod}");
+                Console.WriteLine($"[TimelapseManager]   Timer will fire every {timelapsePeriod.TotalSeconds} seconds");
+                Console.WriteLine($"[TimelapseManager]   Stream source: {_config.GetValue<string>("Stream:Source")}");
+            }
+            else
+            {
+                Console.WriteLine($"[TimelapseManager] Timer already running ({_activeSessions.Count} active sessions)");
             }
 
             return actualFolderName;
@@ -154,9 +161,13 @@ namespace PrintStreamer.Timelapse
     public async Task<string?> StopTimelapseAsync(string sessionName)
     {
         if (!_activeSessions.TryGetValue(sessionName, out var session))
+        {
+            Console.WriteLine($"[TimelapseManager] Cannot stop timelapse: session '{sessionName}' not found");
             return null;
+        }
 
         Console.WriteLine($"[TimelapseManager] Stopping timelapse session: {sessionName}");
+        Console.WriteLine($"[TimelapseManager]   Frames captured: {session.Service.OutputDir}");
 
         // Mark session as stopped first to prevent any more captures
         session.IsStopped = true;
@@ -171,15 +182,18 @@ namespace PrintStreamer.Timelapse
         if (_activeSessions.IsEmpty)
         {
             _captureTimer.Change(Timeout.Infinite, Timeout.Infinite);
-            if (_verboseLogs)
-            {
-                Console.WriteLine($"[TimelapseManager] Stopped capture timer");
-            }
+            Console.WriteLine($"[TimelapseManager] Stopped capture timer (no active sessions remaining)");
+        }
+        else
+        {
+            Console.WriteLine($"[TimelapseManager] Timer still running ({_activeSessions.Count} active sessions remaining)");
         }
 
     // Create video
         var folderName = Path.GetFileName(session.Service.OutputDir);
         var videoPath = Path.Combine(session.Service.OutputDir, $"{folderName}.mp4");
+        
+        Console.WriteLine($"[TimelapseManager] Creating video: {videoPath}");
         
         try
         {
@@ -188,11 +202,22 @@ namespace PrintStreamer.Timelapse
             session.LayerStarts = null;
             session.MetadataRaw = null;
             session.Service.Dispose();
+            
+            if (result != null)
+            {
+                Console.WriteLine($"[TimelapseManager] Successfully created timelapse video: {result}");
+            }
+            else
+            {
+                Console.WriteLine($"[TimelapseManager] Failed to create timelapse video (result was null)");
+            }
+            
             return result;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[TimelapseManager] Failed to create video for {sessionName}: {ex.Message}");
+            Console.WriteLine($"[TimelapseManager] Stack trace: {ex.StackTrace}");
             // Ensure cleanup
             session.LayerStarts = null;
             session.MetadataRaw = null;
@@ -285,39 +310,50 @@ namespace PrintStreamer.Timelapse
         return null;
     }
 
-    private async void CaptureFramesAsync(object? state)
+    private void CaptureFramesAsync(object? state)
     {
-        if (_disposed || _activeSessions.IsEmpty)
-            return;
-
-        var streamSource = _config.GetValue<string>("Stream:Source");
-        if (string.IsNullOrWhiteSpace(streamSource))
-            return;
-
-        // Diagnostic: show how many sessions are being scanned on each tick
-        try
+        // Fire and forget pattern - don't use async void which can cause timer to stop
+        _ = Task.Run(async () =>
         {
-            if (_verboseLogs)
+            try
             {
-                Console.WriteLine($"[TimelapseManager] Timer tick: {_activeSessions.Count} active session(s)");
-            }
-        }
-        catch { }
+                if (_disposed || _activeSessions.IsEmpty)
+                    return;
 
-        foreach (var session in _activeSessions.Values)
-        {
-            // Skip sessions that have been marked as stopped
-            if (session.IsStopped)
-            {
+                var streamSource = _config.GetValue<string>("Stream:Source");
+                if (string.IsNullOrWhiteSpace(streamSource))
+                {
+                    Console.WriteLine("[TimelapseManager] No stream source configured, skipping frame capture");
+                    return;
+                }
+
+                // Diagnostic: show how many sessions are being scanned on each tick
                 if (_verboseLogs)
                 {
-                    Console.WriteLine($"[TimelapseManager] Skipping frame capture for stopped session: {session.Name}");
+                    Console.WriteLine($"[TimelapseManager] Timer tick: {_activeSessions.Count} active session(s)");
                 }
-                continue;
+
+                foreach (var session in _activeSessions.Values)
+                {
+                    // Skip sessions that have been marked as stopped
+                    if (session.IsStopped)
+                    {
+                        if (_verboseLogs)
+                        {
+                            Console.WriteLine($"[TimelapseManager] Skipping frame capture for stopped session: {session.Name}");
+                        }
+                        continue;
+                    }
+                    
+                    await CaptureFrameForSessionAsync(session);
+                }
             }
-            
-            await CaptureFrameForSessionAsync(session);
-        }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TimelapseManager] Error in timer callback: {ex.Message}");
+                Console.WriteLine($"[TimelapseManager] Stack trace: {ex.StackTrace}");
+            }
+        });
     }
 
     private async Task CaptureFrameForSessionAsync(TimelapseSession session)
@@ -336,7 +372,15 @@ namespace PrintStreamer.Timelapse
 
             var streamSource = _config.GetValue<string>("Stream:Source");
             if (string.IsNullOrWhiteSpace(streamSource))
+            {
+                Console.WriteLine($"[TimelapseManager] No stream source configured; cannot capture frame for {session.Name}");
                 return;
+            }
+
+            if (_verboseLogs)
+            {
+                Console.WriteLine($"[TimelapseManager] Fetching frame from: {streamSource}");
+            }
 
             var frame = await FetchSingleJpegFrameAsync(streamSource, 10, CancellationToken.None);
             if (frame != null)
@@ -352,22 +396,20 @@ namespace PrintStreamer.Timelapse
                 }
                 await session.Service.SaveFrameAsync(frame, CancellationToken.None);
                 session.LastCaptureTime = DateTime.UtcNow;
-                if (_verboseLogs)
-                {
-                    Console.WriteLine($"[TimelapseManager] Captured frame for {session.Name}");
-                }
+                Console.WriteLine($"[TimelapseManager] Captured frame for {session.Name} ({frame.Length} bytes)");
             }
             else
             {
-                if (_verboseLogs)
-                {
-                    Console.WriteLine($"[TimelapseManager] Failed to capture frame for {session.Name}");
-                }
+                Console.WriteLine($"[TimelapseManager] Failed to capture frame for {session.Name} - frame was null");
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[TimelapseManager] Error capturing frame for {session.Name}: {ex.Message}");
+            if (_verboseLogs)
+            {
+                Console.WriteLine($"[TimelapseManager] Stack trace: {ex.StackTrace}");
+            }
         }
     }
 
