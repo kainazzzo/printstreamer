@@ -147,6 +147,9 @@ SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}
 
 These lines let the printer update `print_stats` (accessible at `/printer/objects/query?print_stats`) with the current and total layer counts so PrintStreamer can track progress without downloading G-code files.
 
+**Important:** By default, timelapse capture is gated until layer 1 begins (skipping leveling/homing at layer 0). To disable this gating and capture from the very start of the print, set:
+- `Timelapse:StartAfterLayer1=false` - disable gating (capture from print start)
+
 ### Filament details in YouTube descriptions
 To include filament brand/type/color and used/total length in your live/timelapse descriptions, configure your slicer (OrcaSlicer/PrusaSlicer) to emit additional `SET_PRINT_STATS_INFO` lines so Moonraker exposes them under `print_stats.info`. Add the following to your slicer:
 
