@@ -126,6 +126,7 @@
   private AudioStateDto? _state;
   private string _repeatSel = "None";
   private System.Threading.Timer? _timer;
+  private System.Threading.Timer? _tracksTimer;
 
   protected override async Task OnInitializedAsync()
   {
@@ -133,11 +134,23 @@
     _timer = new System.Threading.Timer(async _ => {
       try { await LoadState(); StateHasChanged(); } catch { }
     }, null, 1000, 1500);
+
+    // Poll for new/removed audio files periodically: trigger a lightweight scan then refresh list
+    _tracksTimer = new System.Threading.Timer(async _ =>
+    {
+      try
+      {
+        var changed = await RefreshTracksIfChanged();
+        if (changed) { StateHasChanged(); }
+      }
+      catch { }
+    }, null, 2000, 5000);
   }
 
   public void Dispose()
   {
     _timer?.Dispose();
+    _tracksTimer?.Dispose();
   }
 
   private async Task LoadAll()
@@ -160,6 +173,28 @@
       _tracks = list?.Select(t => t.Name).OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList() ?? new();
     }
     catch { _tracks = new(); }
+  }
+
+  // Periodically called by _tracksTimer: ask server to rescan folder and update UI if library changed
+  private async Task<bool> RefreshTracksIfChanged()
+  {
+    try
+    {
+      var previous = _tracks != null ? new List<string>(_tracks) : new List<string>();
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      // Trigger a backend rescan (no toast/noise on failures for background polling)
+      try { await client.PostAsync("api/audio/scan", null); } catch { }
+      var list = await client.GetFromJsonAsync<List<TrackDto>>("api/audio/tracks");
+      var newTracks = list?.Select(t => t.Name).OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList() ?? new List<string>();
+
+      if (previous.Count != newTracks.Count || !previous.SequenceEqual(newTracks, StringComparer.OrdinalIgnoreCase))
+      {
+        _tracks = newTracks;
+        return true;
+      }
+    }
+    catch { }
+    return false;
   }
 
   private async Task LoadState()
