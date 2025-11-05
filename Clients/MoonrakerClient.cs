@@ -1,8 +1,21 @@
 // Minimal Moonraker client helpers
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 internal static class MoonrakerClient
 {
+    private static ILogger _logger = NullLogger.Instance;
+
+    /// <summary>
+    /// Optional: callers (e.g. Program.cs) may call SetLogger to provide an ILogger from DI.
+    /// If not set, a NullLogger is used and logging calls are no-ops.
+    /// </summary>
+    public static void SetLogger(ILogger logger)
+    {
+        _logger = logger ?? NullLogger.Instance;
+    }
+
     // Minimal MoonrakerPrintInfo used by Program.cs and other callers
     public class MoonrakerPrintInfo
     {
@@ -206,11 +219,11 @@ internal static class MoonrakerClient
                                        GetFilamentDouble(result, "filament_total") ??
                                        (GetFilamentDouble(result, "filament_total_m") * 1000.0);
             }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[Moonraker] Failed to merge filament metadata: {ex.Message}");
-        }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Moonraker] Failed to merge filament metadata");
+            }
     }
 
     /// <summary>
@@ -465,7 +478,7 @@ internal static class MoonrakerClient
 
             foreach (var endpoint in endpoints)
             {
-                Console.WriteLine($"[Moonraker] GET {endpoint}");
+                _logger.LogInformation("[Moonraker] GET {Endpoint}", endpoint);
                 var resp = await http.GetAsync(endpoint, cancellationToken);
                 if (resp.IsSuccessStatusCode)
                 {
@@ -474,7 +487,7 @@ internal static class MoonrakerClient
                 }
                 else
                 {
-                    Console.WriteLine($"[Moonraker] Metadata request failed for '{endpoint}': {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                    _logger.LogWarning("[Moonraker] Metadata request failed for '{Endpoint}': {StatusCode} {ReasonPhrase}", endpoint, (int)resp.StatusCode, resp.ReasonPhrase);
                 }
             }
             return null;
@@ -512,7 +525,7 @@ internal static class MoonrakerClient
             }
 
             var endpoint = "/printer/objects/query?print_stats";
-            Console.WriteLine($"[Moonraker] GET {endpoint}");
+            _logger.LogInformation("[Moonraker] GET {Endpoint}", endpoint);
             var resp = await http.GetAsync(endpoint, cancellationToken);
             if (resp.IsSuccessStatusCode)
             {
@@ -521,12 +534,12 @@ internal static class MoonrakerClient
             }
             else
             {
-                Console.WriteLine($"[Moonraker] print_stats request failed: {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                _logger.LogWarning("[Moonraker] print_stats request failed: {StatusCode} {ReasonPhrase}", (int)resp.StatusCode, resp.ReasonPhrase);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Moonraker] GetPrintStatsAsync error: {ex.Message}");
+            _logger.LogError(ex, "[Moonraker] GetPrintStatsAsync error");
         }
         return null;
     }
@@ -551,11 +564,11 @@ internal static class MoonrakerClient
             var json = System.Text.Json.JsonSerializer.Serialize(new { script = command });
             var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
             var endpoint = "/printer/gcode/script";
-            Console.WriteLine($"[Moonraker] POST {endpoint} -> {command}");
+            _logger.LogInformation("[Moonraker] POST {Endpoint} -> {Command}", endpoint, command);
             var resp = await http.PostAsync(endpoint, content, cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
-                Console.WriteLine($"[Moonraker] SendGcodeScriptAsync failed: {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                _logger.LogWarning("[Moonraker] SendGcodeScriptAsync failed: {StatusCode} {ReasonPhrase}", (int)resp.StatusCode, resp.ReasonPhrase);
                 return null;
             }
             var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
@@ -563,7 +576,7 @@ internal static class MoonrakerClient
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Moonraker] SendGcodeScriptAsync error: {ex.Message}");
+            _logger.LogError(ex, "[Moonraker] SendGcodeScriptAsync error");
             return null;
         }
     }
