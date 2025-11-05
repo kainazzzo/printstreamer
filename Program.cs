@@ -47,6 +47,24 @@ if (!string.IsNullOrWhiteSpace(customConfigFile))
 
 var config = webBuilder.Configuration;
 
+// If a client secrets file path is configured, add a configuration provider that loads
+// the client_id and client_secret from that JSON file into configuration keys
+try
+{
+	var csPath = webBuilder.Configuration.GetValue<string>("YouTube:OAuth:ClientSecretsFilePath");
+	if (!string.IsNullOrWhiteSpace(csPath))
+	{
+		var fullPath = Path.Combine(Directory.GetCurrentDirectory(), csPath);
+		startupLogger.LogInformation("Checking for client secrets file at: {Path}", fullPath);
+	// Register our custom provider (optional: true so missing file won't crash)
+	((IConfigurationBuilder)webBuilder.Configuration).Add(new PrintStreamer.Utils.ClientSecretsConfigurationSource(fullPath, optional: true));
+	}
+}
+catch (Exception ex)
+{
+	startupLogger.LogWarning(ex, "Failed to register client secrets configuration provider");
+}
+
 // Persist ASP.NET Core DataProtection keys so antiforgery cookies survive container restarts
 try
 {

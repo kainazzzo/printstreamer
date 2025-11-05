@@ -21,4 +21,9 @@
     <Compile Remove="MoonrakerClient.cs" />
   </ItemGroup>
 
+  <!-- Exclude any test projects/source under the tests/ folder so they don't get compiled into this web app -->
+  <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+  </ItemGroup>
+
 </Project>
