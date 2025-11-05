@@ -1,4 +1,5 @@
 @inject NavigationManager Nav
+@inject ILogger<StreamControlPanel> Logger
 
 <div class="control-panel">
     <!-- Control Buttons with Status -->
@@ -493,12 +494,12 @@
             
             if (result?.Success != true)
             {
-                Console.WriteLine($"Failed to update privacy: {result?.Error ?? "unknown"}");
+                Logger.LogWarning("Failed to update privacy: {Error}", result?.Error ?? "unknown");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error updating privacy: {ex.Message}");
+            Logger.LogError(ex, "Error updating privacy: {Message}", ex.Message);
         }
         finally
         {
@@ -528,7 +529,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error toggling auto-broadcast: {ex.Message}");
+            Logger.LogError(ex, "Error toggling auto-broadcast: {Message}", ex.Message);
         }
     }
     
@@ -547,7 +548,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error toggling auto-upload: {ex.Message}");
+            Logger.LogError(ex, "Error toggling auto-upload: {Message}", ex.Message);
         }
     }
     
@@ -566,7 +567,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error toggling end-stream-after-print: {ex.Message}");
+            Logger.LogError(ex, "Error toggling end-stream-after-print: {Message}", ex.Message);
         }
     }
     
@@ -585,7 +586,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error toggling end-stream-after-song: {ex.Message}");
+            Logger.LogError(ex, "Error toggling end-stream-after-song: {Message}", ex.Message);
         }
     }
 }
