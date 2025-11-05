@@ -1,0 +1,131 @@
+@using PrintStreamer.Services
+@inject PrinterConsoleService PrinterConsoleService
+@inject IConfiguration Cfg
+@inject IJSRuntime JS
+
+@code {
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IDictionary<string, object?>? AdditionalAttributes { get; set; }
+
+    [Parameter]
+    public bool Collapsed { get; set; } = false;
+
+    [Parameter]
+    public int MaxLines { get; set; } = 200;
+
+    [Parameter]
+    public bool AllowSend { get; set; } = false;
+
+    [Parameter]
+    public string? Title { get; set; } = "Printer Console";
+
+    private List<ConsoleLine> _lines = new List<ConsoleLine>();
+    private string _input = string.Empty;
+    private string? _lastSendMessage;
+    private bool _autoScroll = true;
+    private bool _flipLayout = false;
+    private string _containerId = $"printer-console-{Guid.NewGuid().ToString("N")}";
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        // Default AllowSend from config if not specified by parent
+        try
+        {
+            if (!this.AdditionalAttributes?.ContainsKey("AllowSend") ?? true)
+            {
+                var allowFromCfg = Cfg.GetValue<bool?>("Stream:Console:AllowSend") ?? Cfg.GetValue<bool?>("stream:console:allowSend");
+                if (allowFromCfg.HasValue) AllowSend = allowFromCfg.Value;
+            }
+        }
+        catch { }
+        _lines = PrinterConsoleService.GetLatestLines(MaxLines).ToList();
+        PrinterConsoleService.OnNewLine += HandleNewLine;
+    }
+
+    private void HandleNewLine(ConsoleLine l)
+    {
+        // Update copy and trim
+        _lines.Add(l);
+        if (_lines.Count > MaxLines) _lines.RemoveRange(0, _lines.Count - MaxLines);
+        // Safe UI update and auto-scroll
+        _ = InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            if (_autoScroll)
+            {
+                try { await JS.InvokeVoidAsync("psScrollToBottom", _containerId); } catch { }
+            }
+        });
+    }
+
+    public void Dispose()
+    {
+        try { PrinterConsoleService.OnNewLine -= HandleNewLine; } catch { }
+    }
+
+    private async Task Send()
+    {
+        if (string.IsNullOrWhiteSpace(_input)) return;
+        var res = await PrinterConsoleService.SendCommandAsync(_input);
+        _lastSendMessage = res.Message;
+        _input = string.Empty;
+        _ = InvokeAsync(StateHasChanged);
+    }
+}
+
+<div class="printer-console">
+    <div style="display:flex;align-items:center;gap:8px;">
+        <h4 style="margin:0;">@Title</h4>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#888;">
+            <input type="checkbox" @bind="_autoScroll" /> auto-scroll
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#888;">
+            <input type="checkbox" @bind="_flipLayout" @bind:after="StateHasChanged" /> flip layout
+        </label>
+    </div>
+    @if (!Collapsed)
+    {
+        <div id="@_containerId" class="console-window" style="height:200px;overflow:auto;background:#000;color:#fff;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;">
+            @foreach (var line in _flipLayout ? _lines.AsEnumerable().Reverse() : _lines)
+            {
+                var color = line.Level switch
+                {
+                    "error" => "#ff6b6b",
+                    "warn" => "#ffd93d",
+                    "info" => "#6bcf7f",
+                    _ => "#ccc"
+                };
+                var prefix = line.FromLocal ? "[local]" : "";
+                <div style="color:@color">@(line.Timestamp.ToLocalTime().ToString("HH:mm:ss")) @prefix @line.Text</div>
+            }
+        </div>
+        @if (AllowSend)
+        {
+            <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+                <input @bind="_input" style="flex:1;padding:6px;font-family:monospace;" />
+                <button @onclick="Send">Send</button>
+            </div>
+            <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <span style="font-size:12px;color:#aaa;">Quick actions:</span>
+                <button @onclick="() => SendPreset(200,60)">PLA</button>
+                <button @onclick="() => SendPreset(240,70)">PETG</button>
+                <button @onclick="() => SendPreset(250,100)">ABS</button>
+                <button @onclick="() => SendPreset(0,0)">Cooldown</button>
+            </div>
+            @if (!string.IsNullOrEmpty(_lastSendMessage))
+            {
+                <div style="margin-top:6px;font-size:12px;color:#ccc;">@_lastSendMessage</div>
+            }
+        }
+    }
+</div>
+
+@code {
+    private async Task SendPreset(int toolTemp, int bedTemp)
+    {
+        var res = await PrinterConsoleService.SetTemperaturesAsync(toolTemp, bedTemp);
+        _lastSendMessage = res.Message;
+        _ = InvokeAsync(StateHasChanged);
+    }
+}

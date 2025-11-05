@@ -531,5 +531,42 @@ internal static class MoonrakerClient
         return null;
     }
 
+    /// <summary>
+    /// Send a single G-code script/command to the printer via Moonraker.
+    /// Posts JSON: { "script": "<command>" }
+    /// Returns the parsed Moonraker JSON response or null on failure.
+    /// </summary>
+    public static async Task<JsonNode?> SendGcodeScriptAsync(Uri baseUri, string command, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(8) };
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
+                try { http.DefaultRequestHeaders.Remove(header); } catch { }
+                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
+            }
+
+            var json = System.Text.Json.JsonSerializer.Serialize(new { script = command });
+            var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            var endpoint = "/printer/gcode/script";
+            Console.WriteLine($"[Moonraker] POST {endpoint} -> {command}");
+            var resp = await http.PostAsync(endpoint, content, cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[Moonraker] SendGcodeScriptAsync failed: {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                return null;
+            }
+            var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+            return JsonNode.Parse(txt);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Moonraker] SendGcodeScriptAsync error: {ex.Message}");
+            return null;
+        }
+    }
+
     // ... rest of MoonrakerClient methods remain unchanged (GetPrintInfoAsync, etc.)
 }

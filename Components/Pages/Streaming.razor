@@ -25,6 +25,10 @@
         <OverlayMjpegFeed />
     </StreamContainer>
 
+    <div style="margin-top:20px">
+        <PrinterConsole Title="Printer Console" AllowSend="false" MaxLines="200" />
+    </div>
+
     @if (!string.IsNullOrWhiteSpace(broadcastId) && isLive)
     {
         <div style="margin-top:20px">

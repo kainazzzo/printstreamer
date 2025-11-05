@@ -65,6 +65,15 @@ window.getStreamPlayingStatus = function() {
     try { return !!window._printstreamer_mjpeg_ready; } catch (e) { return false; }
 };
 
+// Simple scroll-to-bottom helper for console windows
+window.psScrollToBottom = function(elementId){
+    try{
+        const el = document.getElementById(elementId);
+        if(!el) return;
+        el.scrollTop = el.scrollHeight;
+    }catch(e){ /* ignore */ }
+};
+
 // Player control helpers exposed for Blazor UI
 window.streamControls = {
     play: function() {},

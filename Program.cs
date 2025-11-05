@@ -125,6 +125,10 @@ webBuilder.Services.AddSingleton<PrintStreamer.Services.MoonrakerPollerService>(
 webBuilder.Services.AddHostedService<PrintStreamer.Services.MoonrakerHostedService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioBroadcastService>();
+// Printer console service (skeleton)
+webBuilder.Services.AddSingleton<PrintStreamer.Services.PrinterConsoleService>();
+// Start the same singleton as a hosted service
+webBuilder.Services.AddHostedService(sp => sp.GetRequiredService<PrintStreamer.Services.PrinterConsoleService>());
 // Overlay text generator (reads Moonraker, writes text for ffmpeg drawtext)
 webBuilder.Services.AddSingleton<PrintStreamer.Overlay.OverlayTextService>(sp =>
 {
