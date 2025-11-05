@@ -136,6 +136,12 @@ webBuilder.Services.AddSingleton<PrintStreamer.Overlay.ITimelapseMetadataProvide
 webBuilder.Services.Configure<PrintStreamer.Services.YouTubePollingOptions>(
     webBuilder.Configuration.GetSection(PrintStreamer.Services.YouTubePollingOptions.SectionName));
 webBuilder.Services.AddSingleton<PrintStreamer.Services.YouTubePollingManager>();
+// YouTube broadcast reuse (persist broadcast/stream info to avoid repeated creation)
+webBuilder.Services.Configure<PrintStreamer.Services.YouTubeReuseOptions>(
+	webBuilder.Configuration.GetSection(PrintStreamer.Services.YouTubeReuseOptions.SectionName));
+webBuilder.Services.AddSingleton<PrintStreamer.Services.YouTubeBroadcastStore>(sp =>
+	new PrintStreamer.Services.YouTubeBroadcastStore(sp.GetRequiredService<IConfiguration>().GetValue<string>("YouTube:Reuse:StoreFile") ?? "youtube_reuse_store.json"));
+webBuilder.Services.AddSingleton<PrintStreamer.Services.YouTubeReuseManager>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.WebCamManager>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamOrchestrator>();
