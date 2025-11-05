@@ -61,18 +61,18 @@ internal class YouTubeControlService : IDisposable
             var response = await thumbnailSetRequest.UploadAsync(cancellationToken);
             if (response.Status == Google.Apis.Upload.UploadStatus.Completed)
             {
-                Console.WriteLine($"Thumbnail updated for broadcast {broadcastId}.");
+                _logger.LogInformation("Thumbnail updated for broadcast {BroadcastId}.", broadcastId);
                 return true;
             }
             else
             {
-                Console.WriteLine($"Thumbnail upload failed: {response.Status}");
+                _logger.LogWarning("Thumbnail upload failed: {Status}", response.Status);
                 if (response.Exception != null)
                 {
-                    Console.WriteLine($"Upload exception: {response.Exception.Message}");
+                    _logger.LogError(response.Exception, "Upload exception while setting thumbnail");
                     if (response.Exception.InnerException != null)
                     {
-                        Console.WriteLine($"Inner exception: {response.Exception.InnerException.Message}");
+                        _logger.LogError(response.Exception.InnerException, "Inner exception during thumbnail upload");
                     }
                 }
                 return false;
@@ -80,8 +80,7 @@ internal class YouTubeControlService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error updating thumbnail: {ex.Message}");
-            Console.WriteLine($"Exception details: {ex}");
+            _logger.LogError(ex, "Error updating thumbnail");
             return false;
         }
     }
@@ -104,25 +103,25 @@ internal class YouTubeControlService : IDisposable
         var uploadEnabled = _config.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
         if (!uploadEnabled && !bypassUploadConfig)
         {
-            Console.WriteLine("Timelapse upload is disabled in configuration.");
+            _logger.LogInformation("Timelapse upload is disabled in configuration.");
             return null;
         }
 
         if (_youtubeService == null)
         {
-            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            _logger.LogWarning("YouTube service not initialized. Call AuthenticateAsync first.");
             return null;
         }
         if (!File.Exists(videoFilePath))
         {
-            Console.WriteLine($"Video file not found: {videoFilePath}");
+            _logger.LogWarning("Video file not found: {VideoFile}", videoFilePath);
             return null;
         }
 
         try
         {
             var fileInfo = new FileInfo(videoFilePath);
-            Console.WriteLine($"Uploading timelapse video: {videoFilePath} ({fileInfo.Length} bytes)");
+            _logger.LogInformation("Uploading timelapse video: {Path} ({Bytes} bytes)", videoFilePath, fileInfo.Length);
 
             // Build title and description from config and filename
             var baseTitle = _config["YouTube:LiveBroadcast:Title"] ?? "Print Streamer";
@@ -188,7 +187,7 @@ internal class YouTubeControlService : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Moonraker details fetch failed: {ex.Message}");
+                _logger.LogWarning(ex, "Moonraker details fetch failed: {Message}", ex.Message);
             }
             var description = $"{baseDescription}\n\nTimelapse of {cleanFilename}\n\n{attribution}{details}";
 
@@ -215,23 +214,23 @@ internal class YouTubeControlService : IDisposable
             {
                 switch (progress.Status)
                 {
-                    case Google.Apis.Upload.UploadStatus.Uploading:
+                        case Google.Apis.Upload.UploadStatus.Uploading:
                         var percent = (progress.BytesSent * 100.0) / fileStream.Length;
-                        Console.WriteLine($"Upload progress: {percent:F1}% ({progress.BytesSent}/{fileStream.Length} bytes)");
+                        _logger.LogInformation("Upload progress: {Percent} ({BytesSent}/{Total} bytes)", $"{percent:F1}%", progress.BytesSent, fileStream.Length);
                         break;
                     case Google.Apis.Upload.UploadStatus.Completed:
-                        Console.WriteLine("Upload completed successfully!");
+                        _logger.LogInformation("Upload completed successfully!");
                         break;
                     case Google.Apis.Upload.UploadStatus.Failed:
-                        Console.WriteLine($"Upload failed: {progress.Exception?.Message}");
+                        _logger.LogError(progress.Exception, "Upload failed");
                         break;
                 }
             };
 
             videosInsertRequest.ResponseReceived += uploadedVideo =>
             {
-                Console.WriteLine($"Video uploaded successfully! Video ID: {uploadedVideo.Id}");
-                Console.WriteLine($"Video URL: https://www.youtube.com/watch?v={uploadedVideo.Id}");
+                _logger.LogInformation("Video uploaded successfully! Video ID: {VideoId}", uploadedVideo.Id);
+                _logger.LogInformation("Video URL: https://www.youtube.com/watch?v={VideoId}", uploadedVideo.Id);
             };
 
             var uploadedVideoResponse = await videosInsertRequest.UploadAsync(cancellationToken);
@@ -239,24 +238,22 @@ internal class YouTubeControlService : IDisposable
             if (uploadedVideoResponse.Status == Google.Apis.Upload.UploadStatus.Completed)
             {
                 var videoId = videosInsertRequest.ResponseBody?.Id;
-                Console.WriteLine($"Timelapse video uploaded successfully! ID: {videoId}");
+                _logger.LogInformation("Timelapse video uploaded successfully! ID: {VideoId}", videoId);
                 return videoId;
             }
             else
             {
-                Console.WriteLine($"Video upload failed with status: {uploadedVideoResponse.Status}");
+                _logger.LogWarning("Video upload failed with status: {Status}", uploadedVideoResponse.Status);
                 if (uploadedVideoResponse.Exception != null)
                 {
-                    Console.WriteLine($"Exception: {uploadedVideoResponse.Exception.Message}");
-                    Console.WriteLine($"Details: {uploadedVideoResponse.Exception}");
+                    _logger.LogError(uploadedVideoResponse.Exception, "Exception while uploading video");
                 }
                 return null;
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error uploading timelapse video: {ex.Message}");
-            Console.WriteLine($"Exception details: {ex}");
+            _logger.LogError(ex, "Error uploading timelapse video");
             return null;
         }
     }
@@ -269,7 +266,7 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            _logger.LogWarning("YouTube service not initialized. Call AuthenticateAsync first.");
             return null;
         }
 
@@ -302,12 +299,12 @@ internal class YouTubeControlService : IDisposable
 
             var insert = _youtubeService.Playlists.Insert(playlist, "snippet,status");
             var created = await insert.ExecuteAsync(cancellationToken);
-            Console.WriteLine($"[YouTube] Created playlist '{name}' (ID: {created.Id})");
+            _logger.LogInformation("[YouTube] Created playlist '{Name}' (ID: {Id})", name, created.Id);
             return created.Id;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[YouTube] Failed to ensure playlist '{name}': {ex.Message}");
+            _logger.LogError(ex, "[YouTube] Failed to ensure playlist '{Name}': {Message}", name, ex.Message);
             return null;
         }
     }
@@ -319,7 +316,7 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("YouTube service not initialized. Call AuthenticateAsync first.");
+            _logger.LogWarning("YouTube service not initialized. Call AuthenticateAsync first.");
             return false;
         }
 
@@ -337,7 +334,7 @@ internal class YouTubeControlService : IDisposable
                 var exists = listResp.Items?.Any(i => i.Snippet?.ResourceId?.VideoId == videoId) == true;
                 if (exists)
                 {
-                    Console.WriteLine($"[YouTube] Video {videoId} already present in playlist {playlistId}; skipping add.");
+                    _logger.LogInformation("[YouTube] Video {VideoId} already present in playlist {PlaylistId}; skipping add.", videoId, playlistId);
                     return true;
                 }
                 pageToken = listResp.NextPageToken;
@@ -358,12 +355,12 @@ internal class YouTubeControlService : IDisposable
 
             var insert = _youtubeService.PlaylistItems.Insert(item, "snippet");
             var created = await insert.ExecuteAsync(cancellationToken);
-            Console.WriteLine($"[YouTube] Added video {videoId} to playlist {playlistId}");
+            _logger.LogInformation("[YouTube] Added video {VideoId} to playlist {PlaylistId}", videoId, playlistId);
             return !string.IsNullOrWhiteSpace(created.Id);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[YouTube] Failed to add video {videoId} to playlist {playlistId}: {ex.Message}");
+            _logger.LogError(ex, "[YouTube] Failed to add video {VideoId} to playlist {PlaylistId}", videoId, playlistId);
             return false;
         }
     }
@@ -373,8 +370,8 @@ internal class YouTubeControlService : IDisposable
     /// </summary>
     private static Uri? GetPrinterBaseUriFromStreamSource(string source)
     {
-        try
-        {
+    try
+    {
             // If source is a full URL, parse it and replace the port with 7125
             if (Uri.TryCreate(source, UriKind.Absolute, out var srcUri))
             {
@@ -519,7 +516,7 @@ internal class YouTubeControlService : IDisposable
             var clientSecret = _config["YouTube:OAuth:ClientSecret"];
             if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
             {
-                Console.WriteLine("Error: YouTube OAuth ClientId and ClientSecret are required for user OAuth.");
+                _logger.LogError("Error: YouTube OAuth ClientId and ClientSecret are required for user OAuth.");
                 return false;
             }
 
@@ -537,7 +534,7 @@ internal class YouTubeControlService : IDisposable
             var refreshToken = _config["YouTube:OAuth:RefreshToken"];
             if (!string.IsNullOrWhiteSpace(refreshToken))
             {
-                Console.WriteLine("[YouTube] Seeding configured refresh token into youtube_token.json (headless)");
+                _logger.LogInformation("[YouTube] Seeding configured refresh token into youtube_token.json (headless)");
                 await dataStore.StoreAsync("user", new TokenResponse { RefreshToken = refreshToken });
             }
 
@@ -569,7 +566,7 @@ internal class YouTubeControlService : IDisposable
                     }
                     else
                     {
-                        Console.WriteLine("Automatic browser launch appears unavailable. Falling back to manual auth flow.");
+                        _logger.LogWarning("Automatic browser launch appears unavailable. Falling back to manual auth flow.");
 
                         var requestUrl = new AuthorizationCodeRequestUrl(new Uri(Google.Apis.Auth.OAuth2.GoogleAuthConsts.AuthorizationUrl))
                         {
@@ -579,8 +576,8 @@ internal class YouTubeControlService : IDisposable
                             ResponseType = "code"
                         };
 
-                        Console.WriteLine("Open the following URL in a browser and paste the resulting code here:");
-                        Console.WriteLine(requestUrl.Build().ToString());
+                        _logger.LogInformation("Open the following URL in a browser and paste the resulting code here:");
+                        _logger.LogInformation(requestUrl.Build().ToString());
                         Console.Write("Enter authorization code: ");
                         // Allow providing the auth code via config/env/file to support non-interactive shells
                         var preProvided = _config["YouTube:OAuth:AuthCode"];
@@ -599,7 +596,7 @@ internal class YouTubeControlService : IDisposable
                         if (!string.IsNullOrWhiteSpace(preProvided))
                         {
                             code = preProvided.Trim();
-                            Console.WriteLine("(Using pre-provided auth code from config/env/file)");
+                            _logger.LogInformation("(Using pre-provided auth code from config/env/file)");
                         }
                         else
                         {
@@ -607,7 +604,7 @@ internal class YouTubeControlService : IDisposable
                         }
                         if (string.IsNullOrWhiteSpace(code))
                         {
-                            Console.WriteLine("No code provided, aborting auth.");
+                            _logger.LogWarning("No code provided, aborting auth.");
                             return false;
                         }
 
@@ -626,13 +623,13 @@ internal class YouTubeControlService : IDisposable
                 }
                 catch (Exception exAuth)
                 {
-                    Console.WriteLine($"Authentication flow failed: {exAuth.Message}");
-                    Console.WriteLine("Attempting to load existing token from persistent store (if any)...");
+                    _logger.LogWarning(exAuth, "Authentication flow failed: {Message}", exAuth.Message);
+                    _logger.LogInformation("Attempting to load existing token from persistent store (if any)...");
                     // Try to read an existing token directly from the persistent store
                     var existing = await dataStore.GetAsync<TokenResponse>("user");
                     if (existing != null && !string.IsNullOrWhiteSpace(existing.RefreshToken))
                     {
-                        Console.WriteLine("Found existing refresh token in persistent store; attempting to use it.");
+                        _logger.LogInformation("Found existing refresh token in persistent store; attempting to use it.");
                         // Build a flow and credential from the stored token
                         var flow = new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow(
                             new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow.Initializer
@@ -646,7 +643,7 @@ internal class YouTubeControlService : IDisposable
                     }
                     else
                     {
-                        Console.WriteLine("No usable token in persistent store.");
+                        _logger.LogWarning("No usable token in persistent store.");
                         return false;
                     }
                 }
@@ -660,7 +657,7 @@ internal class YouTubeControlService : IDisposable
                 var tokStr = await _credential!.GetAccessTokenForRequestAsync(null, cancellationToken);
                 if (string.IsNullOrEmpty(tokStr))
                 {
-                    Console.WriteLine("[YouTube] Failed to obtain access token.");
+                    _logger.LogError("[YouTube] Failed to obtain access token.");
                     return false;
                 }
                 _youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
@@ -680,14 +677,14 @@ internal class YouTubeControlService : IDisposable
                 // the access token expires.
                 if (trex.Message != null && trex.Message.Contains("unauthorized_client") && _credential?.Token?.AccessToken != null)
                 {
-                    Console.WriteLine("[YouTube] Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
+                    _logger.LogWarning("[YouTube] Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
                     var accessOnly = Google.Apis.Auth.OAuth2.GoogleCredential.FromAccessToken(_credential.Token.AccessToken);
                     _youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
                     {
                         HttpClientInitializer = accessOnly,
                         ApplicationName = "PrintStreamer"
                     });
-                    Console.WriteLine("[YouTube] Authentication successful (access_token only). Note: token will not be refreshed.");
+                    _logger.LogInformation("[YouTube] Authentication successful (access_token only). Note: token will not be refreshed.");
                     return true;
                 }
                 // otherwise rethrow to be handled by outer catch
@@ -696,8 +693,7 @@ internal class YouTubeControlService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Authentication failed: {ex.Message}");
-            Console.WriteLine(ex.ToString());
+            _logger.LogError(ex, "Authentication failed: {Message}", ex.Message);
             return false;
         }
     }
@@ -875,17 +871,17 @@ internal class YouTubeControlService : IDisposable
                         try
                         {
                             var token = await _credential.GetAccessTokenForRequestAsync(null, ct);
-                            Console.WriteLine($"Refreshed access token at {DateTime.UtcNow:O} (len={token?.Length})");
+                            _logger.LogInformation("Refreshed access token at {Time} (len={Len})", DateTime.UtcNow, token?.Length);
                         }
                         catch (Exception rex)
                         {
-                            Console.WriteLine($"Warning: failed to refresh access token: {rex.Message}");
+                            _logger.LogWarning(rex, "Warning: failed to refresh access token: {Message}", rex.Message);
                         }
                     }
                     catch (OperationCanceledException) { break; }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Token refresh loop error: {ex.Message}");
+                        _logger.LogError(ex, "Token refresh loop error: {Message}", ex.Message);
                         await Task.Delay(TimeSpan.FromSeconds(30), ct);
                     }
                 }
@@ -931,7 +927,7 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("Error: Not authenticated. Call AuthenticateAsync first.");
+            _logger.LogError("Error: Not authenticated. Call AuthenticateAsync first.");
             return (null, null, null, null);
         }
 
@@ -1021,10 +1017,10 @@ internal class YouTubeControlService : IDisposable
             }
             catch (Exception mx)
             {
-                Console.WriteLine($"Warning: failed to query Moonraker for print filename: {mx.Message}");
+                _logger.LogWarning(mx, "Warning: failed to query Moonraker for print filename: {Message}", mx.Message);
             }
 
-            Console.WriteLine($"Creating YouTube live broadcast: {title}");
+            _logger.LogInformation("Creating YouTube live broadcast: {Title}", title);
 
             // 1. Create LiveBroadcast
             var broadcast = new LiveBroadcast
@@ -1050,7 +1046,7 @@ internal class YouTubeControlService : IDisposable
             var broadcastRequest = _youtubeService.LiveBroadcasts.Insert(broadcast, "snippet,status,contentDetails");
             var createdBroadcast = await broadcastRequest.ExecuteAsync(cancellationToken);
 
-            Console.WriteLine($"Broadcast created with ID: {createdBroadcast.Id}");
+            _logger.LogInformation("Broadcast created with ID: {Id}", createdBroadcast.Id);
 
             // 2. Create LiveStream
             var stream = new LiveStream
@@ -1075,23 +1071,23 @@ internal class YouTubeControlService : IDisposable
             var streamRequest = _youtubeService.LiveStreams.Insert(stream, "snippet,cdn,contentDetails");
             var createdStream = await streamRequest.ExecuteAsync(cancellationToken);
 
-            Console.WriteLine($"Stream created with ID: {createdStream.Id}");
+            _logger.LogInformation("Stream created with ID: {Id}", createdStream.Id);
 
             // 3. Bind the stream to the broadcast
             var bindRequest = _youtubeService.LiveBroadcasts.Bind(createdBroadcast.Id, "id,contentDetails");
             bindRequest.StreamId = createdStream.Id;
             var boundBroadcast = await bindRequest.ExecuteAsync(cancellationToken);
 
-            Console.WriteLine("Stream bound to broadcast.");
+            _logger.LogInformation("Stream bound to broadcast.");
 
             // 4. Extract RTMP ingestion info
             var rtmpUrl = createdStream.Cdn.IngestionInfo.IngestionAddress;
             var streamKey = createdStream.Cdn.IngestionInfo.StreamName;
             var streamId = createdStream.Id;
 
-            Console.WriteLine($"RTMP URL: {rtmpUrl}");
-            Console.WriteLine($"Stream Key: {streamKey}");
-            Console.WriteLine($"Broadcast URL: https://www.youtube.com/watch?v={createdBroadcast.Id}");
+            _logger.LogInformation("RTMP URL: {Rtmp}", rtmpUrl);
+            _logger.LogInformation("Stream Key: {Key}", streamKey);
+            _logger.LogInformation("Broadcast URL: https://www.youtube.com/watch?v={BroadcastId}", createdBroadcast.Id);
 
             // Return streamId in tuple via broadcastId position isn't ideal; for now we return broadcastId and maintain streamId in the created stream object.
             // Caller can fetch streamId via createdStream.Id if needed. We'll also store last created stream id in a field if debugging required.
@@ -1100,30 +1096,29 @@ internal class YouTubeControlService : IDisposable
         }
         catch (Google.GoogleApiException gae)
         {
-            Console.WriteLine($"Failed to create live broadcast: {gae.Message}");
-            Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+            _logger.LogError(gae, "Failed to create live broadcast: {Message}", gae.Message);
+            _logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
             if (gae.Error != null)
             {
-                Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                _logger.LogError("Google API error message: {Msg}", gae.Error.Message);
                 if (gae.Error.Errors != null)
                 {
-                    Console.WriteLine("Details:");
+                    _logger.LogError("Details:");
                     foreach (var e in gae.Error.Errors)
                     {
-                        Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                        _logger.LogError(" - {Domain}/{Reason}: {Msg}", e.Domain, e.Reason, e.Message);
                     }
                 }
             }
             else
             {
-                Console.WriteLine(gae.ToString());
+                _logger.LogError(gae.ToString());
             }
             return (null, null, null, null);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to create live broadcast: {ex.Message}");
-            Console.WriteLine(ex.ToString());
+            _logger.LogError(ex, "Failed to create live broadcast: {Message}", ex.Message);
             return (null, null, null, null);
         }
     }
@@ -1135,13 +1130,13 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("Error: Not authenticated.");
+            _logger.LogError("Error: Not authenticated.");
             return false;
         }
 
         try
         {
-            Console.WriteLine($"Transitioning broadcast {broadcastId} to live...");
+            _logger.LogInformation("Transitioning broadcast {BroadcastId} to live...", broadcastId);
 
             var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
                 LiveBroadcastsResource.TransitionRequest.BroadcastStatusEnum.Live,
@@ -1150,37 +1145,36 @@ internal class YouTubeControlService : IDisposable
             );
 
             var result = await transitionRequest.ExecuteAsync(cancellationToken);
-            Console.WriteLine($"Broadcast is now live! Status: {result.Status.LifeCycleStatus}");
+            _logger.LogInformation("Broadcast is now live! Status: {Status}", result.Status.LifeCycleStatus);
             return true;
         }
         catch (Google.GoogleApiException gae)
         {
-            Console.WriteLine($"Failed to transition broadcast to live: {gae.Message}");
-            Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+            _logger.LogError(gae, "Failed to transition broadcast to live: {Message}", gae.Message);
+            _logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
             if (gae.Error != null)
             {
-                Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                _logger.LogError("Google API error message: {Msg}", gae.Error.Message);
                 if (gae.Error.Errors != null)
                 {
-                    Console.WriteLine("Details:");
+                    _logger.LogError("Details:");
                     foreach (var e in gae.Error.Errors)
                     {
-                        Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                        _logger.LogError(" - {Domain}/{Reason}: {Msg}", e.Domain, e.Reason, e.Message);
                     }
                 }
             }
             else
             {
-                Console.WriteLine(gae.ToString());
+                _logger.LogError(gae.ToString());
             }
             return false;
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Failed to transition broadcast to live: {ex.Message}");
-            Console.WriteLine(ex.ToString());
-            return false;
-        }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to transition broadcast to live: {Message}", ex.Message);
+                return false;
+            }
     }
 
     private string? _lastCreatedStreamId;
@@ -1192,14 +1186,14 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("YouTube service not initialized.");
+            _logger.LogWarning("YouTube service not initialized.");
             return false;
         }
 
         if (string.IsNullOrEmpty(streamId)) streamId = _lastCreatedStreamId;
         if (string.IsNullOrEmpty(streamId))
         {
-            Console.WriteLine("No streamId available to poll ingestion status.");
+            _logger.LogWarning("No streamId available to poll ingestion status.");
             return false;
         }
 
@@ -1236,11 +1230,11 @@ internal class YouTubeControlService : IDisposable
 
             if (result != null && string.Equals(result.Status?.StreamStatus, "active", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("Ingestion is active.");
+                _logger.LogInformation("Ingestion is active.");
                 return true;
             }
 
-            Console.WriteLine("Ingestion did not become active within timeout.");
+            _logger.LogWarning("Ingestion did not become active within timeout.");
             return false;
         }
 
@@ -1257,29 +1251,27 @@ internal class YouTubeControlService : IDisposable
                 {
                     var s = resp.Items[0];
                     var status = s.Status?.StreamStatus;
-                    Console.WriteLine($"Polled stream status: streamId={streamId} status={status}");
+                    _logger.LogInformation("Polled stream status: streamId={StreamId} status={Status}", streamId, status);
                     // Log the full LiveStream object for diagnosis
                     try
                     {
-                        Console.WriteLine("LiveStream poll response:");
-                        Console.WriteLine(JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
+                        _logger.LogDebug("LiveStream poll response:\n{Payload}", JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
                     }
                     catch { }
                     if (string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
                     {
-                        Console.WriteLine("Ingestion is active.");
+                        _logger.LogInformation("Ingestion is active.");
                         return true;
                     }
                 }
                 await Task.Delay(2000, cancellationToken);
             }
-            Console.WriteLine("Ingestion did not become active within timeout.");
+            _logger.LogWarning("Ingestion did not become active within timeout.");
             return false;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error while polling ingestion status: {ex.Message}");
-            Console.WriteLine(ex.ToString());
+            _logger.LogError(ex, "Error while polling ingestion status: {Message}", ex.Message);
             return false;
         }
     }
@@ -1291,13 +1283,13 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("Error: Not authenticated.");
+            _logger.LogError("Error: Not authenticated.");
             return false;
         }
 
         try
         {
-            Console.WriteLine($"Ending broadcast {broadcastId}...");
+            _logger.LogInformation("Ending broadcast {BroadcastId}...", broadcastId);
 
             var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
                 LiveBroadcastsResource.TransitionRequest.BroadcastStatusEnum.Complete,
@@ -1306,35 +1298,34 @@ internal class YouTubeControlService : IDisposable
             );
 
             var result = await transitionRequest.ExecuteAsync(cancellationToken);
-            Console.WriteLine($"Broadcast ended. Status: {result.Status.LifeCycleStatus}");
+            _logger.LogInformation("Broadcast ended. Status: {Status}", result.Status.LifeCycleStatus);
             return true;
         }
         catch (Google.GoogleApiException gae)
         {
-            Console.WriteLine($"Failed to end broadcast: {gae.Message}");
-            Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+            _logger.LogError(gae, "Failed to end broadcast: {Message}", gae.Message);
+            _logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
             if (gae.Error != null)
             {
-                Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                _logger.LogError("Google API error message: {Msg}", gae.Error.Message);
                 if (gae.Error.Errors != null)
                 {
-                    Console.WriteLine("Details:");
+                    _logger.LogError("Details:");
                     foreach (var e in gae.Error.Errors)
                     {
-                        Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                        _logger.LogError(" - {Domain}/{Reason}: {Msg}", e.Domain, e.Reason, e.Message);
                     }
                 }
             }
             else
             {
-                Console.WriteLine(gae.ToString());
+                _logger.LogError(gae.ToString());
             }
             return false;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to end broadcast: {ex.Message}");
-            Console.WriteLine(ex.ToString());
+            _logger.LogError(ex, "Failed to end broadcast: {Message}", ex.Message);
             return false;
         }
     }
@@ -1346,7 +1337,7 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("Error: Not authenticated.");
+            _logger.LogError("Error: Not authenticated.");
             return false;
         }
 
@@ -1354,13 +1345,13 @@ internal class YouTubeControlService : IDisposable
         var validStatuses = new[] { "public", "unlisted", "private" };
         if (!validStatuses.Contains(privacyStatus.ToLowerInvariant()))
         {
-            Console.WriteLine($"Invalid privacy status: {privacyStatus}. Must be one of: {string.Join(", ", validStatuses)}");
+            _logger.LogWarning("Invalid privacy status: {Privacy}. Must be one of: {Valid}", privacyStatus, string.Join(", ", validStatuses));
             return false;
         }
 
         try
         {
-            Console.WriteLine($"Updating broadcast {broadcastId} privacy to {privacyStatus}...");
+            _logger.LogInformation("Updating broadcast {BroadcastId} privacy to {Privacy}...", broadcastId, privacyStatus);
 
             // First, fetch the current broadcast to get all required fields
             var listRequest = _youtubeService.LiveBroadcasts.List("id,snippet,status,contentDetails");
@@ -1369,7 +1360,7 @@ internal class YouTubeControlService : IDisposable
 
             if (listResponse.Items == null || listResponse.Items.Count == 0)
             {
-                Console.WriteLine($"Broadcast {broadcastId} not found.");
+                _logger.LogWarning("Broadcast {BroadcastId} not found.", broadcastId);
                 return false;
             }
 
@@ -1382,35 +1373,34 @@ internal class YouTubeControlService : IDisposable
             var updateRequest = _youtubeService.LiveBroadcasts.Update(broadcast, "id,snippet,status,contentDetails");
             var result = await updateRequest.ExecuteAsync(cancellationToken);
 
-            Console.WriteLine($"Broadcast privacy updated to {result.Status.PrivacyStatus}");
+            _logger.LogInformation("Broadcast privacy updated to {Privacy}", result.Status.PrivacyStatus);
             return true;
         }
         catch (Google.GoogleApiException gae)
         {
-            Console.WriteLine($"Failed to update broadcast privacy: {gae.Message}");
-            Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+            _logger.LogError(gae, "Failed to update broadcast privacy: {Message}", gae.Message);
+            _logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
             if (gae.Error != null)
             {
-                Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                _logger.LogError("Google API error message: {Msg}", gae.Error.Message);
                 if (gae.Error.Errors != null)
                 {
-                    Console.WriteLine("Details:");
+                    _logger.LogError("Details:");
                     foreach (var e in gae.Error.Errors)
                     {
-                        Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                        _logger.LogError(" - {Domain}/{Reason}: {Msg}", e.Domain, e.Reason, e.Message);
                     }
                 }
             }
             else
             {
-                Console.WriteLine(gae.ToString());
+                _logger.LogError(gae.ToString());
             }
             return false;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to update broadcast privacy: {ex.Message}");
-            Console.WriteLine(ex.ToString());
+            _logger.LogError(ex, "Failed to update broadcast privacy: {Message}", ex.Message);
             return false;
         }
     }
@@ -1422,7 +1412,7 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("Error: Not authenticated.");
+            _logger.LogError("Error: Not authenticated.");
             return null;
         }
 
@@ -1434,7 +1424,7 @@ internal class YouTubeControlService : IDisposable
 
             if (listResponse.Items == null || listResponse.Items.Count == 0)
             {
-                Console.WriteLine($"Broadcast {broadcastId} not found.");
+                _logger.LogWarning("Broadcast {BroadcastId} not found.", broadcastId);
                 return null;
             }
 
@@ -1442,7 +1432,7 @@ internal class YouTubeControlService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to get broadcast privacy: {ex.Message}");
+            _logger.LogError(ex, "Failed to get broadcast privacy: {Message}", ex.Message);
             return null;
         }
     }
@@ -1454,7 +1444,7 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("Error: Not authenticated.");
+            _logger.LogError("Error: Not authenticated.");
             return false;
         }
 
@@ -1462,12 +1452,12 @@ internal class YouTubeControlService : IDisposable
         maxWait ??= TimeSpan.FromSeconds(180);
 
         // First wait for ingestion to become active (polling)
-        Console.WriteLine($"Waiting up to {maxWait.Value.TotalSeconds}s for ingestion to become active...");
+    _logger.LogInformation("Waiting up to {Seconds}s for ingestion to become active...", maxWait.Value.TotalSeconds);
         var ingestionOk = await WaitForIngestionAsync(null, maxWait, cancellationToken);
 
         if (!ingestionOk)
         {
-            Console.WriteLine("Ingestion did not report active status within timeout. Will attempt transition anyway but will retry on transient errors.");
+            _logger.LogWarning("Ingestion did not report active status within timeout. Will attempt transition anyway but will retry on transient errors.");
         }
 
         // Attempt to transition with retries
@@ -1477,7 +1467,7 @@ internal class YouTubeControlService : IDisposable
             attempt++;
             try
             {
-                Console.WriteLine($"Attempt {attempt} to transition broadcast {broadcastId} to live...");
+                _logger.LogInformation("Attempt {Attempt} to transition broadcast {BroadcastId} to live...", attempt, broadcastId);
                 
                 // Check current broadcast lifecycle status first to avoid redundant transitions
                 LiveBroadcast? current = null;
@@ -1504,17 +1494,17 @@ internal class YouTubeControlService : IDisposable
                     current = resp.Items?.FirstOrDefault();
                 }
 
-                if (current != null)
-                {
-                    var life = current.Status?.LifeCycleStatus;
-                    Console.WriteLine($"Current broadcast lifecycle: {life}");
-                    if (string.Equals(life, "live", StringComparison.OrdinalIgnoreCase) || 
-                        string.Equals(life, "liveStarting", StringComparison.OrdinalIgnoreCase))
+                    if (current != null)
                     {
-                        Console.WriteLine("Broadcast already live/liveStarting; skipping transition.");
-                        return true;
+                        var life = current.Status?.LifeCycleStatus;
+                        _logger.LogInformation("Current broadcast lifecycle: {Life}", life);
+                        if (string.Equals(life, "live", StringComparison.OrdinalIgnoreCase) || 
+                            string.Equals(life, "liveStarting", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogInformation("Broadcast already live/liveStarting; skipping transition.");
+                            return true;
+                        }
                     }
-                }
 
                 // Execute transition
                 var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
@@ -1537,24 +1527,24 @@ internal class YouTubeControlService : IDisposable
                     result = await transitionRequest.ExecuteAsync(cancellationToken);
                 }
 
-                Console.WriteLine($"Transition succeeded: {result.Status.LifeCycleStatus}");
+                _logger.LogInformation("Transition succeeded: {Status}", result.Status.LifeCycleStatus);
                 return true;
             }
             catch (Google.GoogleApiException gae)
             {
-                Console.WriteLine($"Transition attempt {attempt} failed: {gae.Message}");
-                Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+                _logger.LogWarning(gae, "Transition attempt {Attempt} failed: {Message}", attempt, gae.Message);
+                _logger.LogWarning("HTTP Status: {Status}", gae.HttpStatusCode);
 
                 // Log API error details if present
                 if (gae.Error != null)
                 {
-                    Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                    _logger.LogWarning("Google API error message: {Msg}", gae.Error.Message);
                     if (gae.Error.Errors != null)
                     {
-                        Console.WriteLine("Details:");
+                        _logger.LogWarning("Details:");
                         foreach (var e in gae.Error.Errors)
                         {
-                            Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                            _logger.LogWarning(" - {Domain}/{Reason}: {Msg}", e.Domain, e.Reason, e.Message);
                         }
 
                         // If this error is a redundant or invalid transition, consider it success
@@ -1563,7 +1553,7 @@ internal class YouTubeControlService : IDisposable
                             if (string.Equals(e.Reason, "redundantTransition", StringComparison.OrdinalIgnoreCase) || 
                                 string.Equals(e.Reason, "invalidTransition", StringComparison.OrdinalIgnoreCase))
                             {
-                                Console.WriteLine($"Received {e.Reason}; treating transition as success.");
+                                _logger.LogInformation("Received {Reason}; treating transition as success.", e.Reason);
                                 return true;
                             }
                         }
@@ -1586,18 +1576,18 @@ internal class YouTubeControlService : IDisposable
                         backoff = TimeSpan.FromSeconds(2 * attempt);
                     }
 
-                    Console.WriteLine($"Retrying in {backoff.TotalSeconds}s...");
+                    _logger.LogInformation("Retrying in {Seconds}s...", backoff.TotalSeconds);
                     await Task.Delay(backoff, cancellationToken);
                 }
                 else
                 {
-                    Console.WriteLine("Max transition attempts reached; giving up on transitioning the broadcast.");
-                    Console.WriteLine("Note: the ffmpeg media push will continue, and viewers may still see the stream depending on YouTube settings. You can manually 'Go Live' or transition the broadcast in YouTube Studio if needed.");
+                    _logger.LogWarning("Max transition attempts reached; giving up on transitioning the broadcast.");
+                    _logger.LogInformation("Note: the ffmpeg media push will continue, and viewers may still see the stream depending on YouTube settings. You can manually 'Go Live' or transition the broadcast in YouTube Studio if needed.");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Unexpected error trying to transition: {ex}");
+                _logger.LogError(ex, "Unexpected error trying to transition: {Message}", ex.Message);
                 try { await LogBroadcastAndStreamResourcesAsync(broadcastId, null, CancellationToken.None); } catch { }
                 return false;
             }
@@ -1624,7 +1614,7 @@ internal class YouTubeControlService : IDisposable
     {
         if (_youtubeService == null)
         {
-            Console.WriteLine("YouTube service not initialized.");
+            _logger.LogWarning("YouTube service not initialized.");
             return;
         }
 
@@ -1635,8 +1625,8 @@ internal class YouTubeControlService : IDisposable
                 var bReq = _youtubeService.LiveBroadcasts.List("id,snippet,status,contentDetails");
                 bReq.Id = broadcastId;
                 var bResp = await bReq.ExecuteAsync(cancellationToken);
-                Console.WriteLine("LiveBroadcast resource:");
-                Console.WriteLine(JsonSerializer.Serialize(bResp, new JsonSerializerOptions { WriteIndented = true }));
+                _logger.LogInformation("LiveBroadcast resource:");
+                _logger.LogDebug(JsonSerializer.Serialize(bResp, new JsonSerializerOptions { WriteIndented = true }));
             }
 
             if (string.IsNullOrEmpty(streamId)) streamId = _lastCreatedStreamId;
@@ -1645,14 +1635,13 @@ internal class YouTubeControlService : IDisposable
                 var sReq = _youtubeService.LiveStreams.List("id,snippet,cdn,contentDetails,status");
                 sReq.Id = streamId;
                 var sResp = await sReq.ExecuteAsync(cancellationToken);
-                Console.WriteLine("LiveStream resource:");
-                Console.WriteLine(JsonSerializer.Serialize(sResp, new JsonSerializerOptions { WriteIndented = true }));
+                _logger.LogInformation("LiveStream resource:");
+                _logger.LogDebug(JsonSerializer.Serialize(sResp, new JsonSerializerOptions { WriteIndented = true }));
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error logging broadcast/stream resources: {ex.Message}");
-            Console.WriteLine(ex.ToString());
+            _logger.LogError(ex, "Error logging broadcast/stream resources: {Message}", ex.Message);
         }
     }
 }
