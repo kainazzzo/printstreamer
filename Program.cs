@@ -216,6 +216,8 @@ TimelapseManager? timelapseManager = null;
 
 var app = webBuilder.Build();
 
+ProxyUtil.Logger = app.Services.GetRequiredService<ILogger<Program>>();
+
 // Wire up audio track completion callback to orchestrator
 {
 	var orchestrator = app.Services.GetRequiredService<PrintStreamer.Services.StreamOrchestrator>();
@@ -1414,6 +1416,8 @@ if (serveEnabled)
 			audio.Enqueue(names.ToArray());
 			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
 			logger.LogInformation("Queued {Count} track(s): {Names}", names.Count, string.Join(", ", names));
+			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
+			logger.LogInformation("Queued {Count} track(s): {Names}", names.Count, string.Join(", ", names));
 			return Results.Json(new { success = true, queued = names.Count });
 		}
 		catch (Exception ex)
@@ -1582,7 +1586,7 @@ if (serveEnabled)
 		catch (Exception ex)
 		{
 			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
-			logger.LogError(ex, "Client stream error: {Message}", ex.Message);
+			logger.LogError(ex, "Client stream error");
 		}
 	});
 
@@ -1608,13 +1612,14 @@ if (serveEnabled)
 			return Results.Json(new { success = true, message = "Cache cleared" });
 		});
 
-    startupLogger.LogInformation("Starting proxy server on http://0.0.0.0:8080/stream");
+    app.Logger.LogInformation("Starting proxy server on http://0.0.0.0:8080/stream");
 
     // Handle graceful shutdown - this will run regardless of mode since the host is started below
     var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
     lifetime.ApplicationStopping.Register(() =>
     {
-        startupLogger.LogInformation("Shutting down...");
+        var logger = app.Services.GetRequiredService<ILogger<Program>>();
+        logger.LogInformation("Shutting down...");
         streamCts?.Cancel();
         timelapseManager?.Dispose();
     });
@@ -1624,7 +1629,8 @@ if (serveEnabled)
 	{
 		if (config.GetValue<bool?>("Stream:Local:Enabled") ?? false)
 		{
-			startupLogger.LogInformation("Web server ready, starting local preview stream...");
+			var logger = app.Services.GetRequiredService<ILogger<Program>>();
+			logger.LogInformation("Web server ready, starting local preview stream...");
 			// Start a local stream on startup for preview
 			// Ensure audio broadcaster is constructed so the API audio endpoint is available
 			try
@@ -1642,13 +1648,13 @@ if (serveEnabled)
 					var streamService = app.Services.GetRequiredService<StreamService>();
 					if (!streamService.IsStreaming)
 					{
-						startupLogger.LogInformation("Starting local preview stream");
+						logger.LogInformation("Starting local preview stream");
 						await streamService.StartStreamAsync(null, null, CancellationToken.None);
 					}
 				}
 				catch (Exception ex)
 				{
-					startupLogger.LogError(ex, "Failed to start local preview: {Message}", ex.Message);
+					logger.LogError(ex, "Failed to start local preview");
 				}
 			});
 		}
@@ -1731,6 +1737,7 @@ static void PrintHelp()
 // Proxy utilities must be declared before top-level statements
 internal static class ProxyUtil
 {
+	internal static ILogger? Logger;
 	internal static readonly HttpClient Client = new HttpClient
 	{
 		Timeout = TimeSpan.FromSeconds(60)
@@ -1749,7 +1756,7 @@ internal static class ProxyUtil
 			// Log Moonraker API calls for debugging
 			if (path.StartsWith("printer/") || path.StartsWith("api/") || path.StartsWith("server/") || path.StartsWith("machine/") || path.StartsWith("access/"))
 			{
-				Console.WriteLine($"[Moonraker Proxy] {ctx.Request.Method} {targetUrl}");
+				Logger?.LogDebug("Moonraker Proxy {Method} {TargetUrl}", ctx.Request.Method, targetUrl);
 			}
 
 			using var forward = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), targetUrl);
@@ -1781,7 +1788,7 @@ internal static class ProxyUtil
 			// Log errors for debugging  
 			if ((int)response.StatusCode >= 400)
 			{
-				Console.WriteLine($"[Proxy] {response.StatusCode} from {targetUrl}");
+				Logger?.LogWarning("Proxy {StatusCode} from {TargetUrl}", response.StatusCode, targetUrl);
 			}
 			
 			foreach (var header in response.Headers)
@@ -1825,7 +1832,7 @@ internal static class ProxyUtil
 					// Log truncated body for diagnostics (redact tokens)
 					var logBody = body?.Replace(Environment.NewLine, " ") ?? string.Empty;
 					if (logBody.Length > 1000) logBody = logBody.Substring(0, 1000) + "...";
-					Console.WriteLine($"[Proxy] Response {response.StatusCode} ({contentType};len={contentLength}) from {targetUrl}: {logBody}");
+					Logger?.LogDebug("Proxy Response {StatusCode} ({ContentType};len={ContentLength}) from {TargetUrl}: {Body}", response.StatusCode, contentType, contentLength, targetUrl, logBody);
 
 					// If HTML 200, inject WS shim before writing
 					if ((int)response.StatusCode == 200 && !string.IsNullOrWhiteSpace(contentType) && contentType.IndexOf("text/html", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -1953,7 +1960,7 @@ try{
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"[Proxy] Error proxying {path}: {ex.Message}");
+			Logger?.LogError(ex, "Error proxying {Path}", path);
 			if (!ctx.Response.HasStarted)
 			{
 				ctx.Response.StatusCode = 502;
@@ -1981,7 +1988,7 @@ try{
 		catch (OperationCanceledException) { }
 		catch (Exception ex)
 		{
-			Console.WriteLine($"[WS Proxy] Pump error: {ex.Message}");
+			Logger?.LogError(ex, "WS Proxy Pump error");
 		}
 	}
 }
