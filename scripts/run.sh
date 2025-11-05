@@ -79,6 +79,15 @@ if [[ ! -f "$TOKEN_FILE_HOST" ]]; then
   echo '{}' > "$TOKEN_FILE_HOST"
 fi
 echo "  Token file  : ${TOKEN_FILE_HOST} -> /app/tokens/youtube_token.json (+compat link at /app/youtube_token.json)"
+
+# Ensure a host client secrets file exists and bind it into the container so OAuth client secrets persist
+mkdir -p "$HOME/.printstreamer"
+CLIENT_SECRET_FILE_HOST="$HOME/.printstreamer/client_secret.json"
+if [[ ! -f "$CLIENT_SECRET_FILE_HOST" ]]; then
+  echo '{}' > "$CLIENT_SECRET_FILE_HOST"
+fi
+echo "  Client secrets file  : ${CLIENT_SECRET_FILE_HOST} -> /app/tokens/client_secret.json"
+
 # Only detach if not running interactively
 DOCKER_DETACH_FLAG=""
 if [[ "${DOCKER_INTERACTIVE_FLAGS}" != *"-i"* && "${DOCKER_INTERACTIVE_FLAGS}" != *"-t"* ]]; then
@@ -93,8 +102,8 @@ DOCKER_CMD=(docker run ${DOCKER_DETACH_FLAG} ${DOCKER_INTERACTIVE_FLAGS} \
   -e "ASPNETCORE_ENVIRONMENT=Home" \
   -v "$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro" \
   -v "${HOST_DATA_DIR}:/usr/local/share/data" \
-  -v "$REPO_ROOT/tokens:/app/tokens" \
   -v "${TOKEN_FILE_HOST}:/app/youtube_token.json" \
+  -v "${CLIENT_SECRET_FILE_HOST}:/app/tokens/client_secret.json" \
   "${IMAGE_NAME}")
 
 # Print the command in a shell-quoted form so it's obvious what will run

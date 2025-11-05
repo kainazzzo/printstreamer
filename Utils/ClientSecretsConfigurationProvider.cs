@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System.IO;
 using System.Text.Json;
 
@@ -32,19 +33,28 @@ namespace PrintStreamer.Utils
     public class ClientSecretsConfigurationProvider : ConfigurationProvider
     {
         private readonly ClientSecretsConfigurationSource _source;
+        private readonly ILogger? _logger;
 
         public ClientSecretsConfigurationProvider(ClientSecretsConfigurationSource source)
         {
             _source = source;
+            _logger = source.Logger;
         }
 
         public override void Load()
         {
             var path = _source.FilePath;
-            if (string.IsNullOrWhiteSpace(path)) return;
+            _logger?.LogInformation("ClientSecretsProvider Load() called with path: {Path}", path);
+            
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                _logger?.LogWarning("ClientSecretsProvider: FilePath is null or empty");
+                return;
+            }
 
             if (!File.Exists(path))
             {
+                _logger?.LogWarning("ClientSecretsProvider: File does not exist at {Path}", path);
                 if (_source.Optional) return;
                 throw new FileNotFoundException("Client secrets file not found", path);
             }
@@ -52,6 +62,14 @@ namespace PrintStreamer.Utils
             try
             {
                 var json = File.ReadAllText(path);
+                _logger?.LogInformation("ClientSecretsProvider: Read {Length} bytes from {Path}", json?.Length ?? 0, path);
+                
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    _logger?.LogWarning("ClientSecretsProvider: File at {Path} is empty", path);
+                    return;
+                }
+                
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
@@ -59,23 +77,39 @@ namespace PrintStreamer.Utils
                 JsonElement creds;
                 if (root.TryGetProperty("installed", out creds) || root.TryGetProperty("web", out creds))
                 {
+                    _logger?.LogInformation("ClientSecretsProvider: Found 'installed' or 'web' property");
+                    
                     if (creds.TryGetProperty("client_id", out var cid) && cid.ValueKind == JsonValueKind.String)
                     {
-                        Data["YouTube:OAuth:ClientId"] = cid.GetString() ?? string.Empty;
+                        var clientId = cid.GetString() ?? string.Empty;
+                        Data["YouTube:OAuth:ClientId"] = clientId;
+                        _logger?.LogInformation("ClientSecretsProvider: Set ClientId (length={Length})", clientId.Length);
                     }
 
                     if (creds.TryGetProperty("client_secret", out var csec) && csec.ValueKind == JsonValueKind.String)
                     {
-                        Data["YouTube:OAuth:ClientSecret"] = csec.GetString() ?? string.Empty;
+                        var clientSecret = csec.GetString() ?? string.Empty;
+                        Data["YouTube:OAuth:ClientSecret"] = clientSecret;
+                        _logger?.LogInformation("ClientSecretsProvider: Set ClientSecret (length={Length})", clientSecret.Length);
                     }
                 }
                 else
                 {
+                    _logger?.LogInformation("ClientSecretsProvider: No 'installed' or 'web' property, trying direct properties");
+                    
                     // Fallback: try to read direct properties
                     if (root.TryGetProperty("client_id", out var cid2) && cid2.ValueKind == JsonValueKind.String)
-                        Data["YouTube:OAuth:ClientId"] = cid2.GetString() ?? string.Empty;
+                    {
+                        var clientId = cid2.GetString() ?? string.Empty;
+                        Data["YouTube:OAuth:ClientId"] = clientId;
+                        _logger?.LogInformation("ClientSecretsProvider: Set ClientId directly (length={Length})", clientId.Length);
+                    }
                     if (root.TryGetProperty("client_secret", out var csec2) && csec2.ValueKind == JsonValueKind.String)
-                        Data["YouTube:OAuth:ClientSecret"] = csec2.GetString() ?? string.Empty;
+                    {
+                        var clientSecret = csec2.GetString() ?? string.Empty;
+                        Data["YouTube:OAuth:ClientSecret"] = clientSecret;
+                        _logger?.LogInformation("ClientSecretsProvider: Set ClientSecret directly (length={Length})", clientSecret.Length);
+                    }
                 }
 
                 // Log loaded values (do not log secrets in full)
