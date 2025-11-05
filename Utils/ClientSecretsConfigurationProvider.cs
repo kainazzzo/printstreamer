@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using System.IO;
 using System.Text.Json;
 
@@ -13,11 +14,13 @@ namespace PrintStreamer.Utils
     {
         public string FilePath { get; }
         public bool Optional { get; }
+        public ILogger? Logger { get; }
 
-        public ClientSecretsConfigurationSource(string filePath, bool optional = true)
+        public ClientSecretsConfigurationSource(string filePath, bool optional = true, ILogger? logger = null)
         {
             FilePath = filePath;
             Optional = optional;
+            Logger = logger;
         }
 
         public IConfigurationProvider Build(IConfigurationBuilder builder)
@@ -80,17 +83,18 @@ namespace PrintStreamer.Utils
                 {
                     var gotId = Data.ContainsKey("YouTube:OAuth:ClientId") && !string.IsNullOrEmpty(Data["YouTube:OAuth:ClientId"]);
                     var gotSecret = Data.ContainsKey("YouTube:OAuth:ClientSecret") && !string.IsNullOrEmpty(Data["YouTube:OAuth:ClientSecret"]);
-                    Console.WriteLine($"[ClientSecretsProvider] Loaded client secrets from '{path}': ClientId={(gotId ? "present" : "missing")}, ClientSecret={(gotSecret ? "present" : "missing")}");
+                    _source.Logger?.LogInformation("Loaded client secrets from '{Path}': ClientId={ClientIdPresent}, ClientSecret={ClientSecretPresent}", 
+                        path, gotId ? "present" : "missing", gotSecret ? "present" : "missing");
                 }
                 catch { }
             }
             catch (JsonException jex)
             {
-                Console.WriteLine($"[ClientSecretsProvider] Failed to parse client secrets file '{path}': {jex.Message}");
+                _source.Logger?.LogWarning(jex, "Failed to parse client secrets file '{Path}': {Message}", path, jex.Message);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ClientSecretsProvider] Error reading client secrets file '{path}': {ex.Message}");
+                _source.Logger?.LogWarning(ex, "Error reading client secrets file '{Path}': {Message}", path, ex.Message);
             }
         }
     }

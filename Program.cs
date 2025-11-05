@@ -57,7 +57,7 @@ try
 		var fullPath = Path.Combine(Directory.GetCurrentDirectory(), csPath);
 		startupLogger.LogInformation("Checking for client secrets file at: {Path}", fullPath);
 	// Register our custom provider (optional: true so missing file won't crash)
-	((IConfigurationBuilder)webBuilder.Configuration).Add(new PrintStreamer.Utils.ClientSecretsConfigurationSource(fullPath, optional: true));
+	((IConfigurationBuilder)webBuilder.Configuration).Add(new PrintStreamer.Utils.ClientSecretsConfigurationSource(fullPath, optional: true, logger: startupLogger));
 	}
 }
 catch (Exception ex)
@@ -414,10 +414,10 @@ if (serveEnabled)
 		await ProxyUtil.ProxyRequest(ctx, target, path ?? "");
 	});
 
-	app.MapGet("/proxy/fluidd/{**path}", async (HttpContext ctx, string? path) =>
+	app.MapGet("/proxy/fluidd/{**path}", async (HttpContext ctx, string? path, ILogger<Program> logger) =>
 	{
 		var target = config.GetValue<string>("PrinterUI:FluiddUrl");
-		Console.WriteLine($"[Proxy] GET /proxy/fluidd/{path ?? ""} -> target={target ?? "NOT CONFIGURED"}");
+		logger.LogDebug("GET /proxy/fluidd/{Path} -> target={Target}", path ?? "", target ?? "NOT CONFIGURED");
 		if (string.IsNullOrWhiteSpace(target))
 		{
 			ctx.Response.StatusCode = 404;
@@ -428,27 +428,27 @@ if (serveEnabled)
 	});
 
 	// Also handle root without trailing catch-all
-	app.MapGet("/proxy/mainsail", async (HttpContext ctx) =>
+	app.MapGet("/proxy/mainsail", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var target = config.GetValue<string>("PrinterUI:MainsailUrl");
 		if (string.IsNullOrWhiteSpace(target)) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("Mainsail URL not configured"); return; }
-		Console.WriteLine($"[Proxy] GET /proxy/mainsail -> {target}");
+		logger.LogDebug("GET /proxy/mainsail -> {Target}", target);
 		await ProxyUtil.ProxyRequest(ctx, target, "");
 	});
 
-	app.MapGet("/proxy/fluidd", async (HttpContext ctx) =>
+	app.MapGet("/proxy/fluidd", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var target = config.GetValue<string>("PrinterUI:FluiddUrl");
 		if (string.IsNullOrWhiteSpace(target)) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("Fluidd URL not configured"); return; }
-		Console.WriteLine($"[Proxy] GET /proxy/fluidd -> {target}");
+		logger.LogDebug("GET /proxy/fluidd -> {Target}", target);
 		await ProxyUtil.ProxyRequest(ctx, target, "");
 	});
 
 	// Support absolute-root asset paths emitted by the apps (e.g., /mainsail/assets/...)
-	app.MapMethods("/mainsail/{**path}", new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, async (HttpContext ctx, string? path) =>
+	app.MapMethods("/mainsail/{**path}", new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, async (HttpContext ctx, string? path, ILogger<Program> logger) =>
 	{
 		var target = config.GetValue<string>("PrinterUI:MainsailUrl");
-		Console.WriteLine($"[Proxy] {ctx.Request.Method} /mainsail/{path ?? ""} -> target={target ?? "NOT CONFIGURED"}");
+		logger.LogDebug("{Method} /mainsail/{Path} -> target={Target}", ctx.Request.Method, path ?? "", target ?? "NOT CONFIGURED");
 		if (string.IsNullOrWhiteSpace(target)) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("Mainsail URL not configured"); return; }
 		await ProxyUtil.ProxyRequest(ctx, target, path ?? "");
 	});
@@ -487,7 +487,7 @@ if (serveEnabled)
 		});
 
 		// WebSocket tunnel for Moonraker at /websocket
-		app.Map("/websocket", async (HttpContext ctx) =>
+		app.Map("/websocket", async (HttpContext ctx, ILogger<Program> logger) =>
 		{
 			if (!ctx.WebSockets.IsWebSocketRequest)
 			{
@@ -536,14 +536,14 @@ if (serveEnabled)
 				}
 			}
 
-			Console.WriteLine($"[WS Proxy] Connecting upstream {upstreamUri} (Origin={ctx.Request.Headers["Origin"]})");
+			logger.LogDebug("Connecting upstream {UpstreamUri} (Origin={Origin})", upstreamUri, ctx.Request.Headers["Origin"]);
 			try
 			{
 				await upstream.ConnectAsync(upstreamUri, ctx.RequestAborted);
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"[WS Proxy] Upstream connect failed: {ex.Message} [{upstreamUri}]");
+				logger.LogWarning(ex, "Upstream connect failed: {Message} [{UpstreamUri}]", ex.Message, upstreamUri);
 				// Do NOT accept the downstream socket if upstream failed; return 502 instead
 				ctx.Response.StatusCode = 502;
 				await ctx.Response.WriteAsync("Upstream websocket connect failed");
@@ -551,7 +551,7 @@ if (serveEnabled)
 			}
 
 			// Only accept downstream after upstream is connected to avoid starting the response prematurely
-			Console.WriteLine("[WS Proxy] Upstream connected, accepting downstream...");
+			logger.LogDebug("Upstream connected, accepting downstream...");
 			using var downstream = await ctx.WebSockets.AcceptWebSocketAsync();
 
 			var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
@@ -559,7 +559,7 @@ if (serveEnabled)
 			var pump2 = ProxyUtil.PumpWebSocket(upstream, downstream, cts.Token);
 			await Task.WhenAny(pump1, pump2);
 			cts.Cancel();
-			Console.WriteLine("[WS Proxy] Tunnel closed");
+			logger.LogDebug("Tunnel closed");
 		});
 	}
 
@@ -572,7 +572,7 @@ if (serveEnabled)
 		return Results.Json(new { autoBroadcastEnabled, autoUploadEnabled, endStreamAfterPrintEnabled });
 	});
 
-	app.MapPost("/api/config/auto-broadcast", (HttpContext ctx) =>
+	app.MapPost("/api/config/auto-broadcast", (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var raw = ctx.Request.Query["enabled"].ToString();
 		bool enabled;
@@ -582,11 +582,11 @@ if (serveEnabled)
 			enabled = raw == "1";
 		}
 		config["YouTube:LiveBroadcast:Enabled"] = enabled.ToString();
-		Console.WriteLine($"Auto-broadcast: {(enabled ? "enabled" : "disabled")}");
+		logger.LogInformation("Auto-broadcast: {State}", enabled ? "enabled" : "disabled");
 		return Results.Json(new { success = true, enabled });
 	});
 
-	app.MapPost("/api/config/auto-upload", (HttpContext ctx) =>
+	app.MapPost("/api/config/auto-upload", (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var raw = ctx.Request.Query["enabled"].ToString();
 		bool enabled;
@@ -595,11 +595,11 @@ if (serveEnabled)
 			enabled = raw == "1";
 		}
 		config["YouTube:TimelapseUpload:Enabled"] = enabled.ToString();
-		Console.WriteLine($"Auto-upload timelapses: {(enabled ? "enabled" : "disabled")}");
+		logger.LogInformation("Auto-upload timelapses: {State}", enabled ? "enabled" : "disabled");
 		return Results.Json(new { success = true, enabled });
 	});
 
-	app.MapPost("/api/config/end-stream-after-print", (HttpContext ctx) =>
+	app.MapPost("/api/config/end-stream-after-print", (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		var raw = ctx.Request.Query["enabled"].ToString();
 		bool enabled;
@@ -608,7 +608,7 @@ if (serveEnabled)
 			enabled = raw == "1";
 		}
 		config["YouTube:LiveBroadcast:EndStreamAfterPrint"] = enabled.ToString();
-		Console.WriteLine($"End stream after print: {(enabled ? "enabled" : "disabled")}");
+		logger.LogInformation("End stream after print: {State}", enabled ? "enabled" : "disabled");
 		return Results.Json(new { success = true, enabled });
 	});
 
@@ -880,7 +880,7 @@ if (serveEnabled)
 		}
 	});
 
-	app.MapPost("/api/timelapses/{name}/generate", async (string name, HttpContext ctx) =>
+	app.MapPost("/api/timelapses/{name}/generate", async (string name, HttpContext ctx, ILogger<Program> logger) =>
 	{
 		try
 		{
@@ -900,7 +900,7 @@ if (serveEnabled)
 			var folderName = Path.GetFileName(timelapseDir);
 			var videoPath = Path.Combine(timelapseDir, $"{folderName}.mp4");
 			
-			Console.WriteLine($"[API] Generating video from {frameFiles.Length} frames: {videoPath}");
+			logger.LogInformation("Generating video from {FrameCount} frames: {VideoPath}", frameFiles.Length, videoPath);
 			
 			// Use ffmpeg to create video
 			var arguments = $"-y -framerate 30 -start_number 0 -i \"{timelapseDir}/frame_%06d.jpg\" -vf \"tpad=stop_mode=clone:stop_duration=5\" -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p -movflags +faststart \"{videoPath}\"";
@@ -926,24 +926,24 @@ if (serveEnabled)
 			
 			if (proc.ExitCode == 0 && File.Exists(videoPath))
 			{
-				Console.WriteLine($"[API] Video created successfully: {videoPath}");
+				logger.LogInformation("Video created successfully: {VideoPath}", videoPath);
 				return Results.Json(new { success = true, videoPath });
 			}
 			else
 			{
-				Console.WriteLine($"[API] ffmpeg failed with exit code {proc.ExitCode}");
-				Console.WriteLine($"[API] ffmpeg output: {output}");
+				logger.LogError("ffmpeg failed with exit code {ExitCode}", proc.ExitCode);
+				logger.LogError("ffmpeg output: {Output}", output);
 				return Results.Json(new { success = false, error = $"ffmpeg failed with exit code {proc.ExitCode}" });
 			}
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"[API] Error generating video: {ex.Message}");
+			logger.LogError(ex, "Error generating video: {Message}", ex.Message);
 			return Results.Json(new { success = false, error = ex.Message });
 		}
 	});
 
-	app.MapPost("/api/timelapses/{name}/upload", async (string name, HttpContext ctx) =>
+	app.MapPost("/api/timelapses/{name}/upload", async (string name, HttpContext ctx, ILogger<Program> logger) =>
 	{
 		try
 		{
@@ -993,7 +993,7 @@ if (serveEnabled)
 				}
 				catch (Exception ex)
 				{
-					Console.WriteLine($"[API] Failed to save YouTube URL to metadata: {ex.Message}");
+					logger.LogWarning(ex, "Failed to save YouTube URL to metadata: {Message}", ex.Message);
 				}
 				
 				return Results.Json(new { success = true, videoId, url });
@@ -1199,7 +1199,7 @@ if (serveEnabled)
 	});
 
 	// Save configuration
-	app.MapPost("/api/config", async (HttpContext ctx) =>
+	app.MapPost("/api/config", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		try
 		{
@@ -1225,7 +1225,7 @@ if (serveEnabled)
 			var customConfigFile = config.GetValue<string>("CustomConfigFile") ?? "appsettings.Local.json";
 			var configPath = Path.Combine(Directory.GetCurrentDirectory(), customConfigFile);
 			
-			Console.WriteLine($"[Config] Saving configuration to: {customConfigFile}");
+			logger.LogInformation("Saving configuration to: {ConfigFile}", customConfigFile);
 			
 			// Parse and re-serialize with indentation for pretty formatting
 			var jsonDoc = System.Text.Json.JsonDocument.Parse(body);
@@ -1238,18 +1238,18 @@ if (serveEnabled)
 			var jsonString = System.Text.Json.JsonSerializer.Serialize(jsonDoc.RootElement, options);
 			await File.WriteAllTextAsync(configPath, jsonString);
 			
-			Console.WriteLine($"[Config] Configuration saved to {customConfigFile}");
+			logger.LogInformation("Configuration saved to {ConfigFile}", customConfigFile);
 			return Results.Json(new { success = true, message = "Configuration saved. Restart required for changes to take effect." });
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"[Config] Error saving configuration: {ex.Message}");
+			logger.LogError(ex, "Error saving configuration: {Message}", ex.Message);
 			return Results.Json(new { success = false, error = ex.Message });
 		}
 	});
 
 	// Reset configuration to defaults
-	app.MapPost("/api/config/reset", async (HttpContext ctx) =>
+	app.MapPost("/api/config/reset", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
 		try
 		{
@@ -1331,12 +1331,12 @@ if (serveEnabled)
 			var jsonString = System.Text.Json.JsonSerializer.Serialize(defaultConfig, options);
 			await File.WriteAllTextAsync(appSettingsPath, jsonString);
 			
-			Console.WriteLine("[Config] Configuration reset to defaults");
+			logger.LogInformation("Configuration reset to defaults");
 			return Results.Json(new { success = true, message = "Configuration reset to defaults" });
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"[Config] Error resetting configuration: {ex.Message}");
+			logger.LogError(ex, "Error resetting configuration: {Message}", ex.Message);
 			return Results.Json(new { success = false, error = ex.Message });
 		}
 	});

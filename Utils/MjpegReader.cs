@@ -1,26 +1,30 @@
+using Microsoft.Extensions.Logging;
+
 namespace PrintStreamer.Utils
 {
     internal class MjpegReader
     {
         private readonly string _url;
+        private readonly ILogger<MjpegReader> _logger;
 
-        public MjpegReader(string url)
+        public MjpegReader(string url, ILogger<MjpegReader> logger)
         {
             _url = url;
+            _logger = logger;
         }
 
         public async Task StartAsync(CancellationToken cancellationToken)
         {
             using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
-            Console.WriteLine($"Connecting to MJPEG stream: {_url}");
+            _logger.LogInformation("Connecting to MJPEG stream: {Url}", _url);
 
             using var resp = await client.GetAsync(_url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             resp.EnsureSuccessStatusCode();
 
             using var stream = await resp.Content.ReadAsStreamAsync(cancellationToken);
 
-            Console.WriteLine("Connected. Reading frames...");
+            _logger.LogInformation("Connected. Reading frames...");
 
             var buffer = new byte[64 * 1024];
             using var ms = new MemoryStream();
@@ -41,7 +45,7 @@ namespace PrintStreamer.Utils
                 {
                     if (jpegBytes == null) continue;
                     frameCount++;
-                    Console.WriteLine($"Frame {frameCount}: {jpegBytes.Length} bytes at {DateTime.UtcNow:O}");
+                    _logger.LogDebug("Frame {FrameCount}: {ByteCount} bytes at {Timestamp:O}", frameCount, jpegBytes.Length, DateTime.UtcNow);
 
                     // Save every 30th frame as an example
                     if (frameCount % 30 == 0)
@@ -50,12 +54,12 @@ namespace PrintStreamer.Utils
                         Directory.CreateDirectory(dir);
                         var path = Path.Combine(dir, $"frame_{frameCount}.jpg");
                         await File.WriteAllBytesAsync(path, jpegBytes, cancellationToken);
-                        Console.WriteLine($"Saved {path}");
+                        _logger.LogDebug("Saved {Path}", path);
                     }
                 }
             }
 
-            Console.WriteLine($"Stream ended, total frames: {frameCount}, total bytes read: {totalRead}");
+            _logger.LogInformation("Stream ended, total frames: {FrameCount}, total bytes read: {TotalRead}", frameCount, totalRead);
         }
 
         // Looks for the first JPEG (0xFFD8 ... 0xFFD9) in the memory stream.
