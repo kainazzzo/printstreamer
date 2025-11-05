@@ -402,7 +402,7 @@ namespace PrintStreamer.Services
             try
             {
                 // Initialize TimelapseManager for G-code caching and frame capture
-                timelapseManager = new TimelapseManager(config);
+                timelapseManager = new TimelapseManager(config, loggerFactory);
                 
                 // Initialize YouTube service if credentials are provided (for timelapse upload)
                 var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
@@ -1058,7 +1058,7 @@ namespace PrintStreamer.Services
                                     streamId = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
                                     streamLogger.LogInformation("[Timelapse] No filename from Moonraker, using timestamp only");
                                 }
-                                timelapse = new TimelapseService(mainTlDir, streamId);
+                                timelapse = new TimelapseService(mainTlDir, streamId, loggerFactory.CreateLogger<TimelapseService>());
 
                                 // Capture immediate first frame for timelapse
                                 streamLogger.LogInformation("[Timelapse] Capturing initial frame...");

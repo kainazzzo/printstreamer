@@ -1414,10 +1414,6 @@ if (serveEnabled)
 
 			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
 			audio.Enqueue(names.ToArray());
-			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
-			logger.LogInformation("Queued {Count} track(s): {Names}", names.Count, string.Join(", ", names));
-			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
-			logger.LogInformation("Queued {Count} track(s): {Names}", names.Count, string.Join(", ", names));
 			return Results.Json(new { success = true, queued = names.Count });
 		}
 		catch (Exception ex)
