@@ -4,6 +4,7 @@ using System.Threading;
 using System.Runtime.CompilerServices;
 using System.IO;
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Services
 {
@@ -15,6 +16,7 @@ namespace PrintStreamer.Services
     {
         private readonly AudioService _audio;
         private readonly IConfiguration _config;
+        private readonly ILogger<AudioBroadcastService> _logger;
         private readonly object _lock = new();
         private readonly List<Channel<byte[]>> _subscribers = new();
         private long _broadcastedBytes = 0;
@@ -37,9 +39,10 @@ namespace PrintStreamer.Services
         private int _feedPort;
         private Task? _feedTask;
 
-        public AudioBroadcastService(AudioService audio, IConfiguration config)
+        public AudioBroadcastService(AudioService audio, IConfiguration config, ILogger<AudioBroadcastService> logger)
         {
             _audio = audio;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _config = config;
             // Start the internal feed and ffmpeg supervisor so live position is continuous
             EnsureFeedStarted();
@@ -52,7 +55,7 @@ namespace PrintStreamer.Services
                     if (_audio.TryGetNextTrack(out var p) && !string.IsNullOrWhiteSpace(p))
                     {
                         _audio.Play();
-                        Console.WriteLine($"[AudioBroadcast] Preloaded initial track: {System.IO.Path.GetFileName(p)}");
+                        _logger.LogInformation("[AudioBroadcast] Preloaded initial track: {File}", System.IO.Path.GetFileName(p));
                     }
                 }
             }
@@ -82,11 +85,11 @@ namespace PrintStreamer.Services
                 _feedListener.Prefixes.Add(prefix);
                 _feedListener.Start();
                 _feedTask = Task.Run(() => FeedLoopAsync(_cts.Token));
-                Console.WriteLine($"[AudioBroadcast] Internal feed listening on {prefix}");
+                _logger.LogInformation("[AudioBroadcast] Internal feed listening on {Prefix}", prefix);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AudioBroadcast] Failed to start internal feed: {ex.Message}");
+                _logger.LogError(ex, "[AudioBroadcast] Failed to start internal feed");
             }
         }
 
@@ -105,11 +108,11 @@ namespace PrintStreamer.Services
                 FullMode = BoundedChannelFullMode.DropOldest
             });
 
-            lock (_lock)
-            {
-                _subscribers.Add(ch);
-                Console.WriteLine($"[AudioBroadcast] Subscriber added, total={_subscribers.Count}");
-            }
+                lock (_lock)
+                {
+                    _subscribers.Add(ch);
+                    _logger.LogInformation("[AudioBroadcast] Subscriber added, total={Count}", _subscribers.Count);
+                }
 
             // Unsubscribe on cancellation
             ct.Register(() =>
@@ -117,7 +120,7 @@ namespace PrintStreamer.Services
                 lock (_lock)
                 {
                     _subscribers.Remove(ch);
-                    Console.WriteLine($"[AudioBroadcast] Subscriber removed, total={_subscribers.Count}");
+                    _logger.LogInformation("[AudioBroadcast] Subscriber removed, total={Count}", _subscribers.Count);
                 }
                 try { ch.Writer.TryComplete(); } catch { }
             });
@@ -167,7 +170,7 @@ namespace PrintStreamer.Services
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AudioBroadcast] Feed loop error: {ex.Message}");
+                _logger.LogError(ex, "[AudioBroadcast] Feed loop error");
             }
         }
 
@@ -205,7 +208,7 @@ namespace PrintStreamer.Services
                     catch (OperationCanceledException) { break; }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[AudioBroadcast] Feed request error: {ex.Message}");
+                        _logger.LogError(ex, "[AudioBroadcast] Feed request error");
                     }
 
                     // Close and return after serving; ffmpeg will reconnect to get the new file
@@ -267,7 +270,7 @@ namespace PrintStreamer.Services
                                 if (!string.IsNullOrWhiteSpace(err))
                                 {
                                     var log = err.Length > 2000 ? err.Substring(err.Length - 2000) : err;
-                                    Console.WriteLine($"[AudioBroadcast][ffmpeg] {log}");
+                                    _logger.LogInformation("[AudioBroadcast][ffmpeg] {Log}", log);
                                 }
                             }
                             catch { }
@@ -305,24 +308,24 @@ namespace PrintStreamer.Services
                                     }
                                     catch (Exception ex)
                                     {
-                                        Console.WriteLine($"[AudioBroadcast] Error in track finished callback: {ex.Message}");
+                                        _logger.LogError(ex, "[AudioBroadcast] Error in track finished callback");
                                     }
                                 }
 
                                 // Prefer explicit queue items when advancing between tracks
                                 if (_audio.TryConsumeQueue(out var queued))
                                 {
-                                    Console.WriteLine($"[AudioBroadcast] Auto-advanced to next queued track: {System.IO.Path.GetFileName(queued)}");
+                                    _logger.LogInformation("[AudioBroadcast] Auto-advanced to next queued track: {File}", System.IO.Path.GetFileName(queued));
                                 }
                                 else if (_audio.TryGetNextTrack(out var next))
                                 {
-                                    Console.WriteLine($"[AudioBroadcast] Auto-advanced to next track: {System.IO.Path.GetFileName(next)}");
+                                    _logger.LogInformation("[AudioBroadcast] Auto-advanced to next track: {File}", System.IO.Path.GetFileName(next));
                                 }
                             }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[AudioBroadcast] Error auto-advancing track: {ex.Message}");
+                            _logger.LogError(ex, "[AudioBroadcast] Error auto-advancing track");
                         }
 
                         // reset failure count
@@ -332,7 +335,7 @@ namespace PrintStreamer.Services
                     catch (Exception ex)
                     {
                         _ffmpegConsecutiveFailures++;
-                        Console.WriteLine($"[AudioBroadcast] ffmpeg supervisor error: {ex.Message}");
+                        _logger.LogError(ex, "[AudioBroadcast] ffmpeg supervisor error");
                         // backoff
                         var backoff = Math.Min(_ffmpegBaseBackoffMs * (1 << Math.Max(0, _ffmpegConsecutiveFailures - 1)), _ffmpegMaxBackoffMs);
                         var jitter = new Random().Next(0, 200);
@@ -348,7 +351,7 @@ namespace PrintStreamer.Services
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AudioBroadcast] Supervisor fatal error: {ex.Message}");
+                _logger.LogCritical(ex, "[AudioBroadcast] Supervisor fatal error");
             }
         }
 
@@ -387,7 +390,7 @@ namespace PrintStreamer.Services
                     if (!string.IsNullOrWhiteSpace(err))
                     {
                         var log = err.Length > 2000 ? err.Substring(err.Length - 2000) : err;
-                        Console.WriteLine($"[AudioBroadcast][ffmpeg] {log}");
+                        _logger.LogInformation("[AudioBroadcast][ffmpeg] {Log}", log);
                     }
                 }
                 catch { }
@@ -418,7 +421,7 @@ namespace PrintStreamer.Services
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AudioBroadcast] Pump error: {ex.Message}");
+                _logger.LogError(ex, "[AudioBroadcast] Pump error");
             }
             finally
             {
