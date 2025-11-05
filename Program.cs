@@ -1412,7 +1412,8 @@ if (serveEnabled)
 
 			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
 			audio.Enqueue(names.ToArray());
-			Console.WriteLine($"[Audio] Queued {names.Count} track(s): {string.Join(", ", names)}");
+			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
+			logger.LogInformation("Queued {Count} track(s): {Names}", names.Count, string.Join(", ", names));
 			return Results.Json(new { success = true, queued = names.Count });
 		}
 		catch (Exception ex)
@@ -1580,7 +1581,8 @@ if (serveEnabled)
 		catch (OperationCanceledException) { }
 		catch (Exception ex)
 		{
-			Console.WriteLine($"[Audio] Client stream error: {ex.Message}");
+			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
+			logger.LogError(ex, "Client stream error: {Message}", ex.Message);
 		}
 	});
 
@@ -1606,13 +1608,13 @@ if (serveEnabled)
 			return Results.Json(new { success = true, message = "Cache cleared" });
 		});
 
-    Console.WriteLine("Starting proxy server on http://0.0.0.0:8080/stream");
+    startupLogger.LogInformation("Starting proxy server on http://0.0.0.0:8080/stream");
 
     // Handle graceful shutdown - this will run regardless of mode since the host is started below
     var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
     lifetime.ApplicationStopping.Register(() =>
     {
-        Console.WriteLine("Shutting down...");
+        startupLogger.LogInformation("Shutting down...");
         streamCts?.Cancel();
         timelapseManager?.Dispose();
     });
@@ -1622,7 +1624,7 @@ if (serveEnabled)
 	{
 		if (config.GetValue<bool?>("Stream:Local:Enabled") ?? false)
 		{
-			Console.WriteLine("[Stream] Web server ready, starting local preview stream...");
+			startupLogger.LogInformation("Web server ready, starting local preview stream...");
 			// Start a local stream on startup for preview
 			// Ensure audio broadcaster is constructed so the API audio endpoint is available
 			try
@@ -1640,13 +1642,13 @@ if (serveEnabled)
 					var streamService = app.Services.GetRequiredService<StreamService>();
 					if (!streamService.IsStreaming)
 					{
-						Console.WriteLine("[Stream] Starting local preview stream");
+						startupLogger.LogInformation("Starting local preview stream");
 						await streamService.StartStreamAsync(null, null, CancellationToken.None);
 					}
 				}
 				catch (Exception ex)
 				{
-					Console.WriteLine($"[Stream] Failed to start local preview: {ex.Message}");
+					startupLogger.LogError(ex, "Failed to start local preview: {Message}", ex.Message);
 				}
 			});
 		}

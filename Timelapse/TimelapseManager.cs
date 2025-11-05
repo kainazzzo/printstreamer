@@ -3,21 +3,26 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using PrintStreamer.Utils;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Timelapse
 {
     public class TimelapseManager : IDisposable, PrintStreamer.Overlay.ITimelapseMetadataProvider
     {
     private readonly IConfiguration _config;
+    private readonly ILogger<TimelapseManager> _logger;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly string _mainTimelapseDir;
     private readonly ConcurrentDictionary<string, TimelapseSession> _activeSessions = new();
     private readonly Timer _captureTimer;
     private bool _disposed = false;
     private readonly bool _verboseLogs;
 
-    public TimelapseManager(IConfiguration config)
+    public TimelapseManager(IConfiguration config, ILoggerFactory loggerFactory)
     {
         _config = config;
+        _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<TimelapseManager>();
         _mainTimelapseDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
         Directory.CreateDirectory(_mainTimelapseDir);
         _verboseLogs = _config.GetValue<bool?>("Timelapse:VerboseLogs") ?? false;
@@ -37,7 +42,7 @@ namespace PrintStreamer.Timelapse
         var sanitizedBase = SanitizeFilename(moonrakerFilename ?? sessionName);
 
         // Create the service first so it can create an output folder and possibly append a suffix
-        var service = new TimelapseService(_mainTimelapseDir, sanitizedBase);
+        var service = new TimelapseService(_mainTimelapseDir, sanitizedBase, _loggerFactory.CreateLogger<TimelapseService>());
         var actualFolderName = Path.GetFileName(service.OutputDir) ?? sanitizedBase;
 
         // Config: gate start until layer 1 by default
