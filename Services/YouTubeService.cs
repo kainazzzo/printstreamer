@@ -7,6 +7,7 @@ using System.Text.Json;
 using Google.Apis.Util.Store;
 // using Google.Apis.Auth.OAuth2.Flows; // not used with the standard broker flow
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Auth.OAuth2.Requests;
 using System.Diagnostics;
@@ -15,7 +16,8 @@ namespace PrintStreamer.Services
 {
 	internal class YouTubeBroadcastService : IDisposable
 	{
-		private readonly IConfiguration _config;
+	private readonly IConfiguration _config;
+	private readonly ILogger<YouTubeBroadcastService> _logger;
 		private Google.Apis.YouTube.v3.YouTubeService? _youtubeService;
 		private UserCredential? _credential; // Used for user OAuth flow
 		private readonly string _tokenPath;
@@ -23,9 +25,10 @@ namespace PrintStreamer.Services
 		private Task? _refreshTask;
 		private CancellationTokenSource? _refreshCts;
 
-		public YouTubeBroadcastService(IConfiguration config)
+		public YouTubeBroadcastService(IConfiguration config, ILogger<YouTubeBroadcastService> logger)
 		{
 			_config = config;
+			_logger = logger ?? throw new ArgumentNullException(nameof(logger));
 			_tokenPath = Path.Combine(Directory.GetCurrentDirectory(), "youtube_tokens");
 		}
 
@@ -43,7 +46,7 @@ namespace PrintStreamer.Services
 				var clientSecret = _config["YouTube:OAuth:ClientSecret"];
 				if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
 				{
-					Console.WriteLine("Error: YouTube OAuth ClientId and ClientSecret are required for user OAuth.");
+					_logger.LogError("YouTube OAuth ClientId and ClientSecret are required for user OAuth.");
 					return false;
 				}
 
@@ -60,7 +63,7 @@ namespace PrintStreamer.Services
 				var refreshToken = _config["YouTube:OAuth:RefreshToken"];
 				if (!string.IsNullOrWhiteSpace(refreshToken))
 				{
-					Console.WriteLine("[YouTube] Seeding configured refresh token into youtube_token.json (headless)");
+					_logger.LogInformation("[YouTube] Seeding configured refresh token into youtube_token.json (headless)");
 					await dataStore.StoreAsync("user", new TokenResponse { RefreshToken = refreshToken });
 				}
 
@@ -75,8 +78,7 @@ namespace PrintStreamer.Services
 						new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow.Initializer
 						{
 							ClientSecrets = secrets,
-							Scopes = scopes
-							,
+							Scopes = scopes,
 							DataStore = dataStore
 						});
 					_credential = new UserCredential(flow, "user", existingToken);
@@ -92,7 +94,7 @@ namespace PrintStreamer.Services
 						}
 						else
 						{
-							Console.WriteLine("Automatic browser launch appears unavailable. Falling back to manual auth flow.");
+							_logger.LogWarning("Automatic browser launch appears unavailable. Falling back to manual auth flow.");
 
 							var requestUrl = new AuthorizationCodeRequestUrl(new Uri(Google.Apis.Auth.OAuth2.GoogleAuthConsts.AuthorizationUrl))
 							{
@@ -102,13 +104,13 @@ namespace PrintStreamer.Services
 								ResponseType = "code"
 							};
 
-							Console.WriteLine("Open the following URL in a browser and paste the resulting code here:");
-							Console.WriteLine(requestUrl.Build().ToString());
+							_logger.LogInformation("Open the following URL in a browser and paste the resulting code here:");
+							_logger.LogInformation(requestUrl.Build().ToString());
 							Console.Write("Enter authorization code: ");
 							var code = Console.ReadLine();
 							if (string.IsNullOrWhiteSpace(code))
 							{
-								Console.WriteLine("No code provided, aborting auth.");
+								_logger.LogWarning("No code provided, aborting auth.");
 								return false;
 							}
 
@@ -127,20 +129,19 @@ namespace PrintStreamer.Services
 					}
 					catch (Exception exAuth)
 					{
-						Console.WriteLine($"Authentication flow failed: {exAuth.Message}");
-						Console.WriteLine("Attempting to load existing token from persistent store (if any)...");
+						_logger.LogError(exAuth, "Authentication flow failed: {Message}", exAuth.Message);
+						_logger.LogInformation("Attempting to load existing token from persistent store (if any)...");
 						// Try to read an existing token directly from the persistent store
 						var existing = await dataStore.GetAsync<TokenResponse>("user");
 						if (existing != null && !string.IsNullOrWhiteSpace(existing.RefreshToken))
 						{
-							Console.WriteLine("Found existing refresh token in persistent store; attempting to use it.");
+							_logger.LogInformation("Found existing refresh token in persistent store; attempting to use it.");
 							// Build a flow and credential from the stored token
 							var flow = new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow(
 								new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow.Initializer
 								{
 									ClientSecrets = secrets,
-									Scopes = scopes
-									,
+									Scopes = scopes,
 									DataStore = dataStore
 								});
 
@@ -148,7 +149,7 @@ namespace PrintStreamer.Services
 						}
 						else
 						{
-							Console.WriteLine("No usable token in persistent store.");
+							_logger.LogWarning("No usable token in persistent store.");
 							return false;
 						}
 					}
@@ -162,7 +163,7 @@ namespace PrintStreamer.Services
 					var tokStr = await _credential!.GetAccessTokenForRequestAsync(null, cancellationToken);
 					if (string.IsNullOrEmpty(tokStr))
 					{
-						Console.WriteLine("[YouTube] Failed to obtain access token.");
+						_logger.LogError("[YouTube] Failed to obtain access token.");
 						return false;
 					}
 					_youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
@@ -182,14 +183,14 @@ namespace PrintStreamer.Services
 					// the access token expires.
 					if (trex.Message != null && trex.Message.Contains("unauthorized_client") && _credential?.Token?.AccessToken != null)
 					{
-						Console.WriteLine("[YouTube] Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
+						_logger.LogWarning("[YouTube] Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
 						var accessOnly = Google.Apis.Auth.OAuth2.GoogleCredential.FromAccessToken(_credential.Token.AccessToken);
 						_youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
 						{
 							HttpClientInitializer = accessOnly,
 							ApplicationName = "PrintStreamer"
 						});
-						Console.WriteLine("[YouTube] Authentication successful (access_token only). Note: token will not be refreshed.");
+						_logger.LogInformation("[YouTube] Authentication successful (access_token only). Note: token will not be refreshed.");
 						return true;
 					}
 					// otherwise rethrow to be handled by outer catch
@@ -198,8 +199,7 @@ namespace PrintStreamer.Services
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Authentication failed: {ex.Message}");
-				Console.WriteLine(ex.ToString());
+				_logger.LogError(ex, "Authentication failed: {Message}", ex.Message);
 				return false;
 			}
 		}
@@ -377,17 +377,17 @@ namespace PrintStreamer.Services
 							try
 							{
 								var token = await _credential.GetAccessTokenForRequestAsync(null, ct);
-								Console.WriteLine($"Refreshed access token at {DateTime.UtcNow:O} (len={token?.Length})");
+								_logger.LogInformation("Refreshed access token at {Time} (len={Len})", DateTime.UtcNow.ToString("O"), token?.Length);
 							}
 							catch (Exception rex)
 							{
-								Console.WriteLine($"Warning: failed to refresh access token: {rex.Message}");
+								_logger.LogWarning(rex, "Failed to refresh access token: {Message}", rex.Message);
 							}
 						}
 						catch (OperationCanceledException) { break; }
 						catch (Exception ex)
 						{
-							Console.WriteLine($"Token refresh loop error: {ex.Message}");
+							_logger.LogError(ex, "Token refresh loop error: {Message}", ex.Message);
 							await Task.Delay(TimeSpan.FromSeconds(30), ct);
 						}
 					}
@@ -433,7 +433,7 @@ namespace PrintStreamer.Services
 		{
 			if (_youtubeService == null)
 			{
-				Console.WriteLine("Error: Not authenticated. Call AuthenticateAsync first.");
+				_logger.LogError("Not authenticated. Call AuthenticateAsync first.");
 				return (null, null, null);
 			}
 
@@ -448,7 +448,7 @@ namespace PrintStreamer.Services
 				var streamTitle = _config["YouTube:LiveStream:Title"] ?? "Print Stream";
 				var streamDescription = _config["YouTube:LiveStream:Description"] ?? "3D printer camera feed";
 
-				Console.WriteLine($"Creating YouTube live broadcast: {title}");
+				_logger.LogInformation("Creating YouTube live broadcast: {Title}", title);
 
 				// 1. Create LiveBroadcast
 				var broadcast = new LiveBroadcast
@@ -474,7 +474,7 @@ namespace PrintStreamer.Services
 				var broadcastRequest = _youtubeService.LiveBroadcasts.Insert(broadcast, "snippet,status,contentDetails");
 				var createdBroadcast = await broadcastRequest.ExecuteAsync(cancellationToken);
 
-				Console.WriteLine($"Broadcast created with ID: {createdBroadcast.Id}");
+				_logger.LogInformation("Broadcast created with ID: {BroadcastId}", createdBroadcast.Id);
 
 				// 2. Create LiveStream
 				var stream = new LiveStream
@@ -499,23 +499,23 @@ namespace PrintStreamer.Services
 				var streamRequest = _youtubeService.LiveStreams.Insert(stream, "snippet,cdn,contentDetails");
 				var createdStream = await streamRequest.ExecuteAsync(cancellationToken);
 
-				Console.WriteLine($"Stream created with ID: {createdStream.Id}");
+				_logger.LogInformation("Stream created with ID: {StreamId}", createdStream.Id);
 
 				// 3. Bind the stream to the broadcast
 				var bindRequest = _youtubeService.LiveBroadcasts.Bind(createdBroadcast.Id, "id,contentDetails");
 				bindRequest.StreamId = createdStream.Id;
 				var boundBroadcast = await bindRequest.ExecuteAsync(cancellationToken);
 
-				Console.WriteLine("Stream bound to broadcast.");
+				_logger.LogInformation("Stream bound to broadcast.");
 
 				// 4. Extract RTMP ingestion info
 				var rtmpUrl = createdStream.Cdn.IngestionInfo.IngestionAddress;
 				var streamKey = createdStream.Cdn.IngestionInfo.StreamName;
 				var streamId = createdStream.Id;
 
-				Console.WriteLine($"RTMP URL: {rtmpUrl}");
-				Console.WriteLine($"Stream Key: {streamKey}");
-				Console.WriteLine($"Broadcast URL: https://www.youtube.com/watch?v={createdBroadcast.Id}");
+				_logger.LogInformation("RTMP URL: {Rtmp}", rtmpUrl);
+				_logger.LogInformation("Stream Key: {Key}", streamKey);
+				_logger.LogInformation("Broadcast URL: https://www.youtube.com/watch?v={BroadcastId}", createdBroadcast.Id);
 
 				// Return streamId in tuple via broadcastId position isn't ideal; for now we return broadcastId and maintain streamId in the created stream object.
 				// Caller can fetch streamId via createdStream.Id if needed. We'll also store last created stream id in a field if debugging required.
@@ -524,30 +524,28 @@ namespace PrintStreamer.Services
 			}
 			catch (Google.GoogleApiException gae)
 			{
-				Console.WriteLine($"Failed to create live broadcast: {gae.Message}");
-				Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+				_logger.LogError(gae, "Failed to create live broadcast: {Message}", gae.Message);
+				_logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
 				if (gae.Error != null)
 				{
-					Console.WriteLine($"Google API error message: {gae.Error.Message}");
+					_logger.LogError("Google API error message: {Message}", gae.Error.Message);
 					if (gae.Error.Errors != null)
 					{
-						Console.WriteLine("Details:");
 						foreach (var e in gae.Error.Errors)
 						{
-							Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+							_logger.LogError(" - {Domain}/{Reason}: {Message}", e.Domain, e.Reason, e.Message);
 						}
 					}
 				}
 				else
 				{
-					Console.WriteLine(gae.ToString());
+					_logger.LogError(gae, "GoogleApiException details");
 				}
 				return (null, null, null);
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Failed to create live broadcast: {ex.Message}");
-				Console.WriteLine(ex.ToString());
+				_logger.LogError(ex, "Failed to create live broadcast: {Message}", ex.Message);
 				return (null, null, null);
 			}
 		}
@@ -559,13 +557,13 @@ namespace PrintStreamer.Services
 		{
 			if (_youtubeService == null)
 			{
-				Console.WriteLine("Error: Not authenticated.");
+				_logger.LogError("Not authenticated.");
 				return false;
 			}
 
 			try
 			{
-				Console.WriteLine($"Transitioning broadcast {broadcastId} to live...");
+				_logger.LogInformation("Transitioning broadcast {BroadcastId} to live...", broadcastId);
 
 				var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
 					LiveBroadcastsResource.TransitionRequest.BroadcastStatusEnum.Live,
@@ -574,35 +572,33 @@ namespace PrintStreamer.Services
 				);
 
 				var result = await transitionRequest.ExecuteAsync(cancellationToken);
-				Console.WriteLine($"Broadcast is now live! Status: {result.Status.LifeCycleStatus}");
+				_logger.LogInformation("Broadcast is now live! Status: {Status}", result.Status.LifeCycleStatus);
 				return true;
 			}
 			catch (Google.GoogleApiException gae)
 			{
-				Console.WriteLine($"Failed to transition broadcast to live: {gae.Message}");
-				Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+				_logger.LogError(gae, "Failed to transition broadcast to live: {Message}", gae.Message);
+				_logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
 				if (gae.Error != null)
 				{
-					Console.WriteLine($"Google API error message: {gae.Error.Message}");
+					_logger.LogError("Google API error message: {Message}", gae.Error.Message);
 					if (gae.Error.Errors != null)
 					{
-						Console.WriteLine("Details:");
 						foreach (var e in gae.Error.Errors)
 						{
-							Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+							_logger.LogError(" - {Domain}/{Reason}: {Message}", e.Domain, e.Reason, e.Message);
 						}
 					}
 				}
 				else
 				{
-					Console.WriteLine(gae.ToString());
+					_logger.LogError(gae, "GoogleApiException details");
 				}
 				return false;
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Failed to transition broadcast to live: {ex.Message}");
-				Console.WriteLine(ex.ToString());
+				_logger.LogError(ex, "Failed to transition broadcast to live: {Message}", ex.Message);
 				return false;
 			}
 		}
@@ -616,14 +612,14 @@ namespace PrintStreamer.Services
 		{
 			if (_youtubeService == null)
 			{
-				Console.WriteLine("YouTube service not initialized.");
+				_logger.LogError("YouTube service not initialized.");
 				return false;
 			}
 
 			if (string.IsNullOrEmpty(streamId)) streamId = _lastCreatedStreamId;
 			if (string.IsNullOrEmpty(streamId))
 			{
-				Console.WriteLine("No streamId available to poll ingestion status.");
+				_logger.LogWarning("No streamId available to poll ingestion status.");
 				return false;
 			}
 
@@ -641,29 +637,27 @@ namespace PrintStreamer.Services
 					{
 						var s = resp.Items[0];
 						var status = s.Status?.StreamStatus;
-						Console.WriteLine($"Polled stream status: streamId={streamId} status={status}");
+						_logger.LogInformation("Polled stream status: streamId={StreamId} status={Status}", streamId, status);
 						// Log the full LiveStream object for diagnosis
 						try
 						{
-							Console.WriteLine("LiveStream poll response:");
-							Console.WriteLine(JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
+							_logger.LogDebug("LiveStream poll response: {Response}", JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
 						}
 						catch { }
 						if (string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
 						{
-							Console.WriteLine("Ingestion is active.");
+							_logger.LogInformation("Ingestion is active.");
 							return true;
 						}
 					}
 					await Task.Delay(2000, cancellationToken);
 				}
-				Console.WriteLine("Ingestion did not become active within timeout.");
+				_logger.LogWarning("Ingestion did not become active within timeout.");
 				return false;
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Error while polling ingestion status: {ex.Message}");
-				Console.WriteLine(ex.ToString());
+				_logger.LogError(ex, "Error while polling ingestion status: {Message}", ex.Message);
 				return false;
 			}
 		}
@@ -675,13 +669,13 @@ namespace PrintStreamer.Services
 		{
 			if (_youtubeService == null)
 			{
-				Console.WriteLine("Error: Not authenticated.");
+				_logger.LogError("Not authenticated.");
 				return false;
 			}
 
 			try
 			{
-				Console.WriteLine($"Ending broadcast {broadcastId}...");
+				_logger.LogInformation("Ending broadcast {BroadcastId}...", broadcastId);
 
 				var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
 					LiveBroadcastsResource.TransitionRequest.BroadcastStatusEnum.Complete,
@@ -690,35 +684,33 @@ namespace PrintStreamer.Services
 				);
 
 				var result = await transitionRequest.ExecuteAsync(cancellationToken);
-				Console.WriteLine($"Broadcast ended. Status: {result.Status.LifeCycleStatus}");
+				_logger.LogInformation("Broadcast ended. Status: {Status}", result.Status.LifeCycleStatus);
 				return true;
 			}
 			catch (Google.GoogleApiException gae)
 			{
-				Console.WriteLine($"Failed to end broadcast: {gae.Message}");
-				Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+				_logger.LogError(gae, "Failed to end broadcast: {Message}", gae.Message);
+				_logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
 				if (gae.Error != null)
 				{
-					Console.WriteLine($"Google API error message: {gae.Error.Message}");
+					_logger.LogError("Google API error message: {Message}", gae.Error.Message);
 					if (gae.Error.Errors != null)
 					{
-						Console.WriteLine("Details:");
 						foreach (var e in gae.Error.Errors)
 						{
-							Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+							_logger.LogError(" - {Domain}/{Reason}: {Message}", e.Domain, e.Reason, e.Message);
 						}
 					}
 				}
 				else
 				{
-					Console.WriteLine(gae.ToString());
+					_logger.LogError(gae, "GoogleApiException details");
 				}
 				return false;
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Failed to end broadcast: {ex.Message}");
-				Console.WriteLine(ex.ToString());
+				_logger.LogError(ex, "Failed to end broadcast: {Message}", ex.Message);
 				return false;
 			}
 		}
@@ -730,7 +722,7 @@ namespace PrintStreamer.Services
 		{
 			if (_youtubeService == null)
 			{
-				Console.WriteLine("Error: Not authenticated.");
+				_logger.LogError("Not authenticated.");
 				return false;
 			}
 
@@ -739,12 +731,12 @@ namespace PrintStreamer.Services
 			var deadline = DateTime.UtcNow + maxWait.Value;
 
 			// First wait for ingestion to become active (polling)
-			Console.WriteLine($"Waiting up to {maxWait.Value.TotalSeconds}s for ingestion to become active...");
+			_logger.LogInformation("Waiting up to {Seconds}s for ingestion to become active...", maxWait.Value.TotalSeconds);
 			var ingestionOk = await WaitForIngestionAsync(null, maxWait, cancellationToken);
 
 			if (!ingestionOk)
 			{
-				Console.WriteLine("Ingestion did not report active status within timeout. Will attempt transition anyway but will retry on transient errors.");
+				_logger.LogWarning("Ingestion did not report active status within timeout. Will attempt transition anyway but will retry on transient errors.");
 			}
 
 			while (attempt < maxAttempts && !cancellationToken.IsCancellationRequested)
@@ -752,7 +744,7 @@ namespace PrintStreamer.Services
 				attempt++;
 				try
 				{
-					Console.WriteLine($"Attempt {attempt} to transition broadcast {broadcastId} to live...");
+					_logger.LogInformation("Attempt {Attempt} to transition broadcast {BroadcastId} to live...", attempt, broadcastId);
 					var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
 						LiveBroadcastsResource.TransitionRequest.BroadcastStatusEnum.Live,
 						broadcastId,
@@ -760,22 +752,21 @@ namespace PrintStreamer.Services
 					);
 
 					var result = await transitionRequest.ExecuteAsync(cancellationToken);
-					Console.WriteLine($"Transition succeeded: {result.Status.LifeCycleStatus}");
+					_logger.LogInformation("Transition succeeded: {Status}", result.Status.LifeCycleStatus);
 					return true;
 				}
 				catch (Google.GoogleApiException gae)
 				{
-					Console.WriteLine($"Transition attempt {attempt} failed: {gae.Message}");
-					Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+					_logger.LogError(gae, "Transition attempt {Attempt} failed: {Message}", attempt, gae.Message);
+					_logger.LogError("HTTP Status: {Status}", gae.HttpStatusCode);
 					if (gae.Error != null)
 					{
-						Console.WriteLine($"Google API error message: {gae.Error.Message}");
+						_logger.LogError("Google API error message: {Message}", gae.Error.Message);
 						if (gae.Error.Errors != null)
 						{
-							Console.WriteLine("Details:");
 							foreach (var e in gae.Error.Errors)
 							{
-								Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+								_logger.LogError(" - {Domain}/{Reason}: {Message}", e.Domain, e.Reason, e.Message);
 							}
 						}
 					}
@@ -786,17 +777,17 @@ namespace PrintStreamer.Services
 					if (attempt < maxAttempts)
 					{
 						var backoff = TimeSpan.FromSeconds(2 * attempt);
-						Console.WriteLine($"Retrying in {backoff.TotalSeconds}s...");
+						_logger.LogInformation("Retrying in {Seconds}s...", backoff.TotalSeconds);
 						await Task.Delay(backoff, cancellationToken);
 					}
 					else
 					{
-						Console.WriteLine("Max transition attempts reached; giving up.");
+						_logger.LogWarning("Max transition attempts reached; giving up.");
 					}
 				}
 				catch (Exception ex)
 				{
-					Console.WriteLine($"Unexpected error trying to transition: {ex}");
+					_logger.LogError(ex, "Unexpected error trying to transition: {Exception}", ex);
 					try { await LogBroadcastAndStreamResourcesAsync(broadcastId, null, CancellationToken.None); } catch { }
 					return false;
 				}
@@ -823,7 +814,7 @@ namespace PrintStreamer.Services
 		{
 			if (_youtubeService == null)
 			{
-				Console.WriteLine("YouTube service not initialized.");
+				_logger.LogError("YouTube service not initialized.");
 				return;
 			}
 
@@ -834,8 +825,7 @@ namespace PrintStreamer.Services
 					var bReq = _youtubeService.LiveBroadcasts.List("id,snippet,status,contentDetails");
 					bReq.Id = broadcastId;
 					var bResp = await bReq.ExecuteAsync(cancellationToken);
-					Console.WriteLine("LiveBroadcast resource:");
-					Console.WriteLine(JsonSerializer.Serialize(bResp, new JsonSerializerOptions { WriteIndented = true }));
+					_logger.LogInformation("LiveBroadcast resource: {Resource}", JsonSerializer.Serialize(bResp, new JsonSerializerOptions { WriteIndented = true }));
 				}
 
 				if (string.IsNullOrEmpty(streamId)) streamId = _lastCreatedStreamId;
@@ -844,14 +834,12 @@ namespace PrintStreamer.Services
 					var sReq = _youtubeService.LiveStreams.List("id,snippet,cdn,contentDetails,status");
 					sReq.Id = streamId;
 					var sResp = await sReq.ExecuteAsync(cancellationToken);
-					Console.WriteLine("LiveStream resource:");
-					Console.WriteLine(JsonSerializer.Serialize(sResp, new JsonSerializerOptions { WriteIndented = true }));
+					_logger.LogInformation("LiveStream resource: {Resource}", JsonSerializer.Serialize(sResp, new JsonSerializerOptions { WriteIndented = true }));
 				}
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine($"Error logging broadcast/stream resources: {ex.Message}");
-				Console.WriteLine(ex.ToString());
+				_logger.LogError(ex, "Error logging broadcast/stream resources: {Message}", ex.Message);
 			}
 		}
 	}
