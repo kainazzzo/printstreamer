@@ -11,11 +11,13 @@ using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Auth.OAuth2.Requests;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using PrintStreamer.Services;
 
 internal class YouTubeControlService : IDisposable
 {
     private readonly IConfiguration _config;
     private readonly ILogger<YouTubeControlService> _logger;
+    private readonly YouTubePollingManager? _pollingManager;
     private Google.Apis.YouTube.v3.YouTubeService? _youtubeService;
     private UserCredential? _credential; // Used for user OAuth flow
     private readonly string _tokenPath;
@@ -23,10 +25,11 @@ internal class YouTubeControlService : IDisposable
     private Task? _refreshTask;
     private CancellationTokenSource? _refreshCts;
 
-    public YouTubeControlService(IConfiguration config, ILogger<YouTubeControlService> logger)
+    public YouTubeControlService(IConfiguration config, ILogger<YouTubeControlService> logger, YouTubePollingManager? pollingManager = null)
     {
         _config = config;
         _logger = logger;
+        _pollingManager = pollingManager;
         _tokenPath = Path.Combine(Directory.GetCurrentDirectory(), "tokens", "youtube_token.json");
     }
 
@@ -1179,8 +1182,48 @@ internal class YouTubeControlService : IDisposable
         }
 
         timeout ??= TimeSpan.FromSeconds(30);
-        var deadline = DateTime.UtcNow + timeout.Value;
 
+        // Use polling manager if available and enabled
+        if (_pollingManager != null)
+        {
+            _logger.LogInformation("Polling for ingestion status using YouTubePollingManager: streamId={StreamId}, timeout={TimeoutSec}s",
+                streamId, timeout.Value.TotalSeconds);
+
+            var result = await _pollingManager.PollUntilConditionAsync(
+                fetchFunc: async () =>
+                {
+                    var req = _youtubeService.LiveStreams.List("id,cdn,status");
+                    req.Id = streamId;
+                    var resp = await _pollingManager.ExecuteWithRateLimitAsync(
+                        async () => await req.ExecuteAsync(cancellationToken),
+                        $"stream-status:{streamId}",
+                        cancellationToken
+                    );
+                    return resp?.Items?.FirstOrDefault();
+                },
+                condition: (stream) =>
+                {
+                    var status = stream?.Status?.StreamStatus;
+                    _logger.LogDebug("Stream status poll: streamId={StreamId}, status={Status}", streamId, status);
+                    return string.Equals(status, "active", StringComparison.OrdinalIgnoreCase);
+                },
+                timeout: timeout.Value,
+                context: $"ingestion:{streamId}",
+                cancellationToken: cancellationToken
+            );
+
+            if (result != null && string.Equals(result.Status?.StreamStatus, "active", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Ingestion is active.");
+                return true;
+            }
+
+            Console.WriteLine("Ingestion did not become active within timeout.");
+            return false;
+        }
+
+        // Fallback: original polling logic (when manager disabled)
+        var deadline = DateTime.UtcNow + timeout.Value;
         try
         {
             while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
@@ -1395,8 +1438,6 @@ internal class YouTubeControlService : IDisposable
 
         // Give YouTube more time to detect ingestion for variable sources/networks
         maxWait ??= TimeSpan.FromSeconds(180);
-        var attempt = 0;
-        var deadline = DateTime.UtcNow + maxWait.Value;
 
         // First wait for ingestion to become active (polling)
         Console.WriteLine($"Waiting up to {maxWait.Value.TotalSeconds}s for ingestion to become active...");
@@ -1407,72 +1448,122 @@ internal class YouTubeControlService : IDisposable
             Console.WriteLine("Ingestion did not report active status within timeout. Will attempt transition anyway but will retry on transient errors.");
         }
 
+        // Attempt to transition with retries
+        var attempt = 0;
         while (attempt < maxAttempts && !cancellationToken.IsCancellationRequested)
         {
             attempt++;
             try
             {
                 Console.WriteLine($"Attempt {attempt} to transition broadcast {broadcastId} to live...");
+                
                 // Check current broadcast lifecycle status first to avoid redundant transitions
-                var listReq = _youtubeService.LiveBroadcasts.List("id,status");
-                listReq.Id = broadcastId;
-                var current = await listReq.ExecuteAsync(cancellationToken);
-                if (current.Items != null && current.Items.Count > 0)
+                LiveBroadcast? current = null;
+                if (_pollingManager != null)
                 {
-                    var life = current.Items[0].Status?.LifeCycleStatus;
+                    current = await _pollingManager.ExecuteWithRateLimitAsync(
+                        async () =>
+                        {
+                            var listReq = _youtubeService.LiveBroadcasts.List("id,status");
+                            listReq.Id = broadcastId;
+                            var resp = await listReq.ExecuteAsync(cancellationToken);
+                            return resp.Items?.FirstOrDefault();
+                        },
+                        $"broadcast-status:{broadcastId}",
+                        cancellationToken
+                    );
+                }
+                else
+                {
+                    // Fallback without polling manager
+                    var listReq = _youtubeService.LiveBroadcasts.List("id,status");
+                    listReq.Id = broadcastId;
+                    var resp = await listReq.ExecuteAsync(cancellationToken);
+                    current = resp.Items?.FirstOrDefault();
+                }
+
+                if (current != null)
+                {
+                    var life = current.Status?.LifeCycleStatus;
                     Console.WriteLine($"Current broadcast lifecycle: {life}");
-                    if (string.Equals(life, "live", StringComparison.OrdinalIgnoreCase) || string.Equals(life, "liveStarting", StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(life, "live", StringComparison.OrdinalIgnoreCase) || 
+                        string.Equals(life, "liveStarting", StringComparison.OrdinalIgnoreCase))
                     {
                         Console.WriteLine("Broadcast already live/liveStarting; skipping transition.");
                         return true;
                     }
                 }
 
+                // Execute transition
                 var transitionRequest = _youtubeService.LiveBroadcasts.Transition(
                     LiveBroadcastsResource.TransitionRequest.BroadcastStatusEnum.Live,
                     broadcastId,
                     "id,status"
                 );
 
-                var result = await transitionRequest.ExecuteAsync(cancellationToken);
+                LiveBroadcast result;
+                if (_pollingManager != null)
+                {
+                    result = await _pollingManager.ExecuteWithRateLimitAsync(
+                        async () => await transitionRequest.ExecuteAsync(cancellationToken),
+                        $"broadcast-transition:{broadcastId}:{attempt}",
+                        cancellationToken
+                    );
+                }
+                else
+                {
+                    result = await transitionRequest.ExecuteAsync(cancellationToken);
+                }
+
                 Console.WriteLine($"Transition succeeded: {result.Status.LifeCycleStatus}");
                 return true;
             }
-                catch (Google.GoogleApiException gae)
+            catch (Google.GoogleApiException gae)
+            {
+                Console.WriteLine($"Transition attempt {attempt} failed: {gae.Message}");
+                Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
+
+                // Log API error details if present
+                if (gae.Error != null)
                 {
-                    Console.WriteLine($"Transition attempt {attempt} failed: {gae.Message}");
-                    Console.WriteLine($"HTTP Status: {gae.HttpStatusCode}");
-
-                    // Log API error details if present
-                    if (gae.Error != null)
+                    Console.WriteLine($"Google API error message: {gae.Error.Message}");
+                    if (gae.Error.Errors != null)
                     {
-                        Console.WriteLine($"Google API error message: {gae.Error.Message}");
-                        if (gae.Error.Errors != null)
+                        Console.WriteLine("Details:");
+                        foreach (var e in gae.Error.Errors)
                         {
-                            Console.WriteLine("Details:");
-                            foreach (var e in gae.Error.Errors)
-                            {
-                                Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
-                            }
+                            Console.WriteLine($" - {e.Domain}/{e.Reason}: {e.Message}");
+                        }
 
-                            // If this error is a redundant or invalid transition, consider it success
-                            foreach (var e in gae.Error.Errors)
+                        // If this error is a redundant or invalid transition, consider it success
+                        foreach (var e in gae.Error.Errors)
+                        {
+                            if (string.Equals(e.Reason, "redundantTransition", StringComparison.OrdinalIgnoreCase) || 
+                                string.Equals(e.Reason, "invalidTransition", StringComparison.OrdinalIgnoreCase))
                             {
-                                if (string.Equals(e.Reason, "redundantTransition", StringComparison.OrdinalIgnoreCase) || string.Equals(e.Reason, "invalidTransition", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    Console.WriteLine($"Received {e.Reason}; treating transition as success.");
-                                    return true;
-                                }
+                                Console.WriteLine($"Received {e.Reason}; treating transition as success.");
+                                return true;
                             }
                         }
                     }
+                }
 
-                    // Dump diagnostics: LiveBroadcast and LiveStream
-                    try { await LogBroadcastAndStreamResourcesAsync(broadcastId, _lastCreatedStreamId, cancellationToken); } catch { }
+                // Dump diagnostics: LiveBroadcast and LiveStream
+                try { await LogBroadcastAndStreamResourcesAsync(broadcastId, _lastCreatedStreamId, cancellationToken); } catch { }
 
-                    if (attempt < maxAttempts)
+                if (attempt < maxAttempts)
                 {
-                    var backoff = TimeSpan.FromSeconds(2 * attempt);
+                    // Use polling manager's backoff calculation if available
+                    TimeSpan backoff;
+                    if (_pollingManager != null)
+                    {
+                        backoff = _pollingManager.CalculateInterval(attempt + 1);
+                    }
+                    else
+                    {
+                        backoff = TimeSpan.FromSeconds(2 * attempt);
+                    }
+
                     Console.WriteLine($"Retrying in {backoff.TotalSeconds}s...");
                     await Task.Delay(backoff, cancellationToken);
                 }

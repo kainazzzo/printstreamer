@@ -114,6 +114,10 @@ if (!File.Exists(fallbackImagePath))
 webBuilder.Services.AddSingleton<TimelapseManager>();
 // Expose TimelapseManager as ITimelapseMetadataProvider for overlay text enrichment
 webBuilder.Services.AddSingleton<PrintStreamer.Overlay.ITimelapseMetadataProvider>(sp => sp.GetRequiredService<TimelapseManager>());
+// YouTube API polling manager with configuration
+webBuilder.Services.Configure<PrintStreamer.Services.YouTubePollingOptions>(
+    webBuilder.Configuration.GetSection(PrintStreamer.Services.YouTubePollingOptions.SectionName));
+webBuilder.Services.AddSingleton<PrintStreamer.Services.YouTubePollingManager>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.WebCamManager>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamOrchestrator>();
@@ -183,6 +187,13 @@ CancellationTokenSource? streamCts = null;
 TimelapseManager? timelapseManager = null;
 
 var app = webBuilder.Build();
+
+// Wire up audio track completion callback to orchestrator
+{
+	var orchestrator = app.Services.GetRequiredService<PrintStreamer.Services.StreamOrchestrator>();
+	var audioBroadcast = app.Services.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+	audioBroadcast.SetTrackFinishedCallback(() => orchestrator.OnAudioTrackFinishedAsync());
+}
 
 // Get a logger for the application
 var logger = app.Services.GetRequiredService<ILogger<Program>>();
@@ -607,7 +618,9 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
+			using var yt = new YouTubeControlService(config, 
+				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
+				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -632,7 +645,9 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
+			using var yt = new YouTubeControlService(config, 
+				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
+				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -662,7 +677,9 @@ if (serveEnabled)
 			{
 				try
 				{
-					using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
+					using var yt = new YouTubeControlService(config, 
+						ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
+						ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
 					if (await yt.AuthenticateAsync(ctx.RequestAborted))
 					{
 						privacy = await yt.GetBroadcastPrivacyAsync(broadcastId, ctx.RequestAborted);
@@ -715,7 +732,9 @@ if (serveEnabled)
 			}
 
 			var broadcastId = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
+			using var yt = new YouTubeControlService(config, 
+				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
+				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -738,6 +757,39 @@ if (serveEnabled)
 			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
 			var ok = await orchestrator.EnsureStreamingHealthyAsync(ctx.RequestAborted);
 			return Results.Json(new { success = ok });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// End stream after current song finishes
+	app.MapPost("/api/stream/end-after-song", (HttpContext ctx) =>
+	{
+		try
+		{
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			var enabledStr = ctx.Request.Query["enabled"].ToString();
+			var enabled = string.Equals(enabledStr, "true", StringComparison.OrdinalIgnoreCase) || enabledStr == "1";
+			
+			orchestrator.SetEndStreamAfterSong(enabled);
+			return Results.Json(new { success = true, enabled });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// Get end-after-song status
+	app.MapGet("/api/stream/end-after-song", (HttpContext ctx) =>
+	{
+		try
+		{
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			var enabled = orchestrator.IsEndStreamAfterSongEnabled;
+			return Results.Json(new { enabled });
 		}
 		catch (Exception ex)
 		{
@@ -882,7 +934,9 @@ if (serveEnabled)
 			var videoPath = videoFiles[0]; // Use first mp4 found
 
 			// Use YouTubeControlService to upload
-			using var ytService = new YouTubeControlService(config, ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>());
+			using var ytService = new YouTubeControlService(config, 
+				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
+				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
 			if (!await ytService.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -1503,6 +1557,21 @@ if (serveEnabled)
 		{
 			var b = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
 			return Results.Json(b.GetStatus());
+		});
+
+		// YouTube polling manager diagnostics
+		app.MapGet("/api/youtube/polling/status", (HttpContext ctx) =>
+		{
+			var pm = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>();
+			var stats = pm.GetStats();
+			return Results.Json(stats);
+		});
+
+		app.MapPost("/api/youtube/polling/clear-cache", (HttpContext ctx) =>
+		{
+			var pm = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>();
+			pm.ClearCache();
+			return Results.Json(new { success = true, message = "Cache cleared" });
 		});
 
     Console.WriteLine("Starting proxy server on http://0.0.0.0:8080/stream");

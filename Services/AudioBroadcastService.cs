@@ -23,6 +23,9 @@ namespace PrintStreamer.Services
         private bool _disposed;
         private DateTime _lastBroadcastAt = DateTime.MinValue;
 
+        // Track completion callback
+        private Func<Task>? _onTrackFinished;
+
     // current ffmpeg process (if streaming via ffmpeg)
     private Process? _ffmpegProc;
         // ffmpeg failure/backoff tracking
@@ -54,6 +57,17 @@ namespace PrintStreamer.Services
                 }
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Set a callback to be invoked when an audio track finishes playing
+        /// </summary>
+        public void SetTrackFinishedCallback(Func<Task>? callback)
+        {
+            lock (_lock)
+            {
+                _onTrackFinished = callback;
+            }
         }
 
         private void EnsureFeedStarted()
@@ -277,6 +291,24 @@ namespace PrintStreamer.Services
                         {
                             if (!_cts.IsCancellationRequested && _audio.IsPlaying)
                             {
+                                // Invoke track finished callback before advancing to next track
+                                Func<Task>? callback;
+                                lock (_lock)
+                                {
+                                    callback = _onTrackFinished;
+                                }
+                                if (callback != null)
+                                {
+                                    try
+                                    {
+                                        await callback().ConfigureAwait(false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"[AudioBroadcast] Error in track finished callback: {ex.Message}");
+                                    }
+                                }
+
                                 // Prefer explicit queue items when advancing between tracks
                                 if (_audio.TryConsumeQueue(out var queued))
                                 {

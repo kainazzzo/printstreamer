@@ -11,18 +11,21 @@ namespace PrintStreamer.Services
         private readonly StreamService _streamService;
         private readonly IConfiguration _config;
         private readonly ILoggerFactory _loggerFactory;
+        private readonly YouTubePollingManager _pollingManager;
         private readonly object _lock = new object();
         private YouTubeControlService? _currentYouTubeService;
         private string? _currentBroadcastId;
         private string? _currentRtmpUrl; // full RTMP URL (address + stream key) for restarts
         private bool _isWaitingForIngestion = false;
         private bool _disposed = false;
+        private bool _endStreamAfterSong = false;
 
-        public StreamOrchestrator(StreamService streamService, IConfiguration config, ILoggerFactory loggerFactory)
+        public StreamOrchestrator(StreamService streamService, IConfiguration config, ILoggerFactory loggerFactory, YouTubePollingManager pollingManager)
         {
             _streamService = streamService;
             _config = config;
             _loggerFactory = loggerFactory;
+            _pollingManager = pollingManager;
         }
 
         /// <summary>
@@ -67,6 +70,61 @@ namespace PrintStreamer.Services
         public bool IsStreaming => _streamService.IsStreaming;
 
         /// <summary>
+        /// Set the flag to end the stream after the current audio track finishes
+        /// </summary>
+        public void SetEndStreamAfterSong(bool enabled)
+        {
+            lock (_lock)
+            {
+                _endStreamAfterSong = enabled;
+            }
+            Console.WriteLine($"[Orchestrator] End stream after song: {(enabled ? "enabled" : "disabled")}");
+        }
+
+        /// <summary>
+        /// Check if the stream is set to end after the current song
+        /// </summary>
+        public bool IsEndStreamAfterSongEnabled
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _endStreamAfterSong;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called when an audio track finishes. If end-after-song is enabled, stops the broadcast.
+        /// </summary>
+        public async Task OnAudioTrackFinishedAsync()
+        {
+            bool shouldEnd;
+            lock (_lock)
+            {
+                shouldEnd = _endStreamAfterSong;
+                if (shouldEnd)
+                {
+                    _endStreamAfterSong = false; // Reset flag after use
+                }
+            }
+
+            if (shouldEnd)
+            {
+                Console.WriteLine("[Orchestrator] Audio track finished, ending stream as requested");
+                try
+                {
+                    await StopBroadcastAsync(CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Orchestrator] Error ending stream after song: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
         /// Start a YouTube live broadcast with streaming
         /// </summary>
         public async Task<(bool success, string? message, string? broadcastId)> StartBroadcastAsync(CancellationToken cancellationToken)
@@ -91,7 +149,7 @@ namespace PrintStreamer.Services
 
             // Create YouTube service and authenticate
             var ytLogger = _loggerFactory.CreateLogger<YouTubeControlService>();
-            var ytService = new YouTubeControlService(_config, ytLogger);
+            var ytService = new YouTubeControlService(_config, ytLogger, _pollingManager);
             if (!await ytService.AuthenticateAsync(cancellationToken))
             {
                 ytService.Dispose();

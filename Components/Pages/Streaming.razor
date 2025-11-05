@@ -14,9 +14,11 @@
 
         <StreamControlPanel IsLive="@isLive" IsStreamPlaying="@isStreamPlaying" IsGoingLive="@isGoingLive"
         StreamerRunning="@streamerRunning" WaitingForIngestion="@waitingForIngestion" CameraEnabled="@(!cameraDisabled)"
-        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" EndStreamAfterPrintEnabled="@endStreamAfterPrintEnabled" BroadcastId="@(isLive ? broadcastId : null)"
+        AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" EndStreamAfterPrintEnabled="@endStreamAfterPrintEnabled" 
+        EndStreamAfterSongEnabled="@endStreamAfterSongEnabled" BroadcastId="@(isLive ? broadcastId : null)"
         StatusMessage="@statusMessage" CurrentPrivacy="@currentPrivacy" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
-        OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" OnEndStreamAfterPrintChanged="@OnEndStreamAfterPrintChanged" />
+        OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" 
+        OnEndStreamAfterPrintChanged="@OnEndStreamAfterPrintChanged" OnEndStreamAfterSongChanged="@OnEndStreamAfterSongChanged" />
 
     <StreamContainer>
         <MjpegFeed />
@@ -56,6 +58,7 @@
     private bool autoBroadcastEnabled = false;
     private bool autoUploadEnabled = false;
     private bool endStreamAfterPrintEnabled = true;
+    private bool endStreamAfterSongEnabled = false;
     private List<TimelapseInfo>? timelapses = null;
     private HashSet<string> processingTimelapses = new();
     private Timer? refreshTimer;
@@ -189,6 +192,25 @@
                 waitingForIngestion = response.WaitingForIngestion;
                 currentPrivacy = response.Privacy;
                 UpdateLiveStatusTimer();
+            }
+
+            // Also check end-after-song status
+            if (isLive)
+            {
+                try
+                {
+                    var songResponse = await client.GetFromJsonAsync<EndAfterSongResponse>("api/stream/end-after-song");
+                    if (songResponse != null)
+                    {
+                        endStreamAfterSongEnabled = songResponse.Enabled;
+                    }
+                }
+                catch { }
+            }
+            else
+            {
+                // Reset when not live
+                endStreamAfterSongEnabled = false;
             }
         }
         catch (HttpRequestException)
@@ -385,6 +407,20 @@
         StateHasChanged();
         await SafeToast($"End stream after print {(enabled ? "enabled" : "disabled")}", "success");
         await RefreshConfigState();
+    }
+
+    private async Task OnEndStreamAfterSongChanged(bool enabled)
+    {
+        endStreamAfterSongEnabled = enabled;
+        StateHasChanged();
+        if (enabled)
+        {
+            await SafeToast("Stream will end after current song finishes", "info");
+        }
+        else
+        {
+            await SafeToast("End after song cancelled", "success");
+        }
     }
 
     private async Task RefreshTimelapses()
@@ -620,6 +656,11 @@
     private class CameraStateResponse
     {
         public bool Disabled { get; set; }
+    }
+
+    private class EndAfterSongResponse
+    {
+        public bool Enabled { get; set; }
     }
 
     private class ConfigStateResponse

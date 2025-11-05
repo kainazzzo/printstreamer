@@ -152,6 +152,31 @@
                 </span>
             }
         </button>
+        
+        <!-- End Stream After Song Button -->
+        <button class="btn @(EndStreamAfterSongEnabled ? "btn-danger" : "btn-success")" 
+                @onclick="ToggleEndStreamAfterSong"
+                title="@(EndStreamAfterSongEnabled ? "Cancel end after song" : "End stream gracefully after current song finishes")"
+                @onmouseover="OnEndStreamAfterSongMouseOver"
+                @onmouseout="OnEndStreamAfterSongMouseOut"
+                disabled="@(!IsLive)">
+            @if (EndStreamAfterSongHover)
+            {
+                <span class="icon">🎵</span>
+                <span class="btn-label">
+                    <span class="btn-title">End After Song</span>
+                    <span class="btn-status">@(EndStreamAfterSongEnabled ? "Cancel" : "Enable")</span>
+                </span>
+            }
+            else
+            {
+                <span class="icon">🎵</span>
+                <span class="btn-label">
+                    <span class="btn-title">End After Song</span>
+                    <span class="btn-status">@(EndStreamAfterSongEnabled ? "Pending" : "OFF")</span>
+                </span>
+            }
+        </button>
     </div>
     
     <!-- Status Message -->
@@ -399,6 +424,7 @@
     [Parameter] public bool AutoBroadcastEnabled { get; set; }
     [Parameter] public bool AutoUploadEnabled { get; set; }
     [Parameter] public bool EndStreamAfterPrintEnabled { get; set; }
+    [Parameter] public bool EndStreamAfterSongEnabled { get; set; }
     [Parameter] public string? BroadcastId { get; set; }
     [Parameter] public string? StatusMessage { get; set; }
     [Parameter] public string? CurrentPrivacy { get; set; }
@@ -409,12 +435,14 @@
     [Parameter] public EventCallback<bool> OnAutoUploadChanged { get; set; }
     [Parameter] public EventCallback<bool> OnAutoBroadcastChanged { get; set; }
     [Parameter] public EventCallback<bool> OnEndStreamAfterPrintChanged { get; set; }
+    [Parameter] public EventCallback<bool> OnEndStreamAfterSongChanged { get; set; }
     
     private bool CameraHover = false;
     private bool LiveHover = false;
     private bool AutoBroadcastHover = false;
     private bool AutoUploadHover = false;
     private bool EndStreamAfterPrintHover = false;
+    private bool EndStreamAfterSongHover = false;
     
     private string SelectedPrivacy = "unlisted";
     private bool IsUpdatingPrivacy = false;
@@ -430,6 +458,8 @@
     private void OnAutoUploadMouseOut() => AutoUploadHover = false;
     private void OnEndStreamAfterPrintMouseOver() => EndStreamAfterPrintHover = true;
     private void OnEndStreamAfterPrintMouseOut() => EndStreamAfterPrintHover = false;
+    private void OnEndStreamAfterSongMouseOver() => EndStreamAfterSongHover = true;
+    private void OnEndStreamAfterSongMouseOut() => EndStreamAfterSongHover = false;
     
     protected override void OnParametersSet()
     {
@@ -537,6 +567,25 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error toggling end-stream-after-print: {ex.Message}");
+        }
+    }
+    
+    private async Task ToggleEndStreamAfterSong()
+    {
+        try
+        {
+            var newValue = !EndStreamAfterSongEnabled;
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/stream/end-after-song?enabled={newValue}", null);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                await OnEndStreamAfterSongChanged.InvokeAsync(newValue);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling end-stream-after-song: {ex.Message}");
         }
     }
 }
