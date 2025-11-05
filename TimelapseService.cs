@@ -1,5 +1,7 @@
+using System;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 
 public class TimelapseService : IDisposable
 {
@@ -8,9 +10,11 @@ public class TimelapseService : IDisposable
     private bool _finalized = false;
     private readonly object _saveLock = new object();
     private bool _isAcceptingFrames = true; // true = accepting, false = stopped
+    private readonly ILogger<TimelapseService> _logger;
 
-    public TimelapseService(string mainFolder, string streamId)
+    public TimelapseService(string mainFolder, string streamId, ILogger<TimelapseService> logger)
     {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         // mainFolder: base timelapse directory (configurable)
         // streamId: unique per stream/job (timestamp, job name, etc)
 
@@ -79,45 +83,45 @@ public class TimelapseService : IDisposable
     {
         if (_finalized)
         {
-            Console.WriteLine($"[Timelapse] Video already created or in progress.");
+            _logger.LogInformation("[Timelapse] Video already created or in progress.");
             return null;
         }
         _finalized = true;
         
-        Console.WriteLine($"[Timelapse] Captured {_frameCount} frames.");
+    _logger.LogInformation("[Timelapse] Captured {FrameCount} frames.", _frameCount);
         
         if (_frameCount == 0)
         {
-            Console.WriteLine($"[Timelapse] No frames captured, skipping video creation.");
+            _logger.LogInformation("[Timelapse] No frames captured, skipping video creation.");
             return null;
         }
         
         // List frame files for debugging
         var frameFiles = Directory.GetFiles(OutputDir, "frame_*.jpg").OrderBy(f => f).ToArray();
-        Console.WriteLine($"[Timelapse] Found {frameFiles.Length} frame files on disk:");
+    _logger.LogInformation("[Timelapse] Found {Count} frame files on disk:", frameFiles.Length);
         if (frameFiles.Length <= 10)
         {
             foreach (var file in frameFiles)
             {
                 var fileName = Path.GetFileName(file);
                 var fileSize = new FileInfo(file).Length;
-                Console.WriteLine($"[Timelapse]   {fileName} ({fileSize} bytes)");
+                _logger.LogInformation("[Timelapse]   {FileName} ({FileSize} bytes)", fileName, fileSize);
             }
         }
         else
         {
-            Console.WriteLine($"[Timelapse]   {Path.GetFileName(frameFiles[0])} to {Path.GetFileName(frameFiles[^1])} ({frameFiles.Length} files)");
+            _logger.LogInformation("[Timelapse]   {First} to {Last} ({Count} files)", Path.GetFileName(frameFiles[0]), Path.GetFileName(frameFiles[^1]), frameFiles.Length);
         }
         
         if (frameFiles.Length == 0)
         {
-            Console.WriteLine($"[Timelapse] No frame files found on disk, skipping video creation.");
+            _logger.LogInformation("[Timelapse] No frame files found on disk, skipping video creation.");
             return null;
         }
         
         // Use ffmpeg to create video from images
         // Enhanced command with better compatibility and error handling
-        Console.WriteLine($"[Timelapse] Creating video at {fps} fps: {outputVideoPath}");
+    _logger.LogInformation("[Timelapse] Creating video at {Fps} fps: {Output}", fps, outputVideoPath);
         
         // Ensure output directory exists
         var outputDir = Path.GetDirectoryName(outputVideoPath);
@@ -149,12 +153,12 @@ public class TimelapseService : IDisposable
             CreateNoWindow = true
         };
         
-        Console.WriteLine($"[Timelapse] Running: ffmpeg {arguments}");
+    _logger.LogInformation("[Timelapse] Running: ffmpeg {Arguments}", arguments);
         
         using var proc = Process.Start(psi);
         if (proc == null)
         {
-            Console.WriteLine("[Timelapse] Failed to start ffmpeg for timelapse.");
+            _logger.LogError("[Timelapse] Failed to start ffmpeg for timelapse.");
             return null;
         }
         
@@ -163,24 +167,24 @@ public class TimelapseService : IDisposable
         var standardOutput = await proc.StandardOutput.ReadToEndAsync(cancellationToken);
         
         await proc.WaitForExitAsync(cancellationToken);
-        if (proc.ExitCode == 0)
+            if (proc.ExitCode == 0)
         {
-            Console.WriteLine($"[Timelapse] Video created successfully: {outputVideoPath}");
+            _logger.LogInformation("[Timelapse] Video created successfully: {Output}", outputVideoPath);
             
             // Verify the file was actually created and has content
             if (File.Exists(outputVideoPath))
             {
                 var fileInfo = new FileInfo(outputVideoPath);
-                Console.WriteLine($"[Timelapse] Video file size: {fileInfo.Length} bytes");
+                _logger.LogInformation("[Timelapse] Video file size: {Size} bytes", fileInfo.Length);
                 if (fileInfo.Length == 0)
                 {
-                    Console.WriteLine("[Timelapse] Warning: Output file is empty!");
+                    _logger.LogWarning("[Timelapse] Warning: Output file is empty!");
                     return null;
                 }
             }
             else
             {
-                Console.WriteLine("[Timelapse] Warning: Output file was not created!");
+                _logger.LogWarning("[Timelapse] Warning: Output file was not created!");
                 return null;
             }
             
@@ -188,18 +192,18 @@ public class TimelapseService : IDisposable
         }
         else
         {
-            Console.WriteLine($"[Timelapse] ffmpeg exited with code {proc.ExitCode}");
+            if (_logger != null) _logger.LogError("[Timelapse] ffmpeg exited with code {ExitCode}", proc.ExitCode);
             if (!string.IsNullOrWhiteSpace(errorOutput))
             {
-                Console.WriteLine($"[Timelapse] ffmpeg stderr: {errorOutput}");
+                _logger.LogError("[Timelapse] ffmpeg stderr: {Stderr}", errorOutput);
             }
             if (!string.IsNullOrWhiteSpace(standardOutput))
             {
-                Console.WriteLine($"[Timelapse] ffmpeg stdout: {standardOutput}");
+                _logger.LogInformation("[Timelapse] ffmpeg stdout: {Stdout}", standardOutput);
             }
             
             // Try a fallback approach with simpler settings
-            Console.WriteLine("[Timelapse] Trying fallback ffmpeg approach...");
+            _logger.LogInformation("[Timelapse] Trying fallback ffmpeg approach...");
             return await TryFallbackVideoCreation(outputVideoPath, fps, cancellationToken);
         }
     }
@@ -219,12 +223,12 @@ public class TimelapseService : IDisposable
             CreateNoWindow = true
         };
         
-        Console.WriteLine($"[Timelapse] Fallback command: ffmpeg {fallbackArgs}");
+    _logger.LogInformation("[Timelapse] Fallback command: ffmpeg {FallbackArgs}", fallbackArgs);
         
         using var proc = Process.Start(psi);
         if (proc == null)
         {
-            Console.WriteLine("[Timelapse] Failed to start fallback ffmpeg command.");
+            _logger.LogError("[Timelapse] Failed to start fallback ffmpeg command.");
             return null;
         }
         
@@ -233,15 +237,15 @@ public class TimelapseService : IDisposable
         
         if (proc.ExitCode == 0)
         {
-            Console.WriteLine($"[Timelapse] Fallback video creation successful!");
+            _logger.LogInformation("[Timelapse] Fallback video creation successful!");
             return outputVideoPath;
         }
         else
         {
-            Console.WriteLine($"[Timelapse] Fallback ffmpeg also failed with code {proc.ExitCode}");
+            _logger.LogError("[Timelapse] Fallback ffmpeg also failed with code {ExitCode}", proc.ExitCode);
             if (!string.IsNullOrWhiteSpace(errorOutput))
             {
-                Console.WriteLine($"[Timelapse] Fallback ffmpeg stderr: {errorOutput}");
+                _logger.LogError("[Timelapse] Fallback ffmpeg stderr: {Stderr}", errorOutput);
             }
             return null;
         }

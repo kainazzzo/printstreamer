@@ -1,4 +1,5 @@
 using PrintStreamer.Timelapse;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Services
 {
@@ -11,16 +12,19 @@ namespace PrintStreamer.Services
         private readonly IConfiguration _config;
         private readonly StreamOrchestrator _orchestrator;
         private readonly TimelapseManager _timelapseManager;
+        private readonly ILogger<MoonrakerPollerService> _logger;
         private readonly bool _verbosePollerLogs;
 
         public MoonrakerPollerService(
             IConfiguration config,
             StreamOrchestrator orchestrator,
-            TimelapseManager timelapseManager)
+            TimelapseManager timelapseManager,
+            ILogger<MoonrakerPollerService> logger)
         {
             _config = config;
             _orchestrator = orchestrator;
             _timelapseManager = timelapseManager;
+            _logger = logger;
             _verbosePollerLogs = _config.GetValue<bool?>("Moonraker:VerboseLogs") ?? false;
         }
 
@@ -40,7 +44,7 @@ namespace PrintStreamer.Services
             string? activeTimelapseSession = null;
             bool lastLayerTriggered = false;
 
-            Console.WriteLine("[MoonrakerPoller] Starting polling loop");
+            _logger.LogInformation("[MoonrakerPoller] Starting polling loop");
 
             try
             {
@@ -64,7 +68,7 @@ namespace PrintStreamer.Services
                         // Suppress noisy per-iteration state logging unless explicitly enabled
                         if (_verbosePollerLogs)
                         {
-                            Console.WriteLine($"[MoonrakerPoller] State: {state}, Job: {currentJob}, Progress: {progressPct?.ToString("F1") ?? "n/a"}%");
+                            _logger.LogDebug("[MoonrakerPoller] State: {State}, Job: {Job}, Progress: {Progress}%", state, currentJob, progressPct?.ToString("F1") ?? "n/a");
                         }
 
                         // Detect state transitions
@@ -83,14 +87,14 @@ namespace PrintStreamer.Services
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[MoonrakerPoller] Failed to notify timelapse: {ex.Message}");
+                                _logger.LogError(ex, "[MoonrakerPoller] Failed to notify timelapse");
                             }
                         }
 
                         // Start broadcast (or local stream) when a print begins (state transition)
                         if (printJustStarted && !_orchestrator.IsBroadcastActive)
                         {
-                            Console.WriteLine($"[MoonrakerPoller] Print started: {currentJob}");
+                            _logger.LogInformation("[MoonrakerPoller] Print started: {Job}", currentJob);
                             lastJobFilename = currentJob ?? $"__printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
                             
                             // Start broadcast if auto-broadcast is enabled
@@ -102,16 +106,16 @@ namespace PrintStreamer.Services
                                     var (success, message, broadcastId) = await _orchestrator.StartBroadcastAsync(cancellationToken);
                                     if (success)
                                     {
-                                        Console.WriteLine($"[MoonrakerPoller] Broadcast started: {broadcastId}");
+                                        _logger.LogInformation("[MoonrakerPoller] Broadcast started: {BroadcastId}", broadcastId);
                                     }
                                     else
                                     {
-                                        Console.WriteLine($"[MoonrakerPoller] Failed to start broadcast: {message}");
+                                        _logger.LogWarning("[MoonrakerPoller] Failed to start broadcast: {Message}", message);
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"[MoonrakerPoller] Error starting broadcast: {ex.Message}");
+                                    _logger.LogError(ex, "[MoonrakerPoller] Error starting broadcast");
                                 }
                             }
                             else
@@ -119,15 +123,15 @@ namespace PrintStreamer.Services
                                 // Manual mode: ensure a local stream is running continuously; avoid restarting if already streaming
                                 if (!_orchestrator.IsStreaming)
                                 {
-                                    try
-                                    {
-                                        Console.WriteLine("[MoonrakerPoller] Manual mode: starting local stream (no auto-broadcast)");
-                                        await _orchestrator.StartLocalStreamAsync(cancellationToken);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"[MoonrakerPoller] Error starting local stream: {ex.Message}");
-                                    }
+                                        try
+                                        {
+                                            _logger.LogInformation("[MoonrakerPoller] Manual mode: starting local stream (no auto-broadcast)");
+                                            await _orchestrator.StartLocalStreamAsync(cancellationToken);
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            _logger.LogError(ex, "[MoonrakerPoller] Error starting local stream");
+                                        }
                                 }
                             }
 
@@ -154,7 +158,7 @@ namespace PrintStreamer.Services
 
                             if (lastLayerByTime || lastLayerByProgress || lastLayerByLayer)
                             {
-                                Console.WriteLine($"[MoonrakerPoller] Last layer detected, finalizing timelapse");
+                                _logger.LogInformation("[MoonrakerPoller] Last layer detected, finalizing timelapse");
                                 lastLayerTriggered = true;
 
                                 var sessionToFinalize = activeTimelapseSession;
@@ -162,22 +166,22 @@ namespace PrintStreamer.Services
 
                                 _ = Task.Run(async () =>
                                 {
-                                    try
-                                    {
-                                        var videoPath = await _timelapseManager.StopTimelapseAsync(sessionToFinalize!);
-                                        
-                                        // Upload if enabled
-                                        var uploadEnabled = _config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-                                        if (uploadEnabled && !string.IsNullOrWhiteSpace(videoPath) && File.Exists(videoPath))
+                                        try
                                         {
-                                            // TODO: Upload timelapse via YouTubeControlService
-                                            Console.WriteLine($"[MoonrakerPoller] Timelapse video ready: {videoPath}");
+                                            var videoPath = await _timelapseManager.StopTimelapseAsync(sessionToFinalize!);
+                                            
+                                            // Upload if enabled
+                                            var uploadEnabled = _config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
+                                            if (uploadEnabled && !string.IsNullOrWhiteSpace(videoPath) && File.Exists(videoPath))
+                                            {
+                                                // TODO: Upload timelapse via YouTubeControlService
+                                                _logger.LogInformation("[MoonrakerPoller] Timelapse video ready: {VideoPath}", videoPath);
+                                            }
                                         }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"[MoonrakerPoller] Error finalizing timelapse: {ex.Message}");
-                                    }
+                                        catch (Exception ex)
+                                        {
+                                            _logger.LogError(ex, "[MoonrakerPoller] Error finalizing timelapse");
+                                        }
                                 }, CancellationToken.None);
                             }
                         }
@@ -185,7 +189,7 @@ namespace PrintStreamer.Services
                         // If we have a lastJobFilename, we were tracking a print and must reset regardless of broadcast state
                         else if (printJustFinished && lastJobFilename != null)
                         {
-                            Console.WriteLine($"[MoonrakerPoller] Print finished (state: printing -> {state ?? "unknown"}), cleaning up");
+                            _logger.LogInformation("[MoonrakerPoller] Print finished (state: printing -> {State}), cleaning up", state ?? "unknown");
                             lastJobFilename = null;
 
                             // Optionally stop the broadcast if one is active and the end-after-print feature is enabled
@@ -199,21 +203,21 @@ namespace PrintStreamer.Services
                                         var (success, message) = await _orchestrator.StopBroadcastAsync(CancellationToken.None);
                                         if (success)
                                         {
-                                            Console.WriteLine("[MoonrakerPoller] Broadcast stopped (end stream after print enabled)");
+                                            _logger.LogInformation("[MoonrakerPoller] Broadcast stopped (end stream after print enabled)");
                                         }
                                         else
                                         {
-                                            Console.WriteLine($"[MoonrakerPoller] Error stopping broadcast: {message}");
+                                            _logger.LogWarning("[MoonrakerPoller] Error stopping broadcast: {Message}", message);
                                         }
                                     }
                                     catch (Exception ex)
                                     {
-                                        Console.WriteLine($"[MoonrakerPoller] Exception stopping broadcast: {ex.Message}");
+                                        _logger.LogError(ex, "[MoonrakerPoller] Exception stopping broadcast");
                                     }
                                 }
                                 else
                                 {
-                                    Console.WriteLine("[MoonrakerPoller] End stream after print disabled; leaving broadcast running.");
+                                    _logger.LogInformation("[MoonrakerPoller] End stream after print disabled; leaving broadcast running.");
                                 }
                             }
 
@@ -226,7 +230,7 @@ namespace PrintStreamer.Services
                                 }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"[MoonrakerPoller] Error stopping timelapse: {ex.Message}");
+                                    _logger.LogError(ex, "[MoonrakerPoller] Error stopping timelapse");
                                 }
                                 activeTimelapseSession = null;
                             }
@@ -247,7 +251,7 @@ namespace PrintStreamer.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[MoonrakerPoller] Error: {ex.Message}");
+                        _logger.LogError(ex, "[MoonrakerPoller] Error");
                     }
 
                     // Keep-alive: In manual mode, ensure a continuous local stream is running even when not printing
@@ -256,13 +260,13 @@ namespace PrintStreamer.Services
                         var autoBroadcastEnabledLoop = _config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
                         if (!autoBroadcastEnabledLoop && lastState != "printing" && !_orchestrator.IsStreaming)
                         {
-                            Console.WriteLine("[MoonrakerPoller] Manual mode: ensuring local stream is running");
+                            _logger.LogInformation("[MoonrakerPoller] Manual mode: ensuring local stream is running");
                             await _orchestrator.StartLocalStreamAsync(cancellationToken);
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[MoonrakerPoller] Keep-alive stream error: {ex.Message}");
+                        _logger.LogError(ex, "[MoonrakerPoller] Keep-alive stream error");
                     }
 
                     await Task.Delay(pollInterval, cancellationToken);
@@ -270,11 +274,11 @@ namespace PrintStreamer.Services
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("[MoonrakerPoller] Polling cancelled");
+                _logger.LogInformation("[MoonrakerPoller] Polling cancelled");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[MoonrakerPoller] Unexpected error: {ex.Message}");
+                _logger.LogError(ex, "[MoonrakerPoller] Unexpected error");
             }
         }
 

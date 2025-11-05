@@ -3,20 +3,23 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Timelapse
 {
     public class TimelapseManager : IDisposable, PrintStreamer.Overlay.ITimelapseMetadataProvider
     {
     private readonly IConfiguration _config;
+    private readonly ILogger<TimelapseManager>? _logger;
     private readonly string _mainTimelapseDir;
     private readonly ConcurrentDictionary<string, TimelapseSession> _activeSessions = new();
     private readonly Timer _captureTimer;
     private bool _disposed = false;
 
-    public TimelapseManager(IConfiguration config)
+    public TimelapseManager(IConfiguration config, ILogger<TimelapseManager>? logger = null)
     {
         _config = config;
+        _logger = logger;
         _mainTimelapseDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
         Directory.CreateDirectory(_mainTimelapseDir);
 
@@ -59,7 +62,7 @@ namespace PrintStreamer.Timelapse
                 var authHeader = _config.GetValue<string>("Moonraker:AuthHeader");
                 var baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(baseUrl) ?? new Uri(baseUrl);
 
-                Console.WriteLine($"[TimelapseManager] Skipping remote G-code download/list for: {moonrakerFilename}.\n[TimelapseManager] Timelapse now expects slicer to embed print stats via SET_PRINT_STATS_INFO.");
+                _logger?.LogInformation("[TimelapseManager] Skipping remote G-code download/list for: {File}. Timelapse now expects slicer to embed print stats via SET_PRINT_STATS_INFO.", moonrakerFilename);
                 try
                 {
                     var meta = await MoonrakerClient.GetFileMetadataAsync(baseUri, moonrakerFilename!, apiKey, authHeader, CancellationToken.None);
@@ -90,23 +93,23 @@ namespace PrintStreamer.Timelapse
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TimelapseManager] Error downloading/parsing G-code: {ex.Message}");
+                _logger?.LogError(ex, "[TimelapseManager] Error downloading/parsing G-code");
             }
         }
 
         if (_activeSessions.TryAdd(actualFolderName, session))
         {
-            Console.WriteLine($"[TimelapseManager] Started timelapse session: {actualFolderName}");
+            _logger?.LogInformation("[TimelapseManager] Started timelapse session: {Session}", actualFolderName);
 
             // Capture initial frame
             await CaptureFrameForSessionAsync(session);
 
             // Start the timer if this is the first session
-            if (_activeSessions.Count == 1)
-            {
+                if (_activeSessions.Count == 1)
+                {
                 var timelapsePeriod = _config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
                 _captureTimer.Change(timelapsePeriod, timelapsePeriod);
-                Console.WriteLine($"[TimelapseManager] Started capture timer (period: {timelapsePeriod})");
+                    _logger?.LogInformation("[TimelapseManager] Started capture timer (period: {Period})", timelapsePeriod);
             }
 
             return actualFolderName;
@@ -134,10 +137,10 @@ namespace PrintStreamer.Timelapse
             if (layerOffset < 0) layerOffset = 0;
             if (currentLayer.HasValue && totalLayers.HasValue && totalLayers.Value > 0)
             {
-                var triggerLayer = Math.Max(0, totalLayers.Value - layerOffset);
-                if (currentLayer.Value >= triggerLayer)
-                {
-                    Console.WriteLine($"[TimelapseManager] Last-layer threshold reached for session {sessionName} ({currentLayer}/{totalLayers}, offset={layerOffset}) - finalizing timelapse.");
+                    var triggerLayer = Math.Max(0, totalLayers.Value - layerOffset);
+                    if (currentLayer.Value >= triggerLayer)
+                    {
+                        _logger?.LogInformation("[TimelapseManager] Last-layer threshold reached for session {Session} ({Current}/{Total}, offset={Offset}) - finalizing timelapse.", sessionName, currentLayer, totalLayers, layerOffset);
                     try
                     {
                         // Create video synchronously via existing StopTimelapseAsync to ensure proper cleanup
@@ -146,7 +149,7 @@ namespace PrintStreamer.Timelapse
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[TimelapseManager] Error finalizing timelapse for {sessionName}: {ex.Message}");
+                        _logger?.LogError(ex, "[TimelapseManager] Error finalizing timelapse for {Session}", sessionName);
                         return null;
                     }
                 }
@@ -154,7 +157,7 @@ namespace PrintStreamer.Timelapse
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelapseManager] Error in NotifyPrintProgressAsync for {sessionName}: {ex.Message}");
+            _logger?.LogError(ex, "[TimelapseManager] Error in NotifyPrintProgressAsync for {Session}", sessionName);
         }
 
         return null;
@@ -165,13 +168,13 @@ namespace PrintStreamer.Timelapse
         if (!_activeSessions.TryRemove(sessionName, out var session))
             return null;
 
-        Console.WriteLine($"[TimelapseManager] Stopping timelapse session: {sessionName}");
+    _logger?.LogInformation("[TimelapseManager] Stopping timelapse session: {Session}", sessionName);
 
         // Stop timer if no more sessions
         if (_activeSessions.IsEmpty)
         {
             _captureTimer.Change(Timeout.Infinite, Timeout.Infinite);
-            Console.WriteLine($"[TimelapseManager] Stopped capture timer");
+            _logger?.LogInformation("[TimelapseManager] Stopped capture timer");
         }
 
         // Create video
@@ -189,7 +192,7 @@ namespace PrintStreamer.Timelapse
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelapseManager] Failed to create video for {sessionName}: {ex.Message}");
+            _logger?.LogError(ex, "[TimelapseManager] Failed to create video for {Session}", sessionName);
             // Ensure cleanup
             session.LayerStarts = null;
             session.MetadataRaw = null;
@@ -262,7 +265,7 @@ namespace PrintStreamer.Timelapse
         return timelapses.OrderByDescending(t => t.StartTime);
     }
     
-    private static void CreateMetadataFile(string directory, DateTime createdAt)
+    private void CreateMetadataFile(string directory, DateTime createdAt)
     {
         try
         {
@@ -271,16 +274,16 @@ namespace PrintStreamer.Timelapse
             {
                 var metadata = $"CreatedAt={createdAt:O}\n";
                 File.WriteAllText(metadataPath, metadata);
-                Console.WriteLine($"[TimelapseManager] Created metadata file for {Path.GetFileName(directory)}");
+                _logger?.LogInformation("[TimelapseManager] Created metadata file for {Folder}", Path.GetFileName(directory));
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelapseManager] Failed to create metadata file: {ex.Message}");
+            _logger?.LogError(ex, "[TimelapseManager] Failed to create metadata file");
         }
     }
     
-    private static (DateTime? CreatedAt, string? YouTubeUrl) ReadMetadata(string directory)
+    private (DateTime? CreatedAt, string? YouTubeUrl) ReadMetadata(string directory)
     {
         try
         {
@@ -363,7 +366,7 @@ namespace PrintStreamer.Timelapse
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelapseManager] Failed to read metadata from {directory}: {ex.Message}");
+            _logger?.LogError(ex, "[TimelapseManager] Failed to read metadata from {Directory}", directory);
         }
         return (null, null);
     }
@@ -441,16 +444,16 @@ namespace PrintStreamer.Timelapse
             {
                 await session.Service.SaveFrameAsync(frame, CancellationToken.None);
                 session.LastCaptureTime = DateTime.UtcNow;
-                Console.WriteLine($"[TimelapseManager] Captured frame for {session.Name}");
+                _logger?.LogInformation("[TimelapseManager] Captured frame for {Session}", session.Name);
             }
             else
             {
-                Console.WriteLine($"[TimelapseManager] Failed to capture frame for {session.Name}");
+                _logger?.LogWarning("[TimelapseManager] Failed to capture frame for {Session}", session.Name);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelapseManager] Error capturing frame for {session.Name}: {ex.Message}");
+            _logger?.LogError(ex, "[TimelapseManager] Error capturing frame for {Session}", session.Name);
         }
     }
 
