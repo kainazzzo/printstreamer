@@ -1,6 +1,7 @@
 
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject Microsoft.Extensions.Logging.ILogger<PrinterUiIframes> Logger
 
 @code {
 
@@ -70,28 +71,28 @@
             return baseStyle + " opacity: 0; pointer-events: none; z-index: 0;";
         }
         
-        if (selectedUi == which)
+            if (selectedUi == which)
         {
             var result = baseStyle + " opacity: 1; z-index: 1;";
-            Console.WriteLine($"[PrinterUiIframes] GetIframeStyle('{which}') with selectedUi='{selectedUi}' => visible");
+            Logger?.LogInformation("[PrinterUiIframes] GetIframeStyle('{Which}') with selectedUi='{SelectedUi}' => visible", which, selectedUi);
             return result;
         }
         else
         {
             var result = baseStyle + " opacity: 0; pointer-events: none; z-index: 0;";
-            Console.WriteLine($"[PrinterUiIframes] GetIframeStyle('{which}') with selectedUi='{selectedUi}' => hidden");
+            Logger?.LogInformation("[PrinterUiIframes] GetIframeStyle('{Which}') with selectedUi='{SelectedUi}' => hidden", which, selectedUi);
             return result;
         }
     }
 
     private async Task OnSelectedChanged(string value)
     {
-        Console.WriteLine($"[PrinterUiIframes] *** RADIO CLICKED *** Switching from '{selectedUi}' to '{value}'");
+        Logger?.LogInformation("[PrinterUiIframes] *** RADIO CLICKED *** Switching from '{From}' to '{To}'", selectedUi, value);
         selectedUi = value;
         try { await JS.InvokeVoidAsync("localStorage.setItem", "printerUi.selected", value); } catch { }
-        Console.WriteLine($"[PrinterUiIframes] *** AFTER UPDATE *** selectedUi = '{selectedUi}'");
+        Logger?.LogInformation("[PrinterUiIframes] *** AFTER UPDATE *** selectedUi = '{Selected}'", selectedUi);
         await InvokeAsync(StateHasChanged);
-        Console.WriteLine($"[PrinterUiIframes] *** AFTER StateHasChanged ***");
+        Logger?.LogInformation("[PrinterUiIframes] *** AFTER StateHasChanged ***");
     }
 
     private class ConfigResponse
