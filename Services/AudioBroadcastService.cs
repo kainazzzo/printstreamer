@@ -231,7 +231,7 @@ namespace PrintStreamer.Services
                 while (!appToken.IsCancellationRequested)
                 {
                     // Only run when audio feature enabled
-                    var enabled = _config.GetValue<bool?>("Audio:Enabled") ?? _config.GetValue<bool?>("audio:enabled") ?? true;
+                    var enabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
                     if (!enabled)
                     {
                         await Task.Delay(1000, appToken).ConfigureAwait(false);

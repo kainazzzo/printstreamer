@@ -184,7 +184,7 @@ namespace PrintStreamer.Services
                 // Determine audio source for ffmpeg when serving locally
                 string? audioUrl = null;
                 var useApiAudio = config.GetValue<bool?>("Stream:Audio:UseApiStream") ?? true;
-                var audioFeatureEnabled = config.GetValue<bool?>("Audio:Enabled") ?? config.GetValue<bool?>("audio:enabled") ?? true;
+                var audioFeatureEnabled = config.GetValue<bool?>("Audio:Enabled") ?? true;
                 if ((config.GetValue<bool?>("Serve:Enabled") ?? true) && useApiAudio && audioFeatureEnabled)
                 {
                     audioUrl = config.GetValue<string>("Stream:Audio:Url");
@@ -1140,7 +1140,7 @@ namespace PrintStreamer.Services
                 // Determine audio source for ffmpeg when serving locally
                 string? audioUrl = null;
                 var useApiAudio = config.GetValue<bool?>("Stream:Audio:UseApiStream") ?? true;
-                var audioFeatureEnabled = config.GetValue<bool?>("Audio:Enabled") ?? config.GetValue<bool?>("audio:enabled") ?? true;
+                var audioFeatureEnabled = config.GetValue<bool?>("Audio:Enabled") ?? true;
                 if ((config.GetValue<bool?>("Serve:Enabled") ?? true) && useApiAudio && audioFeatureEnabled)
                 {
                     audioUrl = config.GetValue<string>("Stream:Audio:Url");

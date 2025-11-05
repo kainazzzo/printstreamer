@@ -56,7 +56,7 @@ namespace PrintStreamer.Services
         public AudioService(IConfiguration config)
         {
             _config = config;
-            _folder = _config.GetValue<string>("Audio:Folder") ?? _config.GetValue<string>("audio:folder") ?? "audio";
+            _folder = _config.GetValue<string>("Audio:Folder") ?? "audio";
             _folder = System.IO.Path.GetFullPath(System.IO.Path.Combine(Directory.GetCurrentDirectory(), _folder));
             EnsureFolder();
             Rescan();

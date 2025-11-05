@@ -43,13 +43,12 @@
             var cfg = await client.GetFromJsonAsync<ConfigResponse>("api/config");
             if (cfg?.PrinterUI != null)
             {
-                // Store remote URLs for display/reference
+                // Use direct URLs for iframes - no proxy needed, avoids CORS/Origin issues
                 remoteMainsailUrl = cfg.PrinterUI.MainsailUrl;
                 remoteFluiddUrl = cfg.PrinterUI.FluiddUrl;
                 
-                // Use proxy paths to bypass X-Frame-Options
-                mainsailUrl = !string.IsNullOrWhiteSpace(remoteMainsailUrl) ? "/mainsail/" : null;
-                fluiddUrl = !string.IsNullOrWhiteSpace(remoteFluiddUrl) ? "/fluidd/" : null;
+                mainsailUrl = remoteMainsailUrl;
+                fluiddUrl = remoteFluiddUrl;
 
                 // Pick a sensible default based on what's configured
                 if (string.IsNullOrWhiteSpace(mainsailUrl) && !string.IsNullOrWhiteSpace(fluiddUrl))

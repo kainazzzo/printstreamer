@@ -101,7 +101,7 @@ namespace PrintStreamer.Services
             // Determine audio source for ffmpeg: prefer API endpoint when serving locally and enabled
             string? audioUrl = null;
             var useApiAudio = _config.GetValue<bool?>("Stream:Audio:UseApiStream") ?? true;
-            var audioFeatureEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? _config.GetValue<bool?>("audio:enabled") ?? true;
+            var audioFeatureEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
             if (serveEnabled && useApiAudio && audioFeatureEnabled)
             {
                 audioUrl = _config.GetValue<string>("Stream:Audio:Url");

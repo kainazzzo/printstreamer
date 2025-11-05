@@ -34,7 +34,7 @@
         {
             if (!this.AdditionalAttributes?.ContainsKey("AllowSend") ?? true)
             {
-                var allowFromCfg = Cfg.GetValue<bool?>("Stream:Console:AllowSend") ?? Cfg.GetValue<bool?>("stream:console:allowSend");
+                var allowFromCfg = Cfg.GetValue<bool?>("Stream:Console:AllowSend");
                 if (allowFromCfg.HasValue) AllowSend = allowFromCfg.Value;
             }
         }

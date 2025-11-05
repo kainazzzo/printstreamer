@@ -60,7 +60,7 @@ namespace PrintStreamer.Services
         {
             lock (_lock)
             {
-                var max = _cfg.GetValue<int?>("Stream:Console:MaxLines") ?? _cfg.GetValue<int?>("stream:console:maxLines") ?? 500;
+                var max = _cfg.GetValue<int?>("Stream:Console:MaxLines") ?? 500;
                 _buffer.Add(l);
                 if (_buffer.Count > max)
                 {
@@ -82,7 +82,7 @@ namespace PrintStreamer.Services
         public Task StartAsync(CancellationToken ct = default)
         {
             // IHostedService start
-            var enabled = _cfg.GetValue<bool?>("Stream:Console:Enabled") ?? _cfg.GetValue<bool?>("stream:console:enabled") ?? true;
+            var enabled = _cfg.GetValue<bool?>("Stream:Console:Enabled") ?? true;
             if (!enabled)
             {
                 _log.LogInformation("PrinterConsoleService disabled via configuration");
@@ -116,7 +116,7 @@ namespace PrintStreamer.Services
                 ClientWebSocket? ws = null;
                 try
                 {
-                    var baseUrl = _cfg.GetValue<string>("Moonraker:BaseUrl") ?? _cfg.GetValue<string>("moonraker:baseUrl");
+                    var baseUrl = _cfg.GetValue<string>("Moonraker:BaseUrl");
                     if (string.IsNullOrWhiteSpace(baseUrl))
                     {
                         await Task.Delay(2000, ct);
@@ -130,8 +130,8 @@ namespace PrintStreamer.Services
 
                     ws = new ClientWebSocket();
                     ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
-                    var apiKey = _cfg.GetValue<string>("Moonraker:ApiKey") ?? _cfg.GetValue<string>("moonraker:apiKey");
-                    var authHeader = _cfg.GetValue<string>("Moonraker:AuthHeader") ?? _cfg.GetValue<string>("moonraker:authHeader") ?? "X-Api-Key";
+                    var apiKey = _cfg.GetValue<string>("Moonraker:ApiKey");
+                    var authHeader = _cfg.GetValue<string>("Moonraker:AuthHeader") ?? "X-Api-Key";
                     if (!string.IsNullOrWhiteSpace(apiKey))
                     {
                         try { ws.Options.SetRequestHeader(authHeader, apiKey); } catch { }
@@ -293,7 +293,7 @@ namespace PrintStreamer.Services
             if (string.IsNullOrWhiteSpace(cmd)) return new SendResult { Ok = false, Message = "Empty command" };
 
             // Simple disallowed-prefix check (config may provide array of prefixes)
-            var disallowed = _cfg.GetSection("Stream:Console:DisallowedCommands").Get<string[]>() ?? _cfg.GetSection("stream:console:disallowedCommands").Get<string[]>() ?? Array.Empty<string>();
+            var disallowed = _cfg.GetSection("Stream:Console:DisallowedCommands").Get<string[]>() ?? Array.Empty<string>();
             foreach (var p in disallowed)
             {
                 if (string.IsNullOrWhiteSpace(p)) continue;
@@ -306,7 +306,7 @@ namespace PrintStreamer.Services
             }
 
             // Confirmation required prefixes
-            var requireConf = _cfg.GetSection("Stream:Console:RequireConfirmation").Get<string[]>() ?? _cfg.GetSection("stream:console:requireConfirmation").Get<string[]>() ?? Array.Empty<string>();
+            var requireConf = _cfg.GetSection("Stream:Console:RequireConfirmation").Get<string[]>() ?? Array.Empty<string>();
             foreach (var p in requireConf)
             {
                 if (string.IsNullOrWhiteSpace(p)) continue;
@@ -319,7 +319,7 @@ namespace PrintStreamer.Services
             }
 
             // Rate limiting (simple cooldown based on CommandsPerMinute)
-            var cpm = _cfg.GetValue<int?>("Stream:Console:RateLimit:CommandsPerMinute") ?? _cfg.GetValue<int?>("stream:console:rateLimit:commandsPerMinute") ?? 0;
+            var cpm = _cfg.GetValue<int?>("Stream:Console:RateLimit:CommandsPerMinute") ?? 0;
             if (cpm > 0)
             {
                 var minInterval = TimeSpan.FromSeconds(60.0 / cpm);
@@ -336,11 +336,11 @@ namespace PrintStreamer.Services
 
             // Attempt to resolve Moonraker base URI
             Uri? baseUri = null;
-            var cfgBase = _cfg.GetValue<string>("Moonraker:BaseUrl") ?? _cfg.GetValue<string>("moonraker:baseUrl");
+            var cfgBase = _cfg.GetValue<string>("Moonraker:BaseUrl");
             if (!string.IsNullOrWhiteSpace(cfgBase) && Uri.TryCreate(cfgBase, UriKind.Absolute, out var parsed)) baseUri = parsed;
             if (baseUri == null)
             {
-                var streamSource = _cfg.GetValue<string>("Stream:Source") ?? _cfg.GetValue<string>("stream:source");
+                var streamSource = _cfg.GetValue<string>("Stream:Source");
                 if (!string.IsNullOrWhiteSpace(streamSource)) baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(streamSource);
             }
 
@@ -354,8 +354,8 @@ namespace PrintStreamer.Services
             // Try sending using MoonrakerClient helper
             try
             {
-                var apiKey = _cfg.GetValue<string>("Moonraker:ApiKey") ?? _cfg.GetValue<string>("moonraker:apiKey");
-                var authHeader = _cfg.GetValue<string>("Moonraker:AuthHeader") ?? _cfg.GetValue<string>("moonraker:authHeader");
+                var apiKey = _cfg.GetValue<string>("Moonraker:ApiKey");
+                var authHeader = _cfg.GetValue<string>("Moonraker:AuthHeader");
                 var resp = await MoonrakerClient.SendGcodeScriptAsync(baseUri, cmd, apiKey, authHeader, ct);
                 if (resp == null)
                 {
@@ -378,7 +378,7 @@ namespace PrintStreamer.Services
         // Temperature helpers (safe ranges enforced). toolIndex default 0.
         public async Task<SendResult> SetToolTemperatureAsync(int toolIndex, int temperature, CancellationToken ct = default)
         {
-            var max = _cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? _cfg.GetValue<int?>("stream:console:toolMaxTemp") ?? 350;
+            var max = _cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
             if (temperature < 0 || temperature > max)
             {
                 return new SendResult { Ok = false, Message = $"Tool temp out of range (0..{max})" };
@@ -389,7 +389,7 @@ namespace PrintStreamer.Services
 
         public async Task<SendResult> SetBedTemperatureAsync(int temperature, CancellationToken ct = default)
         {
-            var max = _cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? _cfg.GetValue<int?>("stream:console:bedMaxTemp") ?? 120;
+            var max = _cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
             if (temperature < 0 || temperature > max)
             {
                 return new SendResult { Ok = false, Message = $"Bed temp out of range (0..{max})" };
