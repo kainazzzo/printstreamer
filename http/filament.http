@@ -35,17 +35,14 @@ GET {{baseUrl}}/printer/print
 ################################################################################
 
 ### Metadata WITHOUT gcodes/ prefix (adjust filename)
-GET {{baseUrl}}/server/files/metadata?filename=test_cube.gcode
+GET {{baseUrl}}/server/files/metadata?filename=3dbenchy.gcode
 {{authHeader}}: {{apiKey}}
 
-### Metadata WITH gcodes/ prefix (common on many installs)
-GET {{baseUrl}}/server/files/metadata?filename=gcodes/test_cube.gcode
-{{authHeader}}: {{apiKey}}
 
 ### Tip: Get currently printing filename, then query its metadata
 # 1) Run the print_stats call above and copy the filename (e.g., "gcodes/foo.gcode")
 # 2) Paste into this request:
-GET {{baseUrl}}/server/files/metadata?filename=gcodes/REPLACE_ME.gcode
+GET {{baseUrl}}/server/files/metadata?filename=3dbenchy.gcode
 {{authHeader}}: {{apiKey}}
 
 ################################################################################
