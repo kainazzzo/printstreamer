@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Services
 {
@@ -14,11 +15,13 @@ namespace PrintStreamer.Services
     {
         private readonly IConfiguration _config;
         private readonly PrintStreamer.Overlay.OverlayTextService _overlayText;
+        private readonly ILogger<OverlayMjpegService> _logger;
 
-        public OverlayMjpegService(IConfiguration config, PrintStreamer.Overlay.OverlayTextService overlayText)
+        public OverlayMjpegService(IConfiguration config, PrintStreamer.Overlay.OverlayTextService overlayText, ILogger<OverlayMjpegService> logger)
         {
             _config = config;
             _overlayText = overlayText;
+            _logger = logger;
         }
 
         public async Task HandleRequestAsync(HttpContext ctx, CancellationToken cancellationToken = default)
@@ -137,15 +140,15 @@ namespace PrintStreamer.Services
                                     {
                                         // Only log these occasionally to avoid spam
                                         var now = DateTime.UtcNow;
-                                        if ((now - lastErrorTime).TotalSeconds > 10)
+                                            if ((now - lastErrorTime).TotalSeconds > 10)
                                         {
-                                            Console.WriteLine($"[OverlayMJPEG] Suppressing benign decode warnings (last 10s)");
+                                            _logger.LogInformation("[OverlayMJPEG] Suppressing benign decode warnings (last 10s)");
                                             lastErrorTime = now;
                                         }
                                     }
                                     else
                                     {
-                                        Console.WriteLine($"[OverlayMJPEG ffmpeg] {s}");
+                                        _logger.LogWarning("[OverlayMJPEG ffmpeg] {Message}", s);
                                         errorCount++;
                                     }
                                 }
@@ -173,7 +176,7 @@ namespace PrintStreamer.Services
                 else
                 {
                     // Response already started, log the error but don't try to write to response
-                    Console.WriteLine($"[OverlayMJPEG] Pipeline error after response started: {ex.Message}");
+                    _logger.LogError(ex, "[OverlayMJPEG] Pipeline error after response started");
                 }
             }
             finally
