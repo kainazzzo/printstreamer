@@ -18,6 +18,12 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 ### Advanced Topics
 7. **[STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)** — Usage patterns, real-world scenarios, code examples
+8. **[PLANNED_FEATURES.md](PLANNED_FEATURES.md)** — Feature roadmap, implementation status, and future enhancements
+
+### Development Resources
+9. **[http/filament.http](http/filament.http)** — Moonraker API examples for testing filament metadata endpoints
+10. **[LOGGING_REFACTOR_GUIDE.md](LOGGING_REFACTOR_GUIDE.md)** — Logging best practices and migration guide
+
 ### Full Documentation List
 
 - [README.md](README.md)
@@ -26,6 +32,9 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)
 - [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
+- [PLANNED_FEATURES.md](PLANNED_FEATURES.md)
+- [LOGGING_REFACTOR_GUIDE.md](LOGGING_REFACTOR_GUIDE.md)
+- [http/filament.http](http/filament.http) — API test collection
 
 ## 🎯 Quick Navigation
 
@@ -39,6 +48,12 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 
 #### See Examples
 → Browse [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md)
+
+#### Configure Filament Overlay
+→ See [PLANNED_FEATURES.md](PLANNED_FEATURES.md#stream-overlay-enhancements) for implementation details and new overlay tokens
+
+#### Test Moonraker APIs
+→ Use [http/filament.http](http/filament.http) to explore filament metadata endpoints
 
 #### Deploy to Production
 → See [DOCKER_RELEASE.md](DOCKER_RELEASE.md) for secure Docker and deployment
@@ -92,6 +107,7 @@ Welcome to PrintStreamer - your complete solution for streaming 3D printer webca
 - Basic: [QUICKSTART.md#step-2](QUICKSTART.md#step-2-configure-source-1-minute)
 - Complete: [README.md#configuration](README.md#configuration)
 - Environment: [PROJECT_SUMMARY.md#environment-variables](PROJECT_SUMMARY.md#environment-variables)
+- Overlay & Filament: [PLANNED_FEATURES.md#stream-overlay-enhancements](PLANNED_FEATURES.md#stream-overlay-enhancements)
 
 ### YouTube Setup
 - Quick: [QUICKSTART.md#step-4](QUICKSTART.md#step-4-setup-youtube-2-minutes)
@@ -185,6 +201,9 @@ https://console.cloud.google.com  # Google Cloud Console
 | Basic Streaming | ✅ | [README.md](README.md) |
 | Low Resource | ✅ | [STREAMER_EXAMPLES.md](STREAMER_EXAMPLES.md) |
 | Hardware Acceleration | ✅ | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Filament Metadata Overlay | ✅ | [PLANNED_FEATURES.md](PLANNED_FEATURES.md) |
+| YouTube Auto-Description | ✅ | [PLANNED_FEATURES.md](PLANNED_FEATURES.md) |
+| Timelapse w/ Metadata | ✅ | [PLANNED_FEATURES.md](PLANNED_FEATURES.md) |
 
 Legend: ✅ Supported | ⚠️ With caveats | ❌ Not supported | 🔜 Planned
 
@@ -211,6 +230,9 @@ Legend: ✅ Supported | ⚠️ With caveats | ❌ Not supported | 🔜 Planned
 - YouTube OAuth integration
 - Docker support
 - Comprehensive examples
+- **✅ Filament metadata overlay system** (NEW)
+- **✅ Moonraker API integration for live/file metadata** (NEW)
+- **✅ Timelapse metadata provider** (NEW)
 
 ### Planned for 1.1
 - Frame overlay examples with ImageSharp
@@ -218,6 +240,8 @@ Legend: ✅ Supported | ⚠️ With caveats | ❌ Not supported | 🔜 Planned
 - Advanced configuration patterns
 - Performance tuning guide
 - Production deployment checklist
+- REST endpoint for merged filament data (OBS integration)
+- Template selector UI for overlay layouts
 
 ---
 

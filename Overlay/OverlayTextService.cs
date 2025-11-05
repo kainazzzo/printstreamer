@@ -27,6 +27,10 @@ public sealed class OverlayTextService : IDisposable
     private readonly ITimelapseMetadataProvider? _tlProvider;
     private readonly Func<string?>? _audioProvider;
     private readonly ILogger<OverlayTextService> _logger;
+    // Filament metadata cache (per-filename) to avoid hitting Moonraker on every refresh
+    private readonly Dictionary<string, (DateTime fetchedAt, FilamentMeta meta)> _filamentCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly int _filamentCacheSeconds;
+    private readonly bool _showFilamentInOverlay;
 
     public string TextFilePath => _textFilePath;
 
@@ -35,7 +39,7 @@ public sealed class OverlayTextService : IDisposable
         _tlProvider = timelapseProvider;
         _audioProvider = audioProvider;
         _logger = logger;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+    _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
 
         _moonrakerBase = (config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125").TrimEnd('/');
         _apiKey = config.GetValue<string>("Moonraker:ApiKey");
@@ -48,11 +52,13 @@ public sealed class OverlayTextService : IDisposable
      _padSpeedWidth = config.GetValue<int?>("Overlay:PadSpeedWidth") ?? 3; // e.g., "  0", " 15", "120"
      _padFlowWidth = config.GetValue<int?>("Overlay:PadFlowWidth") ?? 5;   // e.g., " 0.0", "12.3"
 
-        var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
+    var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
         if (refreshMs < 200) refreshMs = 200;
         _interval = TimeSpan.FromMilliseconds(refreshMs);
 
-        // Choose a writable directory for the overlay text file with graceful fallbacks
+        // Filament metadata cache TTL (seconds); default 60s
+        _filamentCacheSeconds = config.GetValue<int?>("Overlay:FilamentCacheSeconds") ?? 60;
+        _showFilamentInOverlay = config.GetValue<bool?>("Overlay:ShowFilamentInOverlay") ?? true;        // Choose a writable directory for the overlay text file with graceful fallbacks
         // 1) AppContext.BaseDirectory/overlay (publish/run stable)
         // 2) CurrentDirectory/overlay
         // 3) $TMPDIR/printstreamer/overlay
@@ -138,7 +144,7 @@ public sealed class OverlayTextService : IDisposable
         var status = root.GetProperty("result").GetProperty("status");
         var extruder = status.TryGetProperty("extruder", out var ex) ? ex : default;
         var bed = status.TryGetProperty("heater_bed", out var hb) ? hb : default;
-        var print = status.TryGetProperty("print_stats", out var ps) ? ps : default;
+    var print = status.TryGetProperty("print_stats", out var ps) ? ps : default;
 
         double nozzle = TryDouble(extruder, "temperature");
         double nozzleTarget = TryDouble(extruder, "target");
@@ -152,15 +158,48 @@ public sealed class OverlayTextService : IDisposable
         bool isPaused = state.Equals("paused", StringComparison.OrdinalIgnoreCase);
         bool isActiveJob = isPrinting || isPaused;
 
-        // Try to get layer info for more accurate progress (only if actively printing)
+        // Try to get layer info and filament metadata for more accurate overlay (only if actively printing)
         int? currentLayer = null;
         int? totalLayers = null;
+        string? filamentType = null;
+        string? filamentBrand = null;
+        string? filamentColor = null;
+        string? filamentName = null;
+        double? filamentUsedMm = null;
+        double? filamentTotalMm = null;
         if (isActiveJob && print.ValueKind != JsonValueKind.Undefined && print.TryGetProperty("info", out var infoElem))
         {
             if (infoElem.TryGetProperty("current_layer", out var clElem) && clElem.ValueKind == JsonValueKind.Number && clElem.TryGetInt32(out var cl))
                 currentLayer = cl;
             if (infoElem.TryGetProperty("total_layer", out var tlElem) && tlElem.ValueKind == JsonValueKind.Number && tlElem.TryGetInt32(out var tl))
                 totalLayers = tl;
+
+            // Filament fields direct from print_stats.info (preferred live source when available)
+            if (infoElem.TryGetProperty("filament_type", out var ft) && ft.ValueKind != JsonValueKind.Undefined)
+                filamentType = ft.ToString();
+            else if (infoElem.TryGetProperty("FILAMENT_TYPE", out var ftU) && ftU.ValueKind != JsonValueKind.Undefined)
+                filamentType = ftU.ToString();
+
+            if (infoElem.TryGetProperty("filament_brand", out var fb) && fb.ValueKind != JsonValueKind.Undefined)
+                filamentBrand = fb.ToString();
+            else if (infoElem.TryGetProperty("FILAMENT_BRAND", out var fbU) && fbU.ValueKind != JsonValueKind.Undefined)
+                filamentBrand = fbU.ToString();
+
+            if (infoElem.TryGetProperty("filament_color", out var fc) && fc.ValueKind != JsonValueKind.Undefined)
+                filamentColor = fc.ToString();
+            else if (infoElem.TryGetProperty("FILAMENT_COLOR", out var fcU) && fcU.ValueKind != JsonValueKind.Undefined)
+                filamentColor = fcU.ToString();
+
+            // Used/total in mm when provided by print_stats.info
+            if (infoElem.TryGetProperty("filament_used_mm", out var fum) && fum.ValueKind == JsonValueKind.Number && fum.TryGetDouble(out var usedMm))
+                filamentUsedMm = usedMm;
+            else if (infoElem.TryGetProperty("FILAMENT_USED_MM", out var fumU) && fumU.ValueKind == JsonValueKind.Number && fumU.TryGetDouble(out var usedMmU))
+                filamentUsedMm = usedMmU;
+
+            if (infoElem.TryGetProperty("filament_total_mm", out var ftm) && ftm.ValueKind == JsonValueKind.Number && ftm.TryGetDouble(out var totalMm))
+                filamentTotalMm = totalMm;
+            else if (infoElem.TryGetProperty("FILAMENT_TOTAL_MM", out var ftmU) && ftmU.ValueKind == JsonValueKind.Number && ftmU.TryGetDouble(out var totalMmU))
+                filamentTotalMm = totalMmU;
         }
 
         // Get progress from display_status (0-1 range) and volumetric flow (mm^3/s)
@@ -228,11 +267,68 @@ public sealed class OverlayTextService : IDisposable
         // Use display_status.progress as primary source (already set from display_status or virtual_sdcard above)
         // Only show progress when there's an active job
         int progress = isActiveJob ? (int)Math.Round(progress01 * 100) : 0;
-        string filename = TryString(print, "filename") ?? string.Empty;
+    string filename = TryString(print, "filename") ?? string.Empty;
 
         // Get print duration and filament used for ETA calculation (only if actively printing)
         double printDuration = isActiveJob ? TryDouble(print, "print_duration") : double.NaN;
         double filamentUsed = isActiveJob ? TryDouble(print, "filament_used") : double.NaN;
+
+        // Merge filament metadata with file metadata cache when needed
+        if (_showFilamentInOverlay && isActiveJob && !string.IsNullOrWhiteSpace(filename))
+        {
+            // Decide if we need to fetch metadata: when any key is missing or cache expired
+            var needs = string.IsNullOrWhiteSpace(filamentType) || string.IsNullOrWhiteSpace(filamentBrand) || string.IsNullOrWhiteSpace(filamentColor) || !filamentTotalMm.HasValue;
+            var now = DateTime.UtcNow;
+            FilamentMeta? cached = null;
+            if (_filamentCache.TryGetValue(filename, out var entry))
+            {
+                if ((now - entry.fetchedAt).TotalSeconds < _filamentCacheSeconds)
+                {
+                    cached = entry.meta;
+                }
+            }
+
+            if (cached == null && needs)
+            {
+                try
+                {
+                    var baseUri = new Uri(_moonrakerBase);
+                    var node = await global::MoonrakerClient.GetFileMetadataAsync(baseUri, filename, _apiKey, _authHeader, ct);
+                    var resultObj = node?["result"]?.AsObject();
+                    if (resultObj != null)
+                    {
+                        cached = new FilamentMeta
+                        {
+                            Type = TryGetStringCaseInsensitive(resultObj, "filament_type"),
+                            Brand = TryGetStringCaseInsensitive(resultObj, "filament_brand") ?? TryGetStringCaseInsensitive(resultObj, "filament_name"),
+                            Color = TryGetStringCaseInsensitive(resultObj, "filament_color"),
+                            Name = TryGetStringCaseInsensitive(resultObj, "filament_name"),
+                            UsedMm = TryGetDoubleCaseInsensitive(resultObj, "filament_used_mm")
+                                     ?? TryGetDoubleCaseInsensitive(resultObj, "filament_used")
+                                     ?? (TryGetDoubleCaseInsensitive(resultObj, "filament_used_m") * 1000.0),
+                            TotalMm = TryGetDoubleCaseInsensitive(resultObj, "filament_total_mm")
+                                      ?? TryGetDoubleCaseInsensitive(resultObj, "filament_total")
+                                      ?? (TryGetDoubleCaseInsensitive(resultObj, "filament_total_m") * 1000.0)
+                        };
+                        _filamentCache[filename] = (now, cached);
+                    }
+                }
+                catch (Exception e1)
+                {
+                    _logger.LogDebug(e1, "[Overlay] Failed to fetch file metadata for filament info");
+                }
+            }
+
+            if (cached != null)
+            {
+                filamentType ??= cached.Type;
+                filamentBrand ??= cached.Brand;
+                filamentColor ??= cached.Color;
+                filamentName ??= cached.Name;
+                filamentUsedMm ??= cached.UsedMm;
+                filamentTotalMm ??= cached.TotalMm;
+            }
+        }
 
         // Calculate ETA if progress is meaningful and job is active
         DateTime? eta = null;
@@ -248,6 +344,7 @@ public sealed class OverlayTextService : IDisposable
         string? providerSlicer = null;
         double? layerHeight = null;
         double? extrusionWidth = null;
+        double? providerFilamentTotalMm = null;
         if (isActiveJob && !string.IsNullOrWhiteSpace(filename) && _tlProvider != null)
         {
             try
@@ -260,6 +357,7 @@ public sealed class OverlayTextService : IDisposable
                     providerSlicer = meta.Slicer;
                     layerHeight = meta.LayerHeight;
                     extrusionWidth = meta.ExtrusionWidth;
+                    providerFilamentTotalMm = meta.FilamentTotalMm;
                 }
             }
             catch { }
@@ -318,6 +416,12 @@ public sealed class OverlayTextService : IDisposable
             SpeedFactor = speedFactor,
             Flow = flowVolume,
             Filament = filamentUsed,
+            FilamentType = filamentType,
+            FilamentBrand = filamentBrand,
+            FilamentColor = filamentColor,
+            FilamentName = filamentName,
+            FilamentUsedMm = double.IsNaN(filamentUsed) ? filamentUsedMm : filamentUsed, // prefer live used from print_stats (mm)
+            FilamentTotalMm = filamentTotalMm ?? providerFilamentTotalMm,
             Slicer = providerSlicer,
             ETA = eta
         };
@@ -416,6 +520,11 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceStr(s, "state", d.State ?? string.Empty);
         s = ReplaceStr(s, "filename", d.Filename ?? string.Empty);
         s = ReplaceStr(s, "slicer", d.Slicer ?? string.Empty);
+    // New filament string fields
+    s = ReplaceStr(s, "filament_type", d.FilamentType ?? string.Empty);
+    s = ReplaceStr(s, "filament_brand", d.FilamentBrand ?? string.Empty);
+    s = ReplaceStr(s, "filament_color", d.FilamentColor ?? string.Empty);
+    s = ReplaceStr(s, "filament_name", d.FilamentName ?? string.Empty);
         // Template contains units (e.g. "mm/s"); only insert the numeric value here to avoid duplicating units.
         // Pad to fixed width to keep label alignment stable.
         {
@@ -441,6 +550,9 @@ public sealed class OverlayTextService : IDisposable
         // Filament usage: d.Filament is provided in mm. Convert to meters here but do NOT append the unit
         // because the overlay template itself may include the unit (avoid doubling like "mm" -> "mm").
         s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") : "0.00");
+    // New filament numeric tokens in raw millimeters
+    s = ReplaceNum(s, "filament_used_mm", d.FilamentUsedMm.HasValue ? d.FilamentUsedMm.Value : double.NaN, "0");
+    s = ReplaceNum(s, "filament_total_mm", d.FilamentTotalMm.HasValue ? d.FilamentTotalMm.Value : double.NaN, "0");
         // ETA with time format if available
         if (d.ETA.HasValue)
         {
@@ -537,8 +649,80 @@ public sealed class OverlayTextService : IDisposable
         public double? Speed { get; init; } // Speed in mm/s
         public double? SpeedFactor { get; init; } // Speed factor percentage
         public double? Flow { get; init; } // Flow/extrude factor percentage
-        public double? Filament { get; init; } // Filament used in mm
+        public double? Filament { get; init; } // Filament used in mm (legacy field for {filament} token in meters)
+        // New filament metadata fields for enhanced overlay/metadata usage
+        public string? FilamentType { get; init; }
+        public string? FilamentBrand { get; init; }
+        public string? FilamentColor { get; init; }
+        public string? FilamentName { get; init; }
+        public double? FilamentUsedMm { get; init; }
+        public double? FilamentTotalMm { get; init; }
         public string? Slicer { get; init; }
         public DateTime? ETA { get; init; }
+    }
+
+    private sealed class FilamentMeta
+    {
+        public string? Type { get; init; }
+        public string? Brand { get; init; }
+        public string? Color { get; init; }
+        public string? Name { get; init; }
+        public double? UsedMm { get; init; }
+        public double? TotalMm { get; init; }
+    }
+
+    // Helpers for case-insensitive JSON value extraction from JsonObject (System.Text.Json.Nodes)
+    private static string? TryGetStringCaseInsensitive(System.Text.Json.Nodes.JsonObject obj, string key)
+    {
+        try
+        {
+            if (obj.TryGetPropertyValue(key, out var node) && node != null) return node.ToString();
+            var upper = key.ToUpperInvariant();
+            if (obj.TryGetPropertyValue(upper, out var nodeU) && nodeU != null) return nodeU.ToString();
+            foreach (var kv in obj)
+            {
+                if (string.Equals(kv.Key, key, StringComparison.OrdinalIgnoreCase)) return kv.Value?.ToString();
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static double? TryGetDoubleCaseInsensitive(System.Text.Json.Nodes.JsonObject obj, string key)
+    {
+        try
+        {
+            if (obj.TryGetPropertyValue(key, out var node) && node != null)
+            {
+                if (node is System.Text.Json.Nodes.JsonValue v)
+                {
+                    if (v.TryGetValue<double>(out var d)) return d;
+                    if (double.TryParse(v.ToString(), out var d2)) return d2;
+                }
+            }
+            var upper = key.ToUpperInvariant();
+            if (obj.TryGetPropertyValue(upper, out var nodeU) && nodeU != null)
+            {
+                if (nodeU is System.Text.Json.Nodes.JsonValue v2)
+                {
+                    if (v2.TryGetValue<double>(out var d)) return d;
+                    if (double.TryParse(v2.ToString(), out var d2)) return d2;
+                }
+            }
+            foreach (var kv in obj)
+            {
+                if (string.Equals(kv.Key, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    var n = kv.Value;
+                    if (n is System.Text.Json.Nodes.JsonValue v3)
+                    {
+                        if (v3.TryGetValue<double>(out var d)) return d;
+                        if (double.TryParse(v3.ToString(), out var d2)) return d2;
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 }

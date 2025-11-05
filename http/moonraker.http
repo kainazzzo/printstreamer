@@ -4,6 +4,23 @@
 @apiKey = 
 @authHeader = X-Api-Key
 
+# --- Discovered from live printer (automatically populated by diagnostic) ---
+# Hostname reported by Moonraker
+@printerHostname = kunos
+# Current file reported by /printer/objects/query?print_stats
+@currentFilename = Pressure Advance Tower w/Seams.gcode
+# URL-encoded filename (useful for metadata requests)
+@currentFilenameEncoded = Pressure%20Advance%20Tower%20w%2FSeams.gcode
+# Slicer and version from /server/files/metadata
+@slicer = OrcaSlicer
+@slicerVersion = 2.3.1
+# Filament metadata from current file (if available)
+@filament_name = FLASHFORGE ABS
+@filament_type = ABS
+@filament_total_mm = 4878.36
+@filament_weight_total = 12.2
+# -----------------------------------------------------------------------
+
 ###############################################################################
 # 1. PRINT STATS - Primary endpoint used by poller
 # Endpoint: /printer/objects/query?print_stats
@@ -46,6 +63,12 @@ GET {{baseUrl}}/server/files/metadata?filename=test_cube.gcode
 
 ### Get File Metadata (with gcodes/ prefix)
 GET {{baseUrl}}/server/files/metadata?filename=gcodes/test_cube.gcode
+{{authHeader}}: {{apiKey}}
+
+### Get File Metadata (use discovered current filename variable)
+### This returns filament fields in your setup: filament_name, filament_type,
+### filament_total (mm), filament_weight_total, etc.
+GET {{baseUrl}}/server/files/metadata?filename={{currentFilenameEncoded}}
 {{authHeader}}: {{apiKey}}
 
 ###############################################################################

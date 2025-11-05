@@ -81,9 +81,18 @@ namespace PrintStreamer.Timelapse
                                     if (mdObj.TryGetPropertyValue("slicer", out var slicer)) session.Slicer = slicer?.ToString();
                                     if (mdObj.TryGetPropertyValue("estimated_time", out var est)) session.EstimatedSeconds = TryParseDouble(est?.ToString());
                                     if (mdObj.TryGetPropertyValue("layer_count", out var lc) && int.TryParse(lc?.ToString(), out var lcInt)) session.TotalLayersFromMetadata = lcInt;
+                                    // Filament totals (support variants and units)
+                                    session.FilamentTotalMm = TryParseDouble(mdObj["filament_total_mm"]?.ToString())
+                                                            ?? TryParseDouble(mdObj["filament_total"]?.ToString())
+                                                            ?? (TryParseDouble(mdObj["filament_total_m"]?.ToString()) * 1000.0);
                                 }
                                 if (session.TotalLayersFromMetadata == null && r.TryGetPropertyValue("layer_count", out var topLc) && int.TryParse(topLc?.ToString(), out var topLcInt))
                                     session.TotalLayersFromMetadata = topLcInt;
+                                // Some Moonraker setups place filament_total_mm at top level
+                                if (session.FilamentTotalMm == null && r.TryGetPropertyValue("filament_total_mm", out var ftm) && ftm != null)
+                                {
+                                    session.FilamentTotalMm = TryParseDouble(ftm.ToString());
+                                }
                             }
                         }
                         catch { }
@@ -316,7 +325,8 @@ namespace PrintStreamer.Timelapse
                 TotalLayersFromMetadata = session.TotalLayersFromMetadata,
                 RawMetadata = session.MetadataRaw,
                 Slicer = session.Slicer,
-                    EstimatedSeconds = session.EstimatedSeconds
+                    EstimatedSeconds = session.EstimatedSeconds,
+                    FilamentTotalMm = session.FilamentTotalMm
             };
         }
 
@@ -331,7 +341,8 @@ namespace PrintStreamer.Timelapse
                     TotalLayersFromMetadata = s.TotalLayersFromMetadata,
                     RawMetadata = s.MetadataRaw,
                     Slicer = s.Slicer,
-                    EstimatedSeconds = s.EstimatedSeconds
+                    EstimatedSeconds = s.EstimatedSeconds,
+                    FilamentTotalMm = s.FilamentTotalMm
                 };
             }
         }
@@ -556,6 +567,7 @@ namespace PrintStreamer.Timelapse
     public JsonNode? MetadataRaw { get; set; }
     public string? Slicer { get; set; }
     public double? EstimatedSeconds { get; set; }
+    public double? FilamentTotalMm { get; set; }
     public bool IsStopped { get; set; } = false;
     // Gating: start capturing only when first printing layer begins
     public bool StartAfterLayer1 { get; set; } = true;

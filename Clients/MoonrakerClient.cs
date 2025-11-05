@@ -117,6 +117,17 @@ internal static class MoonrakerClient
                             info.ProgressPercent = (double)info.CurrentLayer.Value / (double)info.TotalLayers.Value * 100.0;
                         }
 
+                        // If any filament fields are missing and we have a filename, try fetching file metadata as a fallback
+                        if (!string.IsNullOrWhiteSpace(info.Filename) &&
+                            (string.IsNullOrWhiteSpace(info.FilamentType) ||
+                             string.IsNullOrWhiteSpace(info.FilamentBrand) ||
+                             string.IsNullOrWhiteSpace(info.FilamentColor) ||
+                             !info.FilamentUsedMm.HasValue ||
+                             !info.FilamentTotalMm.HasValue))
+                        {
+                            await MergeFilamentFromMetadataAsync(info, baseUri, apiKey, authHeader, cancellationToken);
+                        }
+
                         return info;
                     }
                 }
@@ -145,6 +156,123 @@ internal static class MoonrakerClient
                     return info;
                 }
                 catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>
+    /// Helper to merge filament metadata from file metadata endpoint into MoonrakerPrintInfo.
+    /// Only updates fields that are currently missing (null/empty).
+    /// </summary>
+    private static async Task MergeFilamentFromMetadataAsync(MoonrakerPrintInfo info, Uri baseUri, string? apiKey, string? authHeader, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(info.Filename)) return;
+
+        try
+        {
+            var metadataNode = await GetFileMetadataAsync(baseUri, info.Filename, apiKey, authHeader, cancellationToken);
+            if (metadataNode == null) return;
+
+            // Navigate to result object (typical structure: { "result": { ... } })
+            var result = metadataNode["result"] as JsonObject;
+            if (result == null) return;
+
+            // Extract filament fields with normalization (case-insensitive, handle variants)
+            if (string.IsNullOrWhiteSpace(info.FilamentType))
+            {
+                info.FilamentType = GetFilamentString(result, "filament_type");
+            }
+            if (string.IsNullOrWhiteSpace(info.FilamentBrand))
+            {
+                info.FilamentBrand = GetFilamentString(result, "filament_name") ?? GetFilamentString(result, "filament_brand");
+            }
+            if (string.IsNullOrWhiteSpace(info.FilamentColor))
+            {
+                info.FilamentColor = GetFilamentString(result, "filament_color");
+            }
+            if (!info.FilamentUsedMm.HasValue)
+            {
+                // Try: filament_used_mm, filament_used (assume mm), filament_used_m (convert to mm)
+                info.FilamentUsedMm = GetFilamentDouble(result, "filament_used_mm") ??
+                                      GetFilamentDouble(result, "filament_used") ??
+                                      (GetFilamentDouble(result, "filament_used_m") * 1000.0);
+            }
+            if (!info.FilamentTotalMm.HasValue)
+            {
+                // Try: filament_total_mm, filament_total (assume mm), filament_total_m (convert to mm)
+                info.FilamentTotalMm = GetFilamentDouble(result, "filament_total_mm") ??
+                                       GetFilamentDouble(result, "filament_total") ??
+                                       (GetFilamentDouble(result, "filament_total_m") * 1000.0);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Moonraker] Failed to merge filament metadata: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Case-insensitive string extraction helper for filament fields
+    /// </summary>
+    private static string? GetFilamentString(JsonObject obj, string key)
+    {
+        try
+        {
+            // Try exact key first
+            if (obj.TryGetPropertyValue(key, out var node) && node != null)
+            {
+                return node.ToString();
+            }
+
+            // Try uppercase variant
+            var upperKey = key.ToUpperInvariant();
+            if (obj.TryGetPropertyValue(upperKey, out var upperNode) && upperNode != null)
+            {
+                return upperNode.ToString();
+            }
+
+            // Try case-insensitive search
+            foreach (var kvp in obj)
+            {
+                if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return kvp.Value?.ToString();
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>
+    /// Case-insensitive numeric extraction helper for filament fields. Returns null if not found or not numeric.
+    /// </summary>
+    private static double? GetFilamentDouble(JsonObject obj, string key)
+    {
+        try
+        {
+            // Try exact key first
+            if (obj.TryGetPropertyValue(key, out var node) && node != null)
+            {
+                return TryGetDouble(node);
+            }
+
+            // Try uppercase variant
+            var upperKey = key.ToUpperInvariant();
+            if (obj.TryGetPropertyValue(upperKey, out var upperNode) && upperNode != null)
+            {
+                return TryGetDouble(upperNode);
+            }
+
+            // Try case-insensitive search
+            foreach (var kvp in obj)
+            {
+                if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return TryGetDouble(kvp.Value);
+                }
             }
         }
         catch { }

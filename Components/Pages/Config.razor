@@ -82,7 +82,7 @@
                 <div class="form-group">
                     <label for="overlay-template">Template</label>
                     <InputTextArea id="overlay-template" @bind-Value="config.Overlay.Template" rows="3" />
-                    <div class="help-text">Template for overlay text. Available variables: {'{'}nozzle{'}'}, {'{'}bed{'}'}, {'{'}progress{'}'}, {'{'}speed{'}'}, {'{'}flow{'}'}, {'{'}filament{'}'}, {'{'}eta{'}'}, {'{'}layers{'}'}</div>
+                    <div class="help-text">Template for overlay text. Available variables: {'{'}nozzle{'}'}, {'{'}bed{'}'}, {'{'}progress{'}'}, {'{'}speed{'}'}, {'{'}flow{'}'}, {'{'}filament{'}'} (meters), {'{'}eta{'}'}, {'{'}layers{'}'}, {'{'}filament_type{'}'}, {'{'}filament_brand{'}'}, {'{'}filament_color{'}'}, {'{'}filament_name{'}'}, {'{'}filament_used_mm{'}'}, {'{'}filament_total_mm{'}'}</div>
                 </div>
                 
                 <div class="grid-2col">
@@ -133,6 +133,16 @@
                 <div class="form-group">
                     <label for="overlay-boxborderw">Box Border Width</label>
                     <InputNumber id="overlay-boxborderw" @bind-Value="config.Overlay.BoxBorderW" />
+                </div>
+
+                <div class="checkbox-group">
+                    <InputCheckbox id="overlay-showfilament" @bind-Value="config.Overlay.ShowFilamentInOverlay" />
+                    <label for="overlay-showfilament">Show Filament Details in Overlay</label>
+                </div>
+                <div class="form-group">
+                    <label for="overlay-filamentcache">Filament Metadata Cache (seconds)</label>
+                    <InputNumber id="overlay-filamentcache" @bind-Value="config.Overlay.FilamentCacheSeconds" />
+                    <div class="help-text">How long to cache file metadata per filename to avoid frequent Moonraker calls (default 60s)</div>
                 </div>
             </div>
             
@@ -290,7 +300,7 @@
             <div class="section">
                 <div class="button-group">
                     <button type="submit" class="success">Save Configuration</button>
-                    <button type="button" @onclick="() => LoadConfig(true)">Reload</button>
+                    <button type="button" @onclick="async () => await LoadConfig(true)">Reload</button>
                     <button type="button" class="danger" @onclick="ResetToDefaults">Reset to Defaults</button>
                 </div>
             </div>
@@ -476,6 +486,8 @@
         public string Y { get; set; } = "";
         public bool Box { get; set; }
         public int BoxBorderW { get; set; }
+        public bool ShowFilamentInOverlay { get; set; }
+        public int FilamentCacheSeconds { get; set; }
     }
 
     private class YouTubeConfig

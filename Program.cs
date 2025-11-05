@@ -1115,7 +1115,9 @@ if (serveEnabled)
 					BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
 					X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
 					Y = config.GetValue<string>("Overlay:Y") ?? string.Empty,
-					BannerFraction = config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2
+					BannerFraction = config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2,
+					ShowFilamentInOverlay = config.GetValue<bool?>("Overlay:ShowFilamentInOverlay") ?? true,
+					FilamentCacheSeconds = config.GetValue<int?>("Overlay:FilamentCacheSeconds") ?? 60
 				},
 				YouTube = new
 				{
@@ -1258,7 +1260,9 @@ if (serveEnabled)
 					BoxBorderW = 8,
 					X = "(w-tw)-20",
 					Y = "",
-					BannerFraction = 0.2
+					BannerFraction = 0.2,
+					ShowFilamentInOverlay = true,
+					FilamentCacheSeconds = 60
 				},
 				YouTube = new
 				{

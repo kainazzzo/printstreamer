@@ -21,5 +21,7 @@ namespace PrintStreamer.Overlay
         public double? LayerHeight { get; init; }
         public double? FirstLayerHeight { get; init; }
         public double? ExtrusionWidth { get; init; }
+        // File-level filament totals (mm) parsed from metadata
+        public double? FilamentTotalMm { get; init; }
     }
 }

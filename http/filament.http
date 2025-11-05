@@ -1,0 +1,136 @@
+### Filament API Test Collection for Moonraker
+### Base URL and common headers
+@baseUrl = http://192.168.1.117:7125
+@apiKey = 
+@authHeader = X-Api-Key
+
+################################################################################
+# 1) CURRENT PRINT — Filament details via print_stats/info
+#    These fields are available when the file has metadata and Moonraker/Klipper
+#    propagated them: 
+#    - info.filament_type
+#    - info.filament_brand
+#    - info.filament_color
+#    - info.filament_used_mm
+#    - info.filament_total_mm
+#    Other possibly useful fields: progress, time_remaining, current_layer, etc.
+################################################################################
+
+### Print stats (primary source for live filament fields)
+GET {{baseUrl}}/printer/objects/query?print_stats
+{{authHeader}}: {{apiKey}}
+
+### Display status (sometimes contains complementary info like message/progress)
+GET {{baseUrl}}/printer/objects/query?display_status
+{{authHeader}}: {{apiKey}}
+
+### Printer print (simple fallback for basic job info)
+GET {{baseUrl}}/printer/print
+{{authHeader}}: {{apiKey}}
+
+################################################################################
+# 2) FILE METADATA — Filament details from G-code analysis
+#    Use this to read filament info (type/brand/color/length) directly from the
+#    G-code metadata. Whether you need the gcodes/ prefix depends on your setup.
+################################################################################
+
+### Metadata WITHOUT gcodes/ prefix (adjust filename)
+GET {{baseUrl}}/server/files/metadata?filename=test_cube.gcode
+{{authHeader}}: {{apiKey}}
+
+### Metadata WITH gcodes/ prefix (common on many installs)
+GET {{baseUrl}}/server/files/metadata?filename=gcodes/test_cube.gcode
+{{authHeader}}: {{apiKey}}
+
+### Tip: Get currently printing filename, then query its metadata
+# 1) Run the print_stats call above and copy the filename (e.g., "gcodes/foo.gcode")
+# 2) Paste into this request:
+GET {{baseUrl}}/server/files/metadata?filename=gcodes/REPLACE_ME.gcode
+{{authHeader}}: {{apiKey}}
+
+################################################################################
+# 3) FILAMENT SENSORS — Runout/motion sensors (status, but not brand/type/color)
+#    These are helpful for overlay/status but won’t provide spool brand/type/color.
+#    Use to detect runout and motion events.
+################################################################################
+
+### Discover available objects (find your sensor object names)
+GET {{baseUrl}}/printer/objects/list
+{{authHeader}}: {{apiKey}}
+
+### Query all filament switch sensors (runout switches)
+GET {{baseUrl}}/printer/objects/query?filament_switch_sensor
+{{authHeader}}: {{apiKey}}
+
+### Query all filament motion sensors
+GET {{baseUrl}}/printer/objects/query?filament_motion_sensor
+{{authHeader}}: {{apiKey}}
+
+################################################################################
+# 4) SPOOL / INVENTORY (OPTIONAL) — Spoolman plugin via Moonraker
+#    If you use Spoolman (popular filament inventory manager) and have the
+#    Moonraker plugin enabled, Moonraker typically exposes proxy endpoints.
+#    Common patterns include /machine/spoolman/... or /spoolman/...
+#    Your install may vary — try both patterns below as appropriate.
+################################################################################
+
+### (Spoolman) Currently selected/active spool
+# Pattern A (common):
+GET {{baseUrl}}/machine/spoolman/selected_spool
+{{authHeader}}: {{apiKey}}
+# Pattern B (alternative):
+GET {{baseUrl}}/spoolman/selected_spool
+{{authHeader}}: {{apiKey}}
+
+### (Spoolman) List spools (filter/ordering may be supported via query params)
+# Pattern A:
+GET {{baseUrl}}/machine/spoolman/spools
+{{authHeader}}: {{apiKey}}
+# Pattern B:
+GET {{baseUrl}}/spoolman/spools
+{{authHeader}}: {{apiKey}}
+
+### (Spoolman) Materials
+# Pattern A:
+GET {{baseUrl}}/machine/spoolman/materials
+{{authHeader}}: {{apiKey}}
+# Pattern B:
+GET {{baseUrl}}/spoolman/materials
+{{authHeader}}: {{apiKey}}
+
+### (Spoolman) Filaments
+# Pattern A:
+GET {{baseUrl}}/machine/spoolman/filaments
+{{authHeader}}: {{apiKey}}
+# Pattern B:
+GET {{baseUrl}}/spoolman/filaments
+{{authHeader}}: {{apiKey}}
+
+### (Spoolman) Brands
+# Pattern A:
+GET {{baseUrl}}/machine/spoolman/brands
+{{authHeader}}: {{apiKey}}
+# Pattern B:
+GET {{baseUrl}}/spoolman/brands
+{{authHeader}}: {{apiKey}}
+
+################################################################################
+# 5) COMBINED QUICK PULL — Handy queries for overlay development
+################################################################################
+
+### Print stats + display_status (progress + print info + timing)
+GET {{baseUrl}}/printer/objects/query?print_stats&display_status
+{{authHeader}}: {{apiKey}}
+
+### Sensors + print stats (runout plus current job)
+GET {{baseUrl}}/printer/objects/query?print_stats&filament_switch_sensor&filament_motion_sensor
+{{authHeader}}: {{apiKey}}
+
+################################################################################
+# NOTES
+# - For accurate filament type/brand/color, the most reliable source is G-code
+#   metadata (/server/files/metadata). Live print_stats may mirror these when
+#   available.
+# - Spool brand/type/color from inventory requires Spoolman or a similar plugin.
+# - If gcodes/ prefix doesn’t work for metadata, remove it (or vice versa).
+################################################################################
