@@ -1,5 +1,6 @@
 using System.Net.Http;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Services
 {
@@ -7,6 +8,7 @@ namespace PrintStreamer.Services
     {
         private readonly IConfiguration _config;
         private readonly HttpClient _httpClient;
+        private readonly ILogger<WebCamManager> _logger;
         private volatile bool _disabled = false;
         // Track active client cancellation tokens so we can cancel upstream copy when disabling
         private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, CancellationTokenSource> _activeClients = new System.Collections.Concurrent.ConcurrentDictionary<Guid, CancellationTokenSource>();
@@ -14,9 +16,10 @@ namespace PrintStreamer.Services
         // Fallback black JPEG loaded from file
         private readonly byte[] _blackJpeg;
 
-        public WebCamManager(IConfiguration config)
+        public WebCamManager(IConfiguration config, ILogger<WebCamManager> logger)
         {
             _config = config;
+            _logger = logger;
             _httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
             
             // Load fallback_black.jpg from filesystem
@@ -24,14 +27,14 @@ namespace PrintStreamer.Services
             if (File.Exists(fallbackPath))
             {
                 _blackJpeg = File.ReadAllBytes(fallbackPath);
-                Console.WriteLine($"[WebCamManager] Loaded fallback image: {_blackJpeg.Length} bytes");
+                _logger.LogInformation("[WebCamManager] Loaded fallback image: {Bytes} bytes", _blackJpeg.Length);
             }
             else
             {
                 // Minimal black JPEG as ultimate fallback if file doesn't exist
                 _blackJpeg = Convert.FromBase64String(
                     "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAICAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGBggHBwcHBw0JCQgKCAgJCgsMDAwMDAwMDAwMDAwMDAz/wAALCAABAAEBAREA/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAgP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwD9AP/Z");
-                Console.WriteLine("[WebCamManager] Warning: fallback_black.jpg not found, using hardcoded fallback");
+                _logger.LogWarning("[WebCamManager] fallback_black.jpg not found, using hardcoded fallback");
             }
         }
 
@@ -70,7 +73,7 @@ namespace PrintStreamer.Services
             _activeClients[clientId] = linkedCts;
 
             var source = _config.GetValue<string>("Stream:Source");
-            Console.WriteLine($"[WebCamManager] Client connected: {ctx.Connection.RemoteIpAddress}:{ctx.Connection.RemotePort}");
+            _logger.LogInformation("[WebCamManager] Client connected: {Remote}:{Port}", ctx.Connection.RemoteIpAddress, ctx.Connection.RemotePort);
 
             if (_disabled)
             {
@@ -94,7 +97,7 @@ namespace PrintStreamer.Services
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("[WebCamManager] Client disconnected or request canceled.");
+                _logger.LogInformation("[WebCamManager] Client disconnected or request canceled.");
                 // If we were canceled because the manager disabled the webcam, serve fallback instead
                 if (_disabled && !ctx.RequestAborted.IsCancellationRequested)
                 {
@@ -104,7 +107,7 @@ namespace PrintStreamer.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WebCamManager] Upstream error: {ex.Message} - serving fallback MJPEG");
+                _logger.LogError(ex, "[WebCamManager] Upstream error: {Message} - serving fallback MJPEG", ex.Message);
                 // On general errors, start the fallback loop which will periodically probe the upstream for recovery.
                 try { await ServeBlackFallback(ctx, probeUpstream: true); } catch { }
             }
@@ -265,7 +268,7 @@ namespace PrintStreamer.Services
                     catch (OperationCanceledException) { break; }
                     catch (Exception writeEx)
                     {
-                        Console.WriteLine($"[WebCamManager] Fallback MJPEG write failed: {writeEx.Message}");
+                        _logger.LogError(writeEx, "[WebCamManager] Fallback MJPEG write failed: {Message}", writeEx.Message);
                         break;
                     }
 
@@ -279,7 +282,7 @@ namespace PrintStreamer.Services
                             using var probeResp = await _httpClient.SendAsync(probeReq, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
                             if (probeResp.IsSuccessStatusCode)
                             {
-                                Console.WriteLine("[WebCamManager] Upstream source is available again; switching to live feed for client.");
+                                _logger.LogInformation("[WebCamManager] Upstream source is available again; switching to live feed for client.");
                                 ctx.Response.ContentType = probeResp.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
                                 using var upstream = await probeResp.Content.ReadAsStreamAsync(ctx.RequestAborted);
                                 await upstream.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
@@ -294,7 +297,7 @@ namespace PrintStreamer.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WebCamManager] Failed to serve fallback MJPEG: {ex.Message}");
+                _logger.LogError(ex, "[WebCamManager] Failed to serve fallback MJPEG: {Message}", ex.Message);
                 if (!ctx.Response.HasStarted)
                 {
                     ctx.Response.StatusCode = 502;
