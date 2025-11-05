@@ -582,7 +582,29 @@ internal class YouTubeControlService : IDisposable
                         Console.WriteLine("Open the following URL in a browser and paste the resulting code here:");
                         Console.WriteLine(requestUrl.Build().ToString());
                         Console.Write("Enter authorization code: ");
-                        var code = Console.ReadLine();
+                        // Allow providing the auth code via config/env/file to support non-interactive shells
+                        var preProvided = _config["YouTube:OAuth:AuthCode"];
+                        if (string.IsNullOrWhiteSpace(preProvided)) preProvided = Environment.GetEnvironmentVariable("YOUTUBE_OAUTH_CODE");
+                        if (string.IsNullOrWhiteSpace(preProvided))
+                        {
+                            var authCodeFile = _config["YouTube:OAuth:AuthCodeFile"];
+                            if (!string.IsNullOrWhiteSpace(authCodeFile) && File.Exists(authCodeFile))
+                            {
+                                try { preProvided = await File.ReadAllTextAsync(authCodeFile, cancellationToken); }
+                                catch { preProvided = null; }
+                            }
+                        }
+
+                        string? code;
+                        if (!string.IsNullOrWhiteSpace(preProvided))
+                        {
+                            code = preProvided.Trim();
+                            Console.WriteLine("(Using pre-provided auth code from config/env/file)");
+                        }
+                        else
+                        {
+                            code = Console.ReadLine();
+                        }
                         if (string.IsNullOrWhiteSpace(code))
                         {
                             Console.WriteLine("No code provided, aborting auth.");

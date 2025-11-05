@@ -3,6 +3,7 @@ using PrintStreamer.Timelapse;
 using PrintStreamer.Overlay;
 using PrintStreamer.Utils;
 using PrintStreamer.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Services
 {
@@ -28,6 +29,7 @@ namespace PrintStreamer.Services
         /// </summary>
         public static void RestartCurrentStreamerWithConfig(IConfiguration config, ILoggerFactory loggerFactory)
         {
+            var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             Task.Run(async () =>
             {
                 IStreamer? old; CancellationTokenSource? oldCts;
@@ -64,13 +66,13 @@ namespace PrintStreamer.Services
                         catch (OperationCanceledException) { }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[RestartStreamer] Error starting new streamer: {ex.Message}");
+                            logger.LogError(ex, "[RestartStreamer] Error starting new streamer");
                         }
                     }, cts.Token);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[RestartStreamer] Failed to restart streamer: {ex.Message}");
+                    logger.LogError(ex, "[RestartStreamer] Failed to restart streamer");
                 }
             });
         }
@@ -87,10 +89,11 @@ namespace PrintStreamer.Services
         /// </summary>
         public static async Task<(bool ok, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
         {
+            var pollerLogger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             // Use semaphore to prevent concurrent broadcast creation
-            if (!await _broadcastCreationLock.WaitAsync(0, cancellationToken))
+                if (!await _broadcastCreationLock.WaitAsync(0, cancellationToken))
             {
-                Console.WriteLine("[StartBroadcast] Another broadcast creation is already in progress, skipping duplicate");
+                pollerLogger.LogInformation("[StartBroadcast] Another broadcast creation is already in progress, skipping duplicate");
                 // Wait briefly to see if the other operation completes and return its result
                 await Task.Delay(500, cancellationToken);
                 if (IsBroadcastActive)
@@ -105,7 +108,7 @@ namespace PrintStreamer.Services
                 // Check if a broadcast is already active - don't create a duplicate
                 if (IsBroadcastActive)
                 {
-                    Console.WriteLine("[StartBroadcast] A broadcast is already active, skipping duplicate creation");
+                    pollerLogger.LogInformation("[StartBroadcast] A broadcast is already active, skipping duplicate creation");
                     return (true, "Broadcast already active", _currentBroadcastId);
                 }
 
@@ -217,7 +220,7 @@ namespace PrintStreamer.Services
                 if (serveEnabled)
                 {
                     source = "http://127.0.0.1:8080/stream/overlay";
-                    Console.WriteLine("[Stream] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
+                    pollerLogger.LogInformation("[Stream] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
                 }
                 if (string.IsNullOrWhiteSpace(source))
                 {
@@ -248,19 +251,19 @@ namespace PrintStreamer.Services
                     {
                         try
                         {
-                            Console.WriteLine("[YouTube] Waiting for ingestion and attempting to transition broadcast to live...");
+                            pollerLogger.LogInformation("[YouTube] Waiting for ingestion and attempting to transition broadcast to live...");
                             var ok = await yt.TransitionBroadcastToLiveWhenReadyAsync(newBroadcastId!, TimeSpan.FromSeconds(120), 5, CancellationToken.None);
-                            Console.WriteLine($"[YouTube] Transition to live {(ok ? "succeeded" : "failed")} for broadcast {newBroadcastId}");
+                            pollerLogger.LogInformation("[YouTube] Transition to live {Result} for broadcast {BroadcastId}", ok ? "succeeded" : "failed", newBroadcastId);
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[YouTube] Error while transitioning broadcast to live: {ex.Message}");
+                            pollerLogger.LogError(ex, "[YouTube] Error while transitioning broadcast to live");
                         }
                     }, CancellationToken.None);
                 }
                 else
                 {
-                    Console.WriteLine("[YouTube] No broadcastId available; skipping automatic transition to live.");
+                    pollerLogger.LogInformation("[YouTube] No broadcastId available; skipping automatic transition to live.");
                 }
 
                 return (true, null, newBroadcastId);
@@ -273,7 +276,7 @@ namespace PrintStreamer.Services
         }
         catch (Exception outerEx)
         {
-            Console.WriteLine($"[StartBroadcast] Unexpected error: {outerEx.Message}");
+            pollerLogger.LogError(outerEx, "[StartBroadcast] Unexpected error");
             return (false, $"Unexpected error: {outerEx.Message}", null);
         }
         finally
@@ -286,8 +289,9 @@ namespace PrintStreamer.Services
         /// Stop the current live broadcast and end the YouTube stream.
         /// Returns true on success.
         /// </summary>
-        public static async Task<(bool ok, string? message)> StopBroadcastAsync(IConfiguration config, CancellationToken cancellationToken)
+        public static async Task<(bool ok, string? message)> StopBroadcastAsync(IConfiguration config, CancellationToken cancellationToken, ILoggerFactory loggerFactory)
         {
+            var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             IStreamer? streamer;
             CancellationTokenSource? cts;
             YouTubeControlService? yt;
@@ -324,7 +328,7 @@ namespace PrintStreamer.Services
                     try
                     {
                         await yt.EndBroadcastAsync(broadcastId, cancellationToken);
-                        Console.WriteLine($"[YouTube] Ended broadcast {broadcastId}");
+                        logger.LogInformation("[YouTube] Ended broadcast {BroadcastId}", broadcastId);
                         
                         // Add the completed broadcast to the playlist
                         try
@@ -335,7 +339,7 @@ namespace PrintStreamer.Services
                             var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
                             if (!string.IsNullOrWhiteSpace(playlistName))
                             {
-                                Console.WriteLine($"[YouTube] Adding completed broadcast to playlist '{playlistName}'...");
+                                logger.LogInformation("[YouTube] Adding completed broadcast to playlist '{PlaylistName}'...", playlistName);
                                 var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
                                 var pid = await yt.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
                                 if (!string.IsNullOrWhiteSpace(pid))
@@ -343,19 +347,19 @@ namespace PrintStreamer.Services
                                     var added = await yt.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
                                     if (added)
                                     {
-                                        Console.WriteLine($"[YouTube] Successfully added broadcast to playlist '{playlistName}'");
+                                        logger.LogInformation("[YouTube] Successfully added broadcast to playlist '{PlaylistName}'", playlistName);
                                     }
                                 }
                             }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[YouTube] Failed to add broadcast to playlist: {ex.Message}");
+                            logger.LogError(ex, "[YouTube] Failed to add broadcast to playlist");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[YouTube] Error ending broadcast: {ex.Message}");
+                        logger.LogError(ex, "[YouTube] Error ending broadcast");
                     }
                     finally
                     {
@@ -367,7 +371,7 @@ namespace PrintStreamer.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[StopBroadcast] Error: {ex.Message}");
+                logger.LogError(ex, "[StopBroadcast] Error");
                 return (false, ex.Message);
             }
         }
@@ -375,6 +379,7 @@ namespace PrintStreamer.Services
         // Entry point moved from Program.cs
     public static async Task PollAndStreamJobsAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
         {
+            var watcherLogger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             var moonrakerBase = config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125/";
             var apiKey = config.GetValue<string>("Moonraker:ApiKey");
             var authHeader = config.GetValue<string>("Moonraker:AuthHeader");
@@ -411,13 +416,13 @@ namespace PrintStreamer.Services
                     var authOk = await ytService.AuthenticateAsync(cancellationToken);
                     if (!authOk)
                     {
-                        Console.WriteLine("[Watcher] YouTube authentication failed. Timelapse upload will be disabled.");
+                        watcherLogger.LogWarning("[Watcher] YouTube authentication failed. Timelapse upload will be disabled.");
                         ytService.Dispose();
                         ytService = null;
                     }
                     else
                     {
-                        Console.WriteLine("[Watcher] YouTube authenticated successfully for timelapse uploads.");
+                        watcherLogger.LogInformation("[Watcher] YouTube authenticated successfully for timelapse uploads.");
                     }
                 }
 
@@ -438,7 +443,7 @@ namespace PrintStreamer.Services
                     var currentLayer = info?.CurrentLayer;
                     var totalLayers = info?.TotalLayers;
 
-                    Console.WriteLine($"[Watcher] Poll result - Filename: '{currentJob}', State: '{state}', Progress: {progressPct?.ToString("F1") ?? "n/a"}%, Remaining: {remaining?.ToString() ?? "n/a"}, Layer: {currentLayer?.ToString() ?? "n/a"}/{totalLayers?.ToString() ?? "n/a"}");
+                    watcherLogger.LogDebug("[Watcher] Poll result - Filename: '{Filename}', State: '{State}', Progress: {Progress}%, Remaining: {Remaining}, Layer: {Layer}/{Total}", currentJob, state, progressPct?.ToString("F1") ?? "n/a", remaining?.ToString() ?? "n/a", currentLayer?.ToString() ?? "n/a", totalLayers?.ToString() ?? "n/a");
 
                     // Inform TimelapseManager about current progress so it can stop capturing when last-layer threshold is reached
                     try
@@ -452,7 +457,7 @@ namespace PrintStreamer.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[Watcher] Failed to notify timelapse manager of print progress: {ex.Message}");
+                        watcherLogger.LogError(ex, "[Watcher] Failed to notify timelapse manager of print progress");
                     }
 
                     // Track if a stream is already active
@@ -462,7 +467,7 @@ namespace PrintStreamer.Services
                     if (isPrinting && !streamingActive && (string.IsNullOrWhiteSpace(currentJob) || currentJob != lastJobFilename))
                     {
                         // New job detected, start stream and timelapse
-                        Console.WriteLine($"[Watcher] New print job detected: {currentJob ?? "(unknown)"}");
+                        watcherLogger.LogInformation("[Watcher] New print job detected: {Job}", currentJob ?? "(unknown)");
                         lastJobFilename = currentJob ?? $"__printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
                         if (streamCts != null)
                         {
@@ -479,27 +484,27 @@ namespace PrintStreamer.Services
                                 var alreadyBroadcasting = IsBroadcastActive;
                                 await StartYouTubeStreamAsync(config, loggerFactory, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: !alreadyBroadcasting);
                             }
-                            catch (Exception ex)
+                                catch (Exception ex)
                             {
-                                Console.WriteLine($"[Watcher] Stream error: {ex.Message}");
+                                watcherLogger.LogError(ex, "[Watcher] Stream error");
                             }
                         }, streamCts.Token);
                         // Start timelapse using TimelapseManager (will download G-code and cache metadata)
                         {
                             var jobNameSafe = !string.IsNullOrWhiteSpace(currentJob) ? SanitizeFilename(currentJob) : $"printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
-                            Console.WriteLine($"[Watcher] Starting timelapse session: {jobNameSafe}");
-                            Console.WriteLine($"[Watcher]   - currentJob: '{currentJob}'");
-                            Console.WriteLine($"[Watcher]   - jobNameSafe: '{jobNameSafe}'");
+                            watcherLogger.LogInformation("[Watcher] Starting timelapse session: {Session}", jobNameSafe);
+                            watcherLogger.LogInformation("[Watcher]   - currentJob: '{CurrentJob}'", currentJob);
+                            watcherLogger.LogDebug("[Watcher]   - jobNameSafe: '{JobNameSafe}'", jobNameSafe);
                             
                             // Start timelapse via manager (downloads G-code, caches metadata, captures initial frame)
                             activeTimelapseSessionName = await timelapseManager!.StartTimelapseAsync(jobNameSafe, currentJob);
                             if (activeTimelapseSessionName != null)
                             {
-                                Console.WriteLine($"[Watcher] Timelapse session started: {activeTimelapseSessionName}");
+                                watcherLogger.LogInformation("[Watcher] Timelapse session started: {Session}", activeTimelapseSessionName);
                             }
                             else
                             {
-                                Console.WriteLine($"[Watcher] Warning: Failed to start timelapse session");
+                                watcherLogger.LogWarning("[Watcher] Warning: Failed to start timelapse session");
                             }
                             
                             lastLayerTriggered = false; // reset for new job
@@ -525,11 +530,11 @@ namespace PrintStreamer.Services
                         
                         if (lastLayerByTime || lastLayerByProgress || lastLayerByLayer)
                         {
-                            Console.WriteLine($"[Timelapse] *** Last-layer detected ***");
-                            Console.WriteLine($"[Timelapse]   Remaining time: {remaining?.ToString() ?? "n/a"} (threshold: {thresholdSecs}s, triggered: {lastLayerByTime})");
-                            Console.WriteLine($"[Timelapse]   Progress: {progressPct?.ToString("F1") ?? "n/a"}% (threshold: {thresholdPct}%, triggered: {lastLayerByProgress})");
-                            Console.WriteLine($"[Timelapse]   Layer: {currentLayer?.ToString() ?? "n/a"}/{totalLayers?.ToString() ?? "n/a"} (threshold: -{layerThreshold}, triggered: {lastLayerByLayer})");
-                            Console.WriteLine($"[Timelapse] Capturing final frame and finalizing timelapse now...");
+                            watcherLogger.LogInformation("[Timelapse] *** Last-layer detected ***");
+                            watcherLogger.LogDebug("[Timelapse] Remaining time: {Remaining} (threshold: {ThresholdSecs}s, triggered: {ByTime})", remaining?.ToString() ?? "n/a", thresholdSecs, lastLayerByTime);
+                            watcherLogger.LogDebug("[Timelapse] Progress: {Progress}% (threshold: {ThresholdPct}%, triggered: {ByProgress})", progressPct?.ToString("F1") ?? "n/a", thresholdPct, lastLayerByProgress);
+                            watcherLogger.LogDebug("[Timelapse] Layer: {Layer}/{Total} (threshold: -{LayerThreshold}, triggered: {ByLayer})", currentLayer?.ToString() ?? "n/a", totalLayers?.ToString() ?? "n/a", layerThreshold, lastLayerByLayer);
+                            watcherLogger.LogInformation("[Timelapse] Capturing final frame and finalizing timelapse now...");
                             lastLayerTriggered = true;
 
                             // Stop timelapse via manager and kick off finalize/upload in the background
@@ -539,30 +544,30 @@ namespace PrintStreamer.Services
                             {
                                 try
                                 {
-                                    Console.WriteLine($"[Timelapse] Stopping timelapse session (early finalize): {sessionToFinalize}");
+                                    watcherLogger.LogInformation("[Timelapse] Stopping timelapse session (early finalize): {Session}", sessionToFinalize);
                                     var createdVideoPath = await timelapseManager!.StopTimelapseAsync(sessionToFinalize!);
 
                                     if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath) && uploadEnabled && ytService != null)
                                     {
                                         try
                                         {
-                                            Console.WriteLine("[Timelapse] Uploading timelapse video (early finalize) to YouTube...");
+                                            watcherLogger.LogInformation("[Timelapse] Uploading timelapse video (early finalize) to YouTube...");
                                             var titleName = lastJobFilename ?? sessionToFinalize;
                                             var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, titleName!, CancellationToken.None);
                                             if (!string.IsNullOrWhiteSpace(videoId))
                                             {
-                                                Console.WriteLine($"[Timelapse] Early-upload complete: https://www.youtube.com/watch?v={videoId}");
+                                                watcherLogger.LogInformation("[Timelapse] Early-upload complete: https://www.youtube.com/watch?v={VideoId}", videoId);
                                             }
                                         }
                                         catch (Exception upx)
                                         {
-                                            Console.WriteLine($"[Timelapse] Early-upload failed: {upx.Message}");
+                                            watcherLogger.LogError(upx, "[Timelapse] Early-upload failed");
                                         }
                                     }
                                 }
                                 catch (Exception fex)
                                 {
-                                    Console.WriteLine($"[Timelapse] Early finalize failed: {fex.Message}");
+                                    watcherLogger.LogError(fex, "[Timelapse] Early finalize failed");
                                 }
                             }, CancellationToken.None);
 
@@ -573,7 +578,7 @@ namespace PrintStreamer.Services
                     else if (!isPrinting && (streamCts != null || streamTask != null))
                     {
                         // Job finished, end stream and finalize timelapse
-                        Console.WriteLine($"[Watcher] Print job finished: {lastJobFilename}");
+                        watcherLogger.LogInformation("[Watcher] Print job finished: {Job}", lastJobFilename);
                         // Preserve the filename we detected at job start for upload metadata
                         var finishedJobFilename = lastJobFilename;
                         lastCompletedJobFilename = finishedJobFilename;
@@ -586,24 +591,24 @@ namespace PrintStreamer.Services
                         {
                             try
                             {
-                                var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None);
+                                var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None, loggerFactory);
                                 if (ok)
                                 {
-                                    Console.WriteLine("[Watcher] Broadcast stopped successfully");
+                                    watcherLogger.LogInformation("[Watcher] Broadcast stopped successfully");
                                 }
                                 else
                                 {
-                                    Console.WriteLine($"[Watcher] Error stopping broadcast: {msg}");
+                                    watcherLogger.LogWarning("[Watcher] Error stopping broadcast: {Message}", msg);
                                 }
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[Watcher] Exception stopping broadcast: {ex.Message}");
+                                watcherLogger.LogError(ex, "[Watcher] Exception stopping broadcast");
                             }
                         }
                         else
                         {
-                            Console.WriteLine("[Watcher] Auto-broadcast is disabled; leaving live broadcast running (manual mode).");
+                            watcherLogger.LogInformation("[Watcher] Auto-broadcast is disabled; leaving live broadcast running (manual mode).");
                         }
                         
                         // Clean up local stream references
@@ -632,7 +637,7 @@ namespace PrintStreamer.Services
                         }
                         else if (activeTimelapseSessionName != null)
                         {
-                            Console.WriteLine($"[Timelapse] Stopping timelapse session (end of print): {activeTimelapseSessionName}");
+                            watcherLogger.LogInformation("[Timelapse] Stopping timelapse session (end of print): {Session}", activeTimelapseSessionName);
                             try
                             {
                                 var createdVideoPath = await timelapseManager!.StopTimelapseAsync(activeTimelapseSessionName);
@@ -643,14 +648,14 @@ namespace PrintStreamer.Services
                                     var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
                                     if (uploadTimelapse && ytService != null)
                                     {
-                                        Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
+                                        watcherLogger.LogInformation("[Timelapse] Uploading timelapse video to YouTube...");
                                         try
                                         {
                                             // Use the timelapse folder name (sanitized) for nicer titles
                                             var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, activeTimelapseSessionName, CancellationToken.None);
                                             if (!string.IsNullOrWhiteSpace(videoId))
                                             {
-                                                Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+                                                watcherLogger.LogInformation("[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={VideoId}", videoId);
                                                 try
                                                 {
                                                     var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
@@ -666,7 +671,7 @@ namespace PrintStreamer.Services
                                                 }
                                                 catch (Exception ex)
                                                 {
-                                                    Console.WriteLine($"[YouTube] Failed to add timelapse to playlist: {ex.Message}");
+                                                    watcherLogger.LogError(ex, "[YouTube] Failed to add timelapse to playlist");
                                                 }
                                                     try
                                                     {
@@ -679,30 +684,30 @@ namespace PrintStreamer.Services
                                                             var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
                                                             if (okThumb)
                                                             {
-                                                                Console.WriteLine("[Timelapse] Set video thumbnail from last frame.");
+                                                                watcherLogger.LogInformation("[Timelapse] Set video thumbnail from last frame.");
                                                             }
                                                         }
                                                     }
                                                     catch (Exception ex)
                                                     {
-                                                        Console.WriteLine($"[Timelapse] Failed to set video thumbnail: {ex.Message}");
+                                                        watcherLogger.LogError(ex, "[Timelapse] Failed to set video thumbnail");
                                                     }
                                             }
                                         }
                                         catch (Exception ex)
                                         {
-                                            Console.WriteLine($"[Timelapse] Failed to upload video to YouTube: {ex.Message}");
+                                            watcherLogger.LogError(ex, "[Timelapse] Failed to upload video to YouTube");
                                         }
                                     }
                                     else if (!uploadTimelapse)
                                     {
-                                        Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
+                                        watcherLogger.LogInformation("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
                                     }
                                 }
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
+                                watcherLogger.LogError(ex, "[Timelapse] Failed to create video");
                             }
                             activeTimelapseSessionName = null;
                         }
@@ -723,13 +728,13 @@ namespace PrintStreamer.Services
                         if (nearCompletion)
                         {
                             pollInterval = fastPollInterval;
-                            Console.WriteLine($"[Watcher] Using fast polling ({pollInterval.TotalSeconds}s) - near completion");
+                            watcherLogger.LogDebug("[Watcher] Using fast polling ({Seconds}s) - near completion", pollInterval.TotalSeconds);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[Watcher] Error: {ex.Message}");
+                    watcherLogger.LogError(ex, "[Watcher] Error");
                 }
 
                 await Task.Delay(pollInterval, cancellationToken);
@@ -737,16 +742,16 @@ namespace PrintStreamer.Services
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("[Watcher] Polling cancelled by user.");
+                watcherLogger.LogInformation("[Watcher] Polling cancelled by user.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Watcher] Unexpected error: {ex.Message}");
+                watcherLogger.LogError(ex, "[Watcher] Unexpected error");
             }
             finally
             {
                 // Cleanup on exit
-                Console.WriteLine("[Watcher] Shutting down...");
+                watcherLogger.LogInformation("[Watcher] Shutting down...");
                 if (streamCts != null)
                 {
                     try { streamCts.Cancel(); } catch { }
@@ -765,7 +770,7 @@ namespace PrintStreamer.Services
                 }
                 if (timelapse != null)
                 {
-                    Console.WriteLine($"[Timelapse] Creating video from {timelapse.OutputDir}...");
+                    watcherLogger.LogInformation("[Timelapse] Creating video from {OutputDir}...", timelapse.OutputDir);
                     var folderName = Path.GetFileName(timelapse.OutputDir);
                     var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
                     try
@@ -776,17 +781,17 @@ namespace PrintStreamer.Services
                         if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
                         {
                             var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-                            if (uploadTimelapse && ytService != null)
-                            {
-                                Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
-                                try
+                                if (uploadTimelapse && ytService != null)
                                 {
+                                    watcherLogger.LogInformation("[Timelapse] Uploading timelapse video to YouTube...");
+                                    try
+                                    {
                                     // Prefer the recently finished job's filename; fallback to timelapse folder name
                                     var filenameForUpload = lastCompletedJobFilename ?? lastJobFilename ?? folderName;
                                     var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, filenameForUpload, CancellationToken.None);
                                         if (!string.IsNullOrWhiteSpace(videoId))
                                         {
-                                            Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+                                            watcherLogger.LogInformation("[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={VideoId}", videoId);
                                             // Add to playlist if configured
                                             try
                                             {
@@ -803,7 +808,7 @@ namespace PrintStreamer.Services
                                             }
                                             catch (Exception ex)
                                             {
-                                                Console.WriteLine($"[YouTube] Failed to add timelapse to playlist: {ex.Message}");
+                                                watcherLogger.LogError(ex, "[YouTube] Failed to add timelapse to playlist");
                                             }
                                                 try
                                                 {
@@ -815,30 +820,30 @@ namespace PrintStreamer.Services
                                                         var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
                                                         if (okThumb)
                                                         {
-                                                            Console.WriteLine("[Timelapse] Set video thumbnail from last frame.");
+                                                            watcherLogger.LogInformation("[Timelapse] Set video thumbnail from last frame.");
                                                         }
                                                     }
                                                 }
                                                 catch (Exception ex)
                                                 {
-                                                    Console.WriteLine($"[Timelapse] Failed to set video thumbnail: {ex.Message}");
+                                                    watcherLogger.LogError(ex, "[Timelapse] Failed to set video thumbnail");
                                                 }
                                         }
                                 }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"[Timelapse] Failed to upload video to YouTube: {ex.Message}");
+                                    watcherLogger.LogError(ex, "[Timelapse] Failed to upload video to YouTube");
                                 }
                             }
                             else if (!uploadTimelapse)
                             {
-                                Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
+                                    watcherLogger.LogInformation("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
+                        watcherLogger.LogError(ex, "[Timelapse] Failed to create video");
                     }
                     timelapse.Dispose();
                 }
@@ -847,13 +852,14 @@ namespace PrintStreamer.Services
                 ytService?.Dispose();
                 timelapseManager?.Dispose();
                 
-                Console.WriteLine("[Watcher] Cleanup complete.");
+                watcherLogger.LogInformation("[Watcher] Cleanup complete.");
             }
         }
 
         // Stream helper moved from Program.cs
     public static async Task StartYouTubeStreamAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken, bool enableTimelapse = true, ITimelapseMetadataProvider? timelapseProvider = null, bool allowYouTube = true)
         {
+            var streamLogger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             string? rtmpUrl = null;
             string? streamKey = null;
             string? broadcastId = null;
@@ -896,7 +902,7 @@ namespace PrintStreamer.Services
                 if (serveEnabled)
                 {
                     source = "http://127.0.0.1:8080/stream/overlay";
-                    Console.WriteLine("[Stream] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
+                    streamLogger.LogInformation("[Stream] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
                 }
 
                 // Respect config flag: whether automatic LiveBroadcast creation is enabled
@@ -922,11 +928,11 @@ namespace PrintStreamer.Services
                             X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
                             Y = config.GetValue<string>("Overlay:Y") ?? "20"
                         };
-                        Console.WriteLine($"[Overlay] Enabled drawtext overlay from {overlayOptions.TextFile}");
+                        streamLogger.LogInformation("[Overlay] Enabled drawtext overlay from {TextFile}", overlayOptions.TextFile);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[Overlay] Failed to start overlay service: {ex.Message}");
+                        streamLogger.LogError(ex, "[Overlay] Failed to start overlay service");
                         overlayOptions = null;
                     }
                 }
@@ -934,7 +940,7 @@ namespace PrintStreamer.Services
                 // Validate source (can't stream without an MJPEG source URL)
                 if (string.IsNullOrWhiteSpace(source))
                 {
-                    Console.WriteLine("Error: Stream:Source is not configured. Aborting stream.");
+                    streamLogger.LogError("Error: Stream:Source is not configured. Aborting stream.");
                     return;
                 }
 
@@ -943,7 +949,7 @@ namespace PrintStreamer.Services
                     // Check if broadcast already exists before creating
                     if (IsBroadcastActive)
                     {
-                        Console.WriteLine("[YouTube] Broadcast already active, using existing broadcast for stream");
+                        streamLogger.LogInformation("[YouTube] Broadcast already active, using existing broadcast for stream");
                         // Don't create a new broadcast, just use local mode or attach to existing
                         rtmpUrl = null;
                         streamKey = null;
@@ -955,20 +961,20 @@ namespace PrintStreamer.Services
                             // Double-check inside the lock
                             if (IsBroadcastActive)
                             {
-                                Console.WriteLine("[YouTube] Broadcast became active while waiting for lock, skipping creation");
+                                streamLogger.LogInformation("[YouTube] Broadcast became active while waiting for lock, skipping creation");
                                 rtmpUrl = null;
                                 streamKey = null;
                             }
                             else
                             {
-                                Console.WriteLine("[YouTube] Creating live broadcast via OAuth...");
+                                streamLogger.LogInformation("[YouTube] Creating live broadcast via OAuth...");
                                 var ytLogger = loggerFactory.CreateLogger<YouTubeControlService>();
                     ytService = new YouTubeControlService(config, ytLogger);
 
                     // Authenticate
                     if (!await ytService.AuthenticateAsync(cancellationToken))
                     {
-                        Console.WriteLine("[YouTube] Authentication failed. Starting local stream only.");
+                        streamLogger.LogWarning("[YouTube] Authentication failed. Starting local stream only.");
                         ytService?.Dispose();
                         ytService = null;
                         rtmpUrl = null;
@@ -980,7 +986,7 @@ namespace PrintStreamer.Services
                         var result = await ytService.CreateLiveBroadcastAsync(cancellationToken);
                         if (result.rtmpUrl == null || result.streamKey == null)
                         {
-                            Console.WriteLine("[YouTube] Failed to create broadcast. Starting local stream only.");
+                            streamLogger.LogWarning("[YouTube] Failed to create broadcast. Starting local stream only.");
                             ytService?.Dispose();
                             ytService = null;
                             rtmpUrl = null;
@@ -993,7 +999,7 @@ namespace PrintStreamer.Services
                             broadcastId = result.broadcastId;
                             moonrakerFilename = result.filename;
 
-                            Console.WriteLine($"[YouTube] Broadcast created! Watch at: https://www.youtube.com/watch?v={broadcastId}");
+                            streamLogger.LogInformation("[YouTube] Broadcast created! Watch at: https://www.youtube.com/watch?v={BroadcastId}", broadcastId);
                             // Publish broadcast state so UI/status endpoint reflects we're live/going live
                             try
                             {
@@ -1011,7 +1017,7 @@ namespace PrintStreamer.Services
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"Failed to log broadcast/stream resources: {ex.Message}");
+                                streamLogger.LogError(ex, "Failed to log broadcast/stream resources");
                             }
 
                             // Note: Live broadcasts can only be added to playlists after they complete
@@ -1020,18 +1026,18 @@ namespace PrintStreamer.Services
                             // Upload initial thumbnail for the broadcast
                             try
                             {
-                                Console.WriteLine("[Thumbnail] Capturing initial thumbnail...");
+                                streamLogger.LogInformation("[Thumbnail] Capturing initial thumbnail...");
                                 var initialThumbnail = await FetchSingleJpegFrameAsync(source, 10, cancellationToken);
                                 if (initialThumbnail != null && !string.IsNullOrWhiteSpace(broadcastId))
                                 {
                                     var ok = await ytService.SetBroadcastThumbnailAsync(broadcastId, initialThumbnail, cancellationToken);
                                     if (ok)
-                                        Console.WriteLine($"[Thumbnail] Initial thumbnail uploaded successfully");
+                                        streamLogger.LogInformation("[Thumbnail] Initial thumbnail uploaded successfully");
                                 }
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[Thumbnail] Failed to upload initial thumbnail: {ex.Message}");
+                                streamLogger.LogError(ex, "[Thumbnail] Failed to upload initial thumbnail");
                             }
 
                             // Start timelapse service for stream mode (only if enabled)
@@ -1045,33 +1051,33 @@ namespace PrintStreamer.Services
                                     // Use just the filename for consistency with poll mode
                                     var filenameSafe = SanitizeFilename(moonrakerFilename);
                                     streamId = filenameSafe;
-                                    Console.WriteLine($"[Timelapse] Using filename from Moonraker: {moonrakerFilename}");
+                                    streamLogger.LogInformation("[Timelapse] Using filename from Moonraker: {Filename}", moonrakerFilename);
                                 }
                                 else
                                 {
                                     streamId = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-                                    Console.WriteLine($"[Timelapse] No filename from Moonraker, using timestamp only");
+                                    streamLogger.LogInformation("[Timelapse] No filename from Moonraker, using timestamp only");
                                 }
                                 timelapse = new TimelapseService(mainTlDir, streamId);
 
                                 // Capture immediate first frame for timelapse
-                                Console.WriteLine($"[Timelapse] Capturing initial frame...");
+                                streamLogger.LogInformation("[Timelapse] Capturing initial frame...");
                                 try
                                 {
                                     var initialFrame = await FetchSingleJpegFrameAsync(source, 10, cancellationToken);
                                     if (initialFrame != null)
                                     {
                                         await timelapse.SaveFrameAsync(initialFrame, cancellationToken);
-                                        Console.WriteLine($"[Timelapse] Initial frame captured successfully");
+                                        streamLogger.LogInformation("[Timelapse] Initial frame captured successfully");
                                     }
                                     else
                                     {
-                                        Console.WriteLine($"[Timelapse] Warning: Failed to capture initial frame");
+                                        streamLogger.LogWarning("[Timelapse] Warning: Failed to capture initial frame");
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"[Timelapse] Error capturing initial frame: {ex.Message}");
+                                    streamLogger.LogError(ex, "[Timelapse] Error capturing initial frame");
                                 }
 
                                 timelapseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -1090,7 +1096,7 @@ namespace PrintStreamer.Services
                                         }
                                         catch (Exception ex)
                                         {
-                                            Console.WriteLine($"Timelapse frame error: {ex.Message}");
+                                            streamLogger.LogError(ex, "Timelapse frame error");
                                         }
                                         await Task.Delay(timelapsePeriod, timelapseCts.Token);
                                     }
@@ -1107,7 +1113,7 @@ namespace PrintStreamer.Services
                     }
                     else
                     {
-                        Console.WriteLine("[YouTube] Another broadcast creation is in progress, skipping");
+                            streamLogger.LogInformation("[YouTube] Another broadcast creation is in progress, skipping");
                         rtmpUrl = null;
                         streamKey = null;
                     }
@@ -1115,7 +1121,7 @@ namespace PrintStreamer.Services
                 else
                 {
                     // No YouTube OAuth configured or broadcast disabled - run local stream only
-                    Console.WriteLine("[Stream] Starting local stream only (no YouTube broadcast)");
+                    streamLogger.LogInformation("[Stream] Starting local stream only (no YouTube broadcast)");
                     rtmpUrl = null;
                     streamKey = null;
                 }
@@ -1142,7 +1148,7 @@ namespace PrintStreamer.Services
                 }
 
                 // Always use the ffmpeg-based streamer. If fullRtmpUrl is null, ffmpeg will produce local preview only.
-                Console.WriteLine($"Starting ffmpeg streamer to {(fullRtmpUrl != null ? rtmpUrl + "/***" : "local preview")} (fps={targetFps}, kbps={bitrateKbps})");
+                streamLogger.LogInformation("Starting ffmpeg streamer to {Target} (fps={Fps}, kbps={Kbps})", fullRtmpUrl != null ? rtmpUrl + "/***" : "local preview", targetFps, bitrateKbps);
                 streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl, loggerFactory.CreateLogger<FfmpegStreamer>());
                 
                 // Store streamer reference so it can be promoted to live later
@@ -1161,24 +1167,24 @@ namespace PrintStreamer.Services
                 {
                     try
                     {
-                        Console.WriteLine("Cancellation requested — stopping streamer...");
+                        streamLogger.LogInformation("Cancellation requested — stopping streamer...");
                         streamer?.Stop();
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Error stopping streamer on cancel: {ex.Message}");
+                        streamLogger.LogError(ex, "Error stopping streamer on cancel");
                     }
                 });
 
                 // If we created a broadcast, transition it to live
                     if (ytService != null && broadcastId != null)
                 {
-                    Console.WriteLine("Stream started, waiting for YouTube ingestion to become active before transitioning to live...");
+                    streamLogger.LogInformation("Stream started, waiting for YouTube ingestion to become active before transitioning to live...");
                     // Wait up to 90s for ingestion to be detected by YouTube
                     var ingestionOk = await ytService.WaitForIngestionAsync(null, TimeSpan.FromSeconds(90), cancellationToken);
                     if (!ingestionOk)
                     {
-                        Console.WriteLine("Warning: ingestion not active. Attempting transition anyway (may fail)...");
+                        streamLogger.LogWarning("Warning: ingestion not active. Attempting transition anyway (may fail)...");
                     }
                     if (!cancellationToken.IsCancellationRequested)
                     {
@@ -1186,7 +1192,7 @@ namespace PrintStreamer.Services
                     }
                     else
                     {
-                        Console.WriteLine("Cancellation requested before transition; skipping TransitionBroadcastToLive.");
+                        streamLogger.LogInformation("Cancellation requested before transition; skipping TransitionBroadcastToLive.");
                     }
 
                     // If the initial transition didn't succeed because the camera/feed wasn't yet available,
@@ -1199,7 +1205,7 @@ namespace PrintStreamer.Services
                             var monitorRetrySeconds = config.GetValue<int?>("YouTube:Monitor:RetrySeconds") ?? 30;
                             var ingestionWaitSeconds = config.GetValue<int?>("YouTube:Monitor:IngestionWaitSeconds") ?? 60;
 
-                            Console.WriteLine("[YouTubeMonitor] Starting background monitor to retry transition if ingestion becomes active later...");
+                            streamLogger.LogInformation("[YouTubeMonitor] Starting background monitor to retry transition if ingestion becomes active later...");
                             while (!cancellationToken.IsCancellationRequested)
                             {
                                 try
@@ -1207,42 +1213,42 @@ namespace PrintStreamer.Services
                                     _isWaitingForIngestion = true;
 
                                     // First, try transitioning immediately (this will be treated as success if already live)
-                                    try
-                                    {
-                                        var tried = await ytService.TransitionBroadcastToLiveAsync(broadcastId, cancellationToken);
-                                        Console.WriteLine($"[YouTubeMonitor] Immediate transition attempt result: {tried}");
-                                        if (tried)
+                                        try
                                         {
-                                            Console.WriteLine("[YouTubeMonitor] Transition succeeded (or already live); stopping monitor.");
-                                            break;
+                                            var tried = await ytService.TransitionBroadcastToLiveAsync(broadcastId, cancellationToken);
+                                            streamLogger.LogDebug("[YouTubeMonitor] Immediate transition attempt result: {Tried}", tried);
+                                            if (tried)
+                                            {
+                                                streamLogger.LogInformation("[YouTubeMonitor] Transition succeeded (or already live); stopping monitor.");
+                                                break;
+                                            }
                                         }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"[YouTubeMonitor] Immediate transition attempt failed: {ex.Message}");
-                                    }
+                                        catch (Exception ex)
+                                        {
+                                            streamLogger.LogError(ex, "[YouTubeMonitor] Immediate transition attempt failed");
+                                        }
 
                                     // Wait for ingestion to become active, then try transition
                                     var ok = await ytService.WaitForIngestionAsync(null, TimeSpan.FromSeconds(ingestionWaitSeconds), cancellationToken);
                                     if (ok)
                                     {
-                                        Console.WriteLine("[YouTubeMonitor] Ingestion active; attempting transition to live...");
+                                        streamLogger.LogInformation("[YouTubeMonitor] Ingestion active; attempting transition to live...");
                                         try
                                         {
                                             var tOk = await ytService.TransitionBroadcastToLiveAsync(broadcastId, cancellationToken);
-                                            Console.WriteLine($"[YouTubeMonitor] Transition attempt result: {tOk}");
+                                            streamLogger.LogDebug("[YouTubeMonitor] Transition attempt result: {Result}", tOk);
                                             if (tOk) break;
                                         }
                                         catch (Exception ex)
                                         {
-                                            Console.WriteLine($"[YouTubeMonitor] Transition attempt failed: {ex.Message}");
+                                            streamLogger.LogError(ex, "[YouTubeMonitor] Transition attempt failed");
                                         }
                                     }
                                 }
                                 catch (OperationCanceledException) { break; }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"[YouTubeMonitor] Monitor error: {ex.Message}");
+                                    streamLogger.LogError(ex, "[YouTubeMonitor] Monitor error");
                                 }
                                 finally
                                 {
@@ -1255,7 +1261,7 @@ namespace PrintStreamer.Services
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[YouTubeMonitor] Background monitor failed: {ex.Message}");
+                            streamLogger.LogError(ex, "[YouTubeMonitor] Background monitor failed");
                         }
                         finally
                         {
@@ -1269,11 +1275,11 @@ namespace PrintStreamer.Services
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("Stream canceled.");
+                streamLogger.LogInformation("Stream canceled.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Stream error: {ex.Message}");
+                streamLogger.LogError(ex, "Stream error");
             }
             finally
             {
@@ -1300,9 +1306,9 @@ namespace PrintStreamer.Services
                         timelapseCts = null;
                         timelapseTask = null;
                     }
-                    if (timelapse != null)
-                    {
-                        Console.WriteLine($"[Timelapse] Creating video from {timelapse.OutputDir}...");
+                        if (timelapse != null)
+                        {
+                        streamLogger.LogInformation("[Timelapse] Creating video from {OutputDir}...", timelapse.OutputDir);
                         var folderName = Path.GetFileName(timelapse.OutputDir);
                         var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
                         // Use a new cancellation token for video creation (don't use the cancelled one)
@@ -1316,7 +1322,7 @@ namespace PrintStreamer.Services
                                 var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
                                 if (uploadTimelapse && ytService != null)
                                 {
-                                    Console.WriteLine("[Timelapse] Uploading timelapse video to YouTube...");
+                                    streamLogger.LogInformation("[Timelapse] Uploading timelapse video to YouTube...");
                                     try
                                     {
                                         // Use moonrakerFilename if available (from CreateLiveBroadcastAsync), otherwise extract from timelapse folder name
@@ -1324,7 +1330,7 @@ namespace PrintStreamer.Services
                                         var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, filenameForUpload, CancellationToken.None);
                                         if (!string.IsNullOrWhiteSpace(videoId))
                                         {
-                                            Console.WriteLine($"[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={videoId}");
+                                            streamLogger.LogInformation("[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={VideoId}", videoId);
                                             try
                                             {
                                                 // Attempt to set video thumbnail to last timelapse frame
@@ -1336,30 +1342,30 @@ namespace PrintStreamer.Services
                                                     var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
                                                     if (okThumb)
                                                     {
-                                                        Console.WriteLine("[Timelapse] Set video thumbnail from last frame.");
+                                                        streamLogger.LogInformation("[Timelapse] Set video thumbnail from last frame.");
                                                     }
                                                 }
                                             }
                                             catch (Exception thx)
                                             {
-                                                Console.WriteLine($"[Timelapse] Failed to set video thumbnail: {thx.Message}");
+                                                streamLogger.LogError(thx, "[Timelapse] Failed to set video thumbnail");
                                             }
                                         }
                                     }
                                     catch (Exception ex)
                                     {
-                                        Console.WriteLine($"[Timelapse] Failed to upload video to YouTube: {ex.Message}");
+                                        streamLogger.LogError(ex, "[Timelapse] Failed to upload video to YouTube");
                                     }
                                 }
                                 else if (!uploadTimelapse)
                                 {
-                                    Console.WriteLine("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
+                                    streamLogger.LogInformation("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
                                 }
                             }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[Timelapse] Failed to create video: {ex.Message}");
+                            streamLogger.LogError(ex, "[Timelapse] Failed to create video");
                         }
                         timelapse?.Dispose();
                         timelapse = null;
@@ -1371,14 +1377,14 @@ namespace PrintStreamer.Services
                 // Clean up YouTube broadcast if created
                 if (ytService != null && broadcastId != null)
                 {
-                    Console.WriteLine("Ending YouTube broadcast...");
+                    streamLogger.LogInformation("Ending YouTube broadcast...");
                     try
                     {
                         await ytService.EndBroadcastAsync(broadcastId, CancellationToken.None);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Failed to end broadcast: {ex.Message}");
+                        streamLogger.LogError(ex, "Failed to end broadcast");
                     }
                     finally
                     {

@@ -81,6 +81,26 @@ Because the app will request sensitive/private YouTube scopes, you must configur
 
 Important: If you plan to publish the app to external users you'll need to go through Google's verification process for sensitive scopes. For development / one-account use, keeping your account as a test user is sufficient.
 
+### Adding test users (allow unverified app testing)
+
+If your app is still in "Testing" or otherwise unverified, Google will block sign-ins except for accounts listed as Test users. Follow these exact steps to add yourself (or other accounts) as testers so you can complete the OAuth flow during development.
+
+1. Open the Google Cloud Console for your project: https://console.cloud.google.com/
+2. Select the project in the top-left project selector (the one that contains your OAuth client).
+3. Navigate to `APIs & Services` → `OAuth consent screen`. On that page open the **Audience** panel and choose **Test users**.
+4. Click **Edit** (or **Add users**), enter the Google account email(s) you want to allow as testers (one per line), then click **Save**.
+5. If you don't see the Audience/Test users controls, set the OAuth consent screen's **User Type** to **External** and save the form — the Test users panel only appears for External apps in Testing. If your project is marked **Internal**, add users via your Google Workspace or switch the app to External if appropriate.
+
+Notes and troubleshooting:
+- The change takes effect immediately. If you still see an "Access blocked" or "This app isn't verified" message, try one of the following:
+  - Sign out of all Google accounts and sign back in with the test account you added, or use an incognito/private window to avoid multi-account confusion.
+  - On the Google warning screen click **Advanced** → **Go to <your app> (unsafe)**; this option is shown for test users and allows continuing the flow.
+  - Make sure the email you added is the exact account used in the OAuth flow.
+- Unverified external apps can have up to 100 test users. If you need more or want public access, you'll need to complete the OAuth verification process with Google (which requires a privacy policy, branding, and justification for sensitive scopes).
+- If your project is in an Organization and the app is marked **Internal**, only users in that Workspace can consent; in that case add the user to your Workspace or switch to Internal if appropriate.
+
+If you want, add your own email here now and then run the app's interactive auth flow again — you should be able to grant the requested YouTube scopes and produce `youtube_token.json`.
+
 ## 4) Create OAuth credentials (Client ID & Client Secret)
 
 You have two common choices. Both will work, but pick based on how you run PrintStreamer:
