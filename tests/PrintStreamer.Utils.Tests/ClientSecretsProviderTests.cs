@@ -14,7 +14,12 @@ namespace PrintStreamer.Utils.Tests
             var temp = Path.Combine(Path.GetTempPath(), "client_secrets_test.json");
             try
             {
-                var json = "{\"installed\":{\"client_id\":\"test-client-id\",\"client_secret\":\"test-secret\"}}";
+                var json = @"
+                    ""installed"": {
+                        ""client_id"": ""test-client-id"",
+                        ""client_secret"": ""test-secret""
+                    }
+                }";
                 File.WriteAllText(temp, json);
 
                 var source = new ClientSecretsConfigurationSource(temp, optional: false);
