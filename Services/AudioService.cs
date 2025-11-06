@@ -98,9 +98,22 @@ namespace PrintStreamer.Services
             }
             catch { }
 
-            _library = list.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
-            // reset library index to before-first; first TryGetNextTrack will advance to 0
-            _libraryIndex = -1;
+            var sorted = list.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            _library = sorted;
+
+            // Keep the index aligned with the currently playing track so manual skips advance correctly.
+            var currentPath = _current;
+            if (!string.IsNullOrWhiteSpace(currentPath))
+            {
+                var idx = sorted.FindIndex(t => string.Equals(t.Path, currentPath, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0)
+                {
+                    System.Threading.Interlocked.Exchange(ref _libraryIndex, idx);
+                    return;
+                }
+            }
+
+            System.Threading.Interlocked.Exchange(ref _libraryIndex, -1);
         }
 
         public AudioState GetState()
@@ -164,6 +177,14 @@ namespace PrintStreamer.Services
             _current = match.Path;
             _playing = true;
             selectedPath = match.Path;
+
+            // Align the rotating library index with the selected track so the next skip works as expected.
+            var library = _library;
+            var idx = library.FindIndex(t => string.Equals(t.Path, match.Path, StringComparison.OrdinalIgnoreCase));
+            if (idx >= 0)
+            {
+                System.Threading.Interlocked.Exchange(ref _libraryIndex, idx);
+            }
             return true;
         }
 
