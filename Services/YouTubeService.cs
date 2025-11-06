@@ -104,8 +104,8 @@ namespace PrintStreamer.Services
 								ResponseType = "code"
 							};
 
-							_logger.LogInformation("Open the following URL in a browser and paste the resulting code here:");
-							_logger.LogInformation(requestUrl.Build().ToString());
+							_logger.LogWarning("Open the following URL in a browser and paste the resulting code here:");
+							_logger.LogWarning(requestUrl.Build().ToString());
 							Console.Write("Enter authorization code: ");
 							var code = Console.ReadLine();
 							if (string.IsNullOrWhiteSpace(code))

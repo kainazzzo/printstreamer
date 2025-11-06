@@ -54,10 +54,11 @@ try
 	var csPath = webBuilder.Configuration.GetValue<string>("YouTube:OAuth:ClientSecretsFilePath");
 	if (!string.IsNullOrWhiteSpace(csPath))
 	{
-		var fullPath = Path.Combine(Directory.GetCurrentDirectory(), csPath);
+		// Use absolute path as-is, or combine with current directory if relative
+		var fullPath = Path.IsPathRooted(csPath) ? csPath : Path.Combine(Directory.GetCurrentDirectory(), csPath);
 		startupLogger.LogInformation("Checking for client secrets file at: {Path}", fullPath);
-	// Register our custom provider (optional: true so missing file won't crash)
-	((IConfigurationBuilder)webBuilder.Configuration).Add(new PrintStreamer.Utils.ClientSecretsConfigurationSource(fullPath, optional: true, logger: startupLogger));
+		// Register our custom provider (optional: true so missing file won't crash)
+		((IConfigurationBuilder)webBuilder.Configuration).Add(new PrintStreamer.Utils.ClientSecretsConfigurationSource(fullPath, optional: true, logger: startupLogger));
 	}
 }
 catch (Exception ex)
@@ -68,7 +69,7 @@ catch (Exception ex)
 // Persist ASP.NET Core DataProtection keys so antiforgery cookies survive container restarts
 try
 {
-	var dpKeyDir = config.GetValue<string>("DataProtection:KeyDirectory") ?? "/usr/local/share/data/dpkeys";
+	var dpKeyDir = config.GetValue<string>("DataProtection:KeyDirectory") ?? "//dpkeys";
 	Directory.CreateDirectory(dpKeyDir);
 	webBuilder.Services
 		.AddDataProtection()

@@ -523,10 +523,28 @@ internal class YouTubeControlService : IDisposable
             var secrets = new ClientSecrets { ClientId = clientId, ClientSecret = clientSecret };
 
             // Use a single-file token store pointing at a mounted tokens path by default.
-            // Default: /app/tokens/youtube_token.json (persisted via Docker volume from scripts/run.sh)
-            // Override with YouTube:OAuth:TokenFile if desired.
-            var tokenFilePath = _config["YouTube:OAuth:TokenFile"]
-                                ?? Path.Combine(Directory.GetCurrentDirectory(), "tokens", "youtube_token.json");
+            // Preferred location: alongside the configured client secrets file, or explicit YouTube:OAuth:TokenFile.
+            // Fallback to /app/data/tokens/youtube_token.json (or CWD/data/tokens/... in non-container runs).
+            string? tokenFilePath = _config["YouTube:OAuth:TokenFile"];
+            if (string.IsNullOrWhiteSpace(tokenFilePath))
+            {
+                var csPath = _config["YouTube:OAuth:ClientSecretsFilePath"];
+                if (!string.IsNullOrWhiteSpace(csPath))
+                {
+                    var fullCs = Path.IsPathRooted(csPath) ? csPath : Path.Combine(Directory.GetCurrentDirectory(), csPath);
+                    var dir = Path.GetDirectoryName(fullCs);
+                    if (!string.IsNullOrWhiteSpace(dir))
+                    {
+                        tokenFilePath = Path.Combine(dir, "youtube_token.json");
+                    }
+                }
+            }
+            if (string.IsNullOrWhiteSpace(tokenFilePath))
+            {
+                // Common persisted data path in container
+                var dataDir = Path.Combine(Directory.GetCurrentDirectory(), "data");
+                tokenFilePath = Path.Combine(dataDir, "tokens", "youtube_token.json");
+            }
             var fileStore = new YoutubeTokenFileDataStore(tokenFilePath);
             IDataStore dataStore = fileStore;
 
@@ -576,8 +594,9 @@ internal class YouTubeControlService : IDisposable
                             ResponseType = "code"
                         };
 
-                        _logger.LogInformation("Open the following URL in a browser and paste the resulting code here:");
-                        _logger.LogInformation(requestUrl.Build().ToString());
+                        _logger.LogWarning("Open the following URL in a browser and paste the resulting code here:");
+                        _logger.LogWarning(requestUrl.Build().ToString());
+                        _logger.LogWarning("Tip: If your terminal input is not working, create /app/data/youtube_oauth_code.txt with the code.");
                         Console.Write("Enter authorization code: ");
                         // Allow providing the auth code via config/env/file to support non-interactive shells
                         var preProvided = _config["YouTube:OAuth:AuthCode"];
@@ -600,7 +619,7 @@ internal class YouTubeControlService : IDisposable
                         }
                         else
                         {
-                            code = Console.ReadLine();
+                            code = await ReadAuthCodeInteractiveOrFileAsync(_config, cancellationToken);
                         }
                         if (string.IsNullOrWhiteSpace(code))
                         {
@@ -696,6 +715,70 @@ internal class YouTubeControlService : IDisposable
             _logger.LogError(ex, "Authentication failed: {Message}", ex.Message);
             return false;
         }
+    }
+
+    private static async Task<string?> ReadAuthCodeInteractiveOrFileAsync(IConfiguration config, CancellationToken cancellationToken)
+    {
+        // Start a background read from Console.ReadLine, which may or may not work depending on TTY
+        var consoleTcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            _ = Task.Run(() =>
+            {
+                try { consoleTcs.TrySetResult(Console.ReadLine()); }
+                catch (Exception ex) { consoleTcs.TrySetException(ex); }
+            });
+        }
+        catch { /* ignore spawning errors */ }
+
+        // Determine candidate files to watch
+        var candidates = new List<string>();
+        var cfgFile = config["YouTube:OAuth:AuthCodeFile"];
+        if (!string.IsNullOrWhiteSpace(cfgFile)) candidates.Add(cfgFile);
+        try
+        {
+            var defaultPath = Path.Combine(Directory.GetCurrentDirectory(), "data", "youtube_oauth_code.txt");
+            candidates.Add(defaultPath);
+        }
+        catch { }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var timeout = TimeSpan.FromMinutes(5);
+        while (!cancellationToken.IsCancellationRequested && sw.Elapsed < timeout)
+        {
+            // Prefer console if it completed
+            if (consoleTcs.Task.IsCompleted)
+            {
+                try { return (await consoleTcs.Task) ?? string.Empty; }
+                catch { /* fall through to file polling */ }
+            }
+
+            // Poll files
+            foreach (var path in candidates)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                    {
+                        var text = await File.ReadAllTextAsync(path, cancellationToken);
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            return text.Trim();
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            try { await Task.Delay(500, cancellationToken); } catch { }
+        }
+
+        // Last chance: if console eventually produced something, return it
+        if (consoleTcs.Task.IsCompleted)
+        {
+            try { return (await consoleTcs.Task) ?? string.Empty; } catch { }
+        }
+        return null;
     }
 
     /// <summary>
@@ -819,6 +902,8 @@ internal class YouTubeControlService : IDisposable
                     var json = JsonSerializer.Serialize(obj, new JsonSerializerOptions { WriteIndented = true });
                     // atomic write
                     var tmp = _filePath + ".tmp";
+                    var dir = Path.GetDirectoryName(_filePath);
+                    if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
                     await File.WriteAllTextAsync(tmp, json);
                     File.Move(tmp, _filePath, overwrite: true);
                     return;
@@ -827,6 +912,8 @@ internal class YouTubeControlService : IDisposable
                 // Generic fallback
                 var generic = JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
                 var tmp2 = _filePath + ".tmp";
+                var dir2 = Path.GetDirectoryName(_filePath);
+                if (!string.IsNullOrWhiteSpace(dir2)) Directory.CreateDirectory(dir2);
                 await File.WriteAllTextAsync(tmp2, generic);
                 File.Move(tmp2, _filePath, overwrite: true);
             }

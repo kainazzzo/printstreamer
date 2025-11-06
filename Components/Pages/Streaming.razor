@@ -246,18 +246,22 @@
             if (result?.Success == true)
             {
                 statusMessage = "Live broadcast started!";
+                await SafeToast("Live broadcast started! Waiting for ingestion...", "success");
                 await CheckLiveStatus();
                 await Task.Delay(5000);
                 statusMessage = null;
             }
             else
             {
-                statusMessage = $"Failed: {result?.Error ?? "unknown"}";
+                var errorMsg = result?.Error ?? "unknown error";
+                statusMessage = $"Failed: {errorMsg}";
+                await SafeToast($"Failed to start broadcast: {errorMsg}", "error");
             }
         }
         catch (Exception ex)
         {
             statusMessage = $"Error: {ex.Message}";
+            await SafeToast($"Error starting broadcast: {ex.Message}", "error");
         }
         finally
         {

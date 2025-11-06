@@ -35,9 +35,6 @@ if [[ ! -f "$REPO_ROOT/appsettings.Home.json" ]]; then
   exit 1
 fi
 
-# Create bind mount folders if missing
-mkdir -p "$REPO_ROOT/timelapse" "$REPO_ROOT/tokens"
-
 # Build the image if it doesn't exist locally
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
   echo "Docker image '$IMAGE_NAME' not found. Building from Dockerfile..."
@@ -57,36 +54,27 @@ echo "  Container   : ${CONTAINER_NAME}"
 echo "  Port        : ${HOST_PORT} -> 8080"
 echo "  Environment : Home"
 echo "  Config      : appsettings.Home.json"
+echo "  Data mount  : ~/.printstreamer"
 
-# Allow interactive auth: enable TTY/STDIN by default when attached to a terminal,
-# or when INTERACTIVE=1 is set explicitly.
+# Allow interactive auth: enable TTY/STDIN when INTERACTIVE=1 is set explicitly,
+# or when INTERACTIVE=auto and attached to a terminal.
 DOCKER_INTERACTIVE_FLAGS=""
-if [[ "${INTERACTIVE:-auto}" == "1" ]]; then
+if [[ "${INTERACTIVE:-0}" == "1" ]]; then
   DOCKER_INTERACTIVE_FLAGS="-it"
-elif [[ "${INTERACTIVE:-auto}" == "auto" && -t 0 ]]; then
+elif [[ "${INTERACTIVE:-0}" == "auto" && -t 0 ]]; then
   DOCKER_INTERACTIVE_FLAGS="-it"
 fi
 
-# Host data directory for persistent data (timelapses, audio, tokens)
-HOST_DATA_DIR="${HOST_DATA_DIR:-${HOME}/PrintStreamerData}"
-mkdir -p "${HOST_DATA_DIR}"
-echo "  Data mount  : ${HOST_DATA_DIR} -> /usr/local/share/data"
+# Ensure ~/.printstreamer directory structure exists
+PRINTSTREAMER_HOME="$HOME/.printstreamer"
 
-# Ensure a host token file exists and bind it into the container so OAuth tokens persist
-mkdir -p "$REPO_ROOT/tokens"
-TOKEN_FILE_HOST="$REPO_ROOT/tokens/youtube_token.json"
-if [[ ! -f "$TOKEN_FILE_HOST" ]]; then
-  echo '{}' > "$TOKEN_FILE_HOST"
+# Broadcast reuse store (caches broadcast IDs to avoid creating duplicates)
+BROADCAST_STORE_HOST="$PRINTSTREAMER_HOME/youtube_reuse_store.json"
+if [[ ! -f "$BROADCAST_STORE_HOST" ]]; then
+  echo '[]' > "$BROADCAST_STORE_HOST"
 fi
-echo "  Token file  : ${TOKEN_FILE_HOST} -> /app/tokens/youtube_token.json (+compat link at /app/youtube_token.json)"
 
-# Ensure a host client secrets file exists and bind it into the container so OAuth client secrets persist
-mkdir -p "$HOME/.printstreamer"
-CLIENT_SECRET_FILE_HOST="$HOME/.printstreamer/client_secret.json"
-if [[ ! -f "$CLIENT_SECRET_FILE_HOST" ]]; then
-  echo '{}' > "$CLIENT_SECRET_FILE_HOST"
-fi
-echo "  Client secrets file  : ${CLIENT_SECRET_FILE_HOST} -> /app/tokens/client_secret.json"
+echo "  Broadcast store : ${BROADCAST_STORE_HOST}"
 
 # Only detach if not running interactively
 DOCKER_DETACH_FLAG=""
@@ -95,16 +83,28 @@ if [[ "${DOCKER_INTERACTIVE_FLAGS}" != *"-i"* && "${DOCKER_INTERACTIVE_FLAGS}" !
 fi
 
 # Build command array so we can print a safely quoted, copy/pasteable command
+# Base docker run args
 DOCKER_CMD=(docker run ${DOCKER_DETACH_FLAG} ${DOCKER_INTERACTIVE_FLAGS} \
   --name "${CONTAINER_NAME}" \
   --restart "${RESTART_POLICY}" \
+  --label "environment=Home" \
   -p "${HOST_PORT}:8080" \
   -e "ASPNETCORE_ENVIRONMENT=Home" \
   -v "$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro" \
-  -v "${HOST_DATA_DIR}:/usr/local/share/data" \
-  -v "${TOKEN_FILE_HOST}:/app/youtube_token.json" \
-  -v "${CLIENT_SECRET_FILE_HOST}:/app/tokens/client_secret.json" \
-  "${IMAGE_NAME}")
+  -v "$PRINTSTREAMER_HOME:/app/data")
+
+# Forward optional one-time OAuth code for non-interactive auth
+if [[ -n "${YOUTUBE_OAUTH_CODE:-}" ]]; then
+  DOCKER_CMD+=( -e "YOUTUBE_OAUTH_CODE=${YOUTUBE_OAUTH_CODE}" )
+fi
+
+# Allow overriding token file location if desired (maps to config key YouTube:OAuth:TokenFile)
+if [[ -n "${YOUTUBE_OAUTH_TOKEN_FILE:-}" ]]; then
+  DOCKER_CMD+=( -e "YouTube__OAuth__TokenFile=${YOUTUBE_OAUTH_TOKEN_FILE}" )
+fi
+
+# Image name is last
+DOCKER_CMD+=( "${IMAGE_NAME}" )
 
 # Print the command in a shell-quoted form so it's obvious what will run
 printf "docker run command:"
