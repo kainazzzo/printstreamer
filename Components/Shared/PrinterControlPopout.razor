@@ -570,7 +570,7 @@
         {
             try
             {
-                await JS.InvokeVoidAsync("scrollToBottom", _consoleContainer);
+                await JS.InvokeVoidAsync("scrollToPosition", _consoleContainer, _consoleFlipped ? "top" : "bottom");
             }
             catch { }
         }

@@ -87,6 +87,23 @@ window.scrollToBottom = function(elementRef){
     }catch(e){ /* ignore */ }
 };
 
+// Scroll element reference to specific position (top or bottom)
+window.scrollToPosition = function(elementRef, position){
+    try{
+        // For Blazor element references, we need to get the actual DOM element
+        if(elementRef && elementRef.id){
+            const el = document.getElementById(elementRef.id);
+            if(el){
+                if(position === 'top'){
+                    el.scrollTop = 0;
+                } else if(position === 'bottom'){
+                    el.scrollTop = el.scrollHeight;
+                }
+            }
+        }
+    }catch(e){ /* ignore */ }
+};
+
 // Player control helpers exposed for Blazor UI
 window.streamControls = {
     play: function() {},
