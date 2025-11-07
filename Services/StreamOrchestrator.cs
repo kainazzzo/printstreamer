@@ -14,20 +14,21 @@ namespace PrintStreamer.Services
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<StreamOrchestrator> _logger;
         private readonly YouTubePollingManager _pollingManager;
+        private readonly YouTubeControlService _youtubeService;
         private readonly object _lock = new object();
-        private YouTubeControlService? _currentYouTubeService;
         private string? _currentBroadcastId;
         private string? _currentRtmpUrl; // full RTMP URL (address + stream key) for restarts
         private bool _isWaitingForIngestion = false;
         private bool _disposed = false;
         private bool _endStreamAfterSong = false;
 
-        public StreamOrchestrator(StreamService streamService, IConfiguration config, ILoggerFactory loggerFactory, YouTubePollingManager pollingManager)
+        public StreamOrchestrator(StreamService streamService, IConfiguration config, ILoggerFactory loggerFactory, YouTubePollingManager pollingManager, YouTubeControlService youtubeService)
         {
             _streamService = streamService;
             _config = config;
             _loggerFactory = loggerFactory;
             _pollingManager = pollingManager;
+            _youtubeService = youtubeService;
             _logger = loggerFactory.CreateLogger<StreamOrchestrator>();
         }
 
@@ -150,30 +151,25 @@ namespace PrintStreamer.Services
                 return (false, "YouTube OAuth not configured", null);
             }
 
-            // Create YouTube service and authenticate
-            var ytLogger = _loggerFactory.CreateLogger<YouTubeControlService>();
-            var ytService = new YouTubeControlService(_config, ytLogger, _pollingManager);
-            if (!await ytService.AuthenticateAsync(cancellationToken))
+            // Authenticate with YouTube (singleton service)
+            if (!await _youtubeService.AuthenticateAsync(cancellationToken))
             {
-                ytService.Dispose();
                 return (false, "YouTube authentication failed", null);
             }
 
             // Create broadcast
-            var result = await ytService.CreateLiveBroadcastAsync(cancellationToken);
+            var result = await _youtubeService.CreateLiveBroadcastAsync(cancellationToken);
             if (result.rtmpUrl == null || result.streamKey == null || result.broadcastId == null)
             {
-                ytService.Dispose();
                 return (false, "Failed to create YouTube broadcast", null);
             }
 
             var fullRtmpUrl = $"{result.rtmpUrl}/{result.streamKey}";
             var broadcastId = result.broadcastId;
 
-            // Store YouTube service and broadcast ID
+            // Store broadcast ID
             lock (_lock)
             {
-                _currentYouTubeService = ytService;
                 _currentBroadcastId = broadcastId;
                 _currentRtmpUrl = fullRtmpUrl;
             }
@@ -190,10 +186,8 @@ namespace PrintStreamer.Services
                 _logger.LogError(ex, "[Orchestrator] Failed to start stream");
                 lock (_lock)
                 {
-                    _currentYouTubeService = null;
                     _currentBroadcastId = null;
                 }
-                ytService.Dispose();
                 return (false, $"Failed to start stream: {ex.Message}", null);
             }
 
@@ -204,7 +198,7 @@ namespace PrintStreamer.Services
                 {
                     _isWaitingForIngestion = true;
                     _logger.LogInformation("[Orchestrator] Waiting for YouTube ingestion...");
-                    var success = await ytService.TransitionBroadcastToLiveWhenReadyAsync(
+                    var success = await _youtubeService.TransitionBroadcastToLiveWhenReadyAsync(
                         broadcastId,
                         TimeSpan.FromSeconds(120),
                         5,
@@ -240,10 +234,8 @@ namespace PrintStreamer.Services
                     _logger.LogWarning("[Orchestrator] Stream health check failed (IsStreaming=False) — restarting...");
                     string? rtmp = null;
                     string? bid = null;
-                    YouTubeControlService? yt;
                     lock (_lock)
                     {
-                        yt = _currentYouTubeService;
                         bid = _currentBroadcastId;
                         rtmp = (!string.IsNullOrWhiteSpace(_currentBroadcastId)) ? _currentRtmpUrl : null;
                     }
@@ -252,12 +244,12 @@ namespace PrintStreamer.Services
                     await _streamService.StartStreamAsync(rtmp, null, cancellationToken);
 
                     // If broadcasting, nudge ingestion; if it fails, end broadcast but keep local stream
-                    if (!string.IsNullOrWhiteSpace(bid) && yt != null)
+                    if (!string.IsNullOrWhiteSpace(bid))
                     {
                         try
                         {
                             _isWaitingForIngestion = true;
-                            var ok = await yt.TransitionBroadcastToLiveWhenReadyAsync(bid!, TimeSpan.FromSeconds(60), 6, cancellationToken);
+                            var ok = await _youtubeService.TransitionBroadcastToLiveWhenReadyAsync(bid!, TimeSpan.FromSeconds(60), 6, cancellationToken);
                             if (!ok)
                             {
                                 _logger.LogWarning("[Orchestrator] Ingestion failed after restart; ending broadcast but keeping local stream running");
@@ -289,31 +281,24 @@ namespace PrintStreamer.Services
         /// </summary>
         public async Task StopBroadcastKeepLocalAsync(CancellationToken cancellationToken)
         {
-            YouTubeControlService? ytService;
             string? broadcastId;
 
             lock (_lock)
             {
-                ytService = _currentYouTubeService;
                 broadcastId = _currentBroadcastId;
-                _currentYouTubeService = null;
                 _currentBroadcastId = null;
                 _currentRtmpUrl = null;
             }
 
-            if (ytService != null && !string.IsNullOrWhiteSpace(broadcastId))
+            if (!string.IsNullOrWhiteSpace(broadcastId))
             {
                 try
                 {
-                    await ytService.EndBroadcastAsync(broadcastId!, cancellationToken);
+                    await _youtubeService.EndBroadcastAsync(broadcastId!, cancellationToken);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[Orchestrator] Error ending broadcast");
-                }
-                finally
-                {
-                    ytService.Dispose();
                 }
             }
 
@@ -333,34 +318,30 @@ namespace PrintStreamer.Services
         /// </summary>
         public async Task<(bool success, string? message)> StopBroadcastAsync(CancellationToken cancellationToken)
         {
-            YouTubeControlService? ytService;
             string? broadcastId;
 
             lock (_lock)
             {
-                ytService = _currentYouTubeService;
                 broadcastId = _currentBroadcastId;
-
-                _currentYouTubeService = null;
                 _currentBroadcastId = null;
             }
 
-            if (ytService == null || string.IsNullOrWhiteSpace(broadcastId))
+            if (string.IsNullOrWhiteSpace(broadcastId))
             {
                 // Just stop the stream if no broadcast
-                    await _streamService.StopStreamAsync();
+                await _streamService.StopStreamAsync();
                 return (true, "Stream stopped (no broadcast was active)");
             }
 
-                _logger.LogInformation("[Orchestrator] Stopping broadcast and stream...");
+            _logger.LogInformation("[Orchestrator] Stopping broadcast and stream...");
 
             // Stop stream first
-                await _streamService.StopStreamAsync();
+            await _streamService.StopStreamAsync();
 
             // End YouTube broadcast
             try
             {
-                await ytService.EndBroadcastAsync(broadcastId, cancellationToken);
+                await _youtubeService.EndBroadcastAsync(broadcastId, cancellationToken);
                 _logger.LogInformation("[Orchestrator] Broadcast ended: {BroadcastId}", broadcastId);
 
                 // Add to playlist if configured
@@ -371,10 +352,10 @@ namespace PrintStreamer.Services
                     if (!string.IsNullOrWhiteSpace(playlistName))
                     {
                         var playlistPrivacy = _config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
-                        var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
+                        var pid = await _youtubeService.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
                         if (!string.IsNullOrWhiteSpace(pid))
                         {
-                            await ytService.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
+                            await _youtubeService.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
                             _logger.LogInformation("[Orchestrator] Added broadcast to playlist '{PlaylistName}'", playlistName);
                         }
                     }
@@ -388,10 +369,6 @@ namespace PrintStreamer.Services
             {
                 _logger.LogError(ex, "[Orchestrator] Error ending broadcast");
                 return (false, $"Error ending broadcast: {ex.Message}");
-            }
-            finally
-            {
-                ytService.Dispose();
             }
 
             return (true, "Broadcast and stream stopped");
@@ -421,8 +398,6 @@ namespace PrintStreamer.Services
 
             lock (_lock)
             {
-                try { _currentYouTubeService?.Dispose(); } catch { }
-                _currentYouTubeService = null;
                 _currentBroadcastId = null;
             }
         }
