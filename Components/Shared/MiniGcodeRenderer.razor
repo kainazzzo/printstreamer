@@ -1,0 +1,119 @@
+@using PrintStreamer.Services
+@inject PrinterConsoleService PrinterConsoleService
+
+<style>
+    .console-display {
+        width: 100%;
+        height: 200px;
+        background: rgba(0, 0, 0, 0.8);
+        border: 1px solid rgba(0, 191, 255, 0.2);
+        border-radius: 6px;
+        overflow-y: auto;
+        padding: 8px;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        color: #00ff00;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .console-line {
+        margin: 2px 0;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+
+    .console-line.info {
+        color: #00ff00;
+    }
+
+    .console-line.error {
+        color: #ff6b6b;
+    }
+
+    .console-line.warn {
+        color: #ffd93d;
+    }
+
+    .console-line.local {
+        color: #00bfff;
+    }
+
+    .console-empty {
+        color: #666;
+        font-style: italic;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+    }
+</style>
+
+<div class="console-display" @ref="_consoleRef">
+    @if (_consoleLines.Count == 0)
+    {
+        <div class="console-empty">Waiting for printer output...</div>
+    }
+    else
+    {
+        @foreach (var line in _consoleLines)
+        {
+            var lineClass = line.FromLocal ? "local" : line.Level;
+            <div class="console-line @lineClass">
+                <span style="color: #666;">[@(line.Timestamp.ToLocalTime().ToString("HH:mm:ss"))]</span> @line.Text
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private List<ConsoleLine> _consoleLines = new();
+    private ElementReference _consoleRef;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        
+        // Load initial console lines
+        _consoleLines = PrinterConsoleService.GetLatestLines(50).ToList();
+        
+        // Subscribe to new lines
+        PrinterConsoleService.OnNewLine += HandleNewLine;
+    }
+
+    private void HandleNewLine(ConsoleLine line)
+    {
+        _ = InvokeAsync(() =>
+        {
+            _consoleLines.Add(line);
+            
+            // Keep only the last 50 lines
+            if (_consoleLines.Count > 50)
+            {
+                _consoleLines.RemoveAt(0);
+            }
+            
+            StateHasChanged();
+            
+            // Auto-scroll to bottom
+            _ = Task.Delay(10).ContinueWith(async _ =>
+            {
+                try
+                {
+                    await _consoleRef.FocusAsync();
+                }
+                catch { }
+            });
+        });
+    }
+
+    public void Dispose()
+    {
+        try 
+        { 
+            PrinterConsoleService.OnNewLine -= HandleNewLine; 
+        } 
+        catch { }
+    }
+}
+

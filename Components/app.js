@@ -74,6 +74,19 @@ window.psScrollToBottom = function(elementId){
     }catch(e){ /* ignore */ }
 };
 
+// Scroll element reference to bottom
+window.scrollToBottom = function(elementRef){
+    try{
+        // For Blazor element references, we need to get the actual DOM element
+        if(elementRef && elementRef.id){
+            const el = document.getElementById(elementRef.id);
+            if(el){
+                el.scrollTop = el.scrollHeight;
+            }
+        }
+    }catch(e){ /* ignore */ }
+};
+
 // Player control helpers exposed for Blazor UI
 window.streamControls = {
     play: function() {},

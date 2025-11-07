@@ -38,20 +38,31 @@ namespace PrintStreamer.Services
     {
         private readonly ILogger<PrinterConsoleService> _log;
         private readonly IConfiguration _cfg;
+        private readonly MoonrakerClient _moonrakerClient;
         private readonly List<ConsoleLine> _buffer = new List<ConsoleLine>();
         private readonly object _lock = new object();
         private DateTime _lastSent = DateTime.MinValue;
         private CancellationTokenSource? _cts;
         private Task? _runner;
         private string? _lastDisplayMessage;
+        private double? _lastToolTemp;
+        private double? _lastBedTemp;
+
+        // Command buffer/queue for throttling and batching
+        private readonly Queue<Func<CancellationToken, Task<SendResult>>> _commandQueue = new();
+        private readonly SemaphoreSlim _commandQueueSemaphore = new SemaphoreSlim(0);
+        private Task? _commandProcessorTask;
+        private readonly int _minCommandIntervalMs;
 
         // Public event for new lines (simple Action-based subscription)
         public event Action<ConsoleLine>? OnNewLine;
 
-        public PrinterConsoleService(IConfiguration cfg, ILogger<PrinterConsoleService> log)
+        public PrinterConsoleService(IConfiguration cfg, ILogger<PrinterConsoleService> log, MoonrakerClient moonrakerClient)
         {
             _cfg = cfg;
             _log = log;
+            _moonrakerClient = moonrakerClient;
+            _minCommandIntervalMs = cfg.GetValue<int?>("Stream:Console:MinCommandIntervalMs") ?? 100;
             // Seed a small startup line
             AddLine(new ConsoleLine { Text = "PrinterConsoleService initialized (skeleton)", Level = "info", FromLocal = true });
         }
@@ -79,6 +90,17 @@ namespace PrintStreamer.Services
             }
         }
 
+        /// <summary>
+        /// Get current temperatures from the last status update received from Moonraker
+        /// </summary>
+        public (double? ToolTemp, double? BedTemp) GetCurrentTemperatures()
+        {
+            lock (_lock)
+            {
+                return (_lastToolTemp, _lastBedTemp);
+            }
+        }
+
         public Task StartAsync(CancellationToken ct = default)
         {
             // IHostedService start
@@ -92,6 +114,7 @@ namespace PrintStreamer.Services
             if (_runner != null) return Task.CompletedTask;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _runner = Task.Run(() => RunAsync(_cts.Token));
+            _commandProcessorTask = Task.Run(() => ProcessCommandQueueAsync(_cts.Token));
             _log.LogInformation("PrinterConsoleService background runner started");
             return Task.CompletedTask;
         }
@@ -106,6 +129,12 @@ namespace PrintStreamer.Services
         {
             try { _cts?.Cancel(); } catch { }
             try { _cts?.Dispose(); } catch { }
+            
+            // Clear all event subscriptions to prevent lingering callbacks
+            lock (_lock)
+            {
+                OnNewLine = null;
+            }
         }
 
         private async Task RunAsync(CancellationToken ct)
@@ -146,7 +175,7 @@ namespace PrintStreamer.Services
                     {
                         jsonrpc = "2.0",
                         method = "printer.objects.subscribe",
-                        @params = new { objects = new { display_status = (object?)null, gcode_move = (object?)null } },
+                        @params = new { objects = new { display_status = (object?)null, extruder = (object?)null, heater_bed = (object?)null } },
                         id = 1
                     };
                     var subJson = System.Text.Json.JsonSerializer.Serialize(sub);
@@ -186,7 +215,20 @@ namespace PrintStreamer.Services
                 }
                 finally
                 {
-                    try { if (ws != null && ws.State == WebSocketState.Open) await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None); } catch { }
+                    try 
+                    { 
+                        if (ws != null && ws.State == WebSocketState.Open)
+                        {
+                            // Use a short timeout for closing to prevent hanging on shutdown
+                            using var closeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                            await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", closeTimeout.Token);
+                        }
+                    } 
+                    catch { }
+                    finally
+                    {
+                        try { ws?.Dispose(); } catch { }
+                    }
                 }
 
                 if (!ct.IsCancellationRequested)
@@ -218,6 +260,39 @@ namespace PrintStreamer.Services
                         {
                             _lastDisplayMessage = message;
                             AddLine(new ConsoleLine { Text = message!, Level = "info", FromLocal = false });
+                        }
+                    }
+
+                    // Extract temperatures from extruder and heater_bed objects
+                    var extruder = obj?["extruder"] as JsonObject;
+                    if (extruder != null)
+                    {
+                        if (extruder.TryGetPropertyValue("temperature", out var tempNode) && tempNode?.GetValueKind() != System.Text.Json.JsonValueKind.Null)
+                        {
+                            try
+                            {
+                                lock (_lock)
+                                {
+                                    _lastToolTemp = tempNode!.GetValue<double>();
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+
+                    var heaterBed = obj?["heater_bed"] as JsonObject;
+                    if (heaterBed != null)
+                    {
+                        if (heaterBed.TryGetPropertyValue("temperature", out var bedTempNode) && bedTempNode?.GetValueKind() != System.Text.Json.JsonValueKind.Null)
+                        {
+                            try
+                            {
+                                lock (_lock)
+                                {
+                                    _lastBedTemp = bedTempNode!.GetValue<double>();
+                                }
+                            }
+                            catch { }
                         }
                     }
                 }
@@ -287,6 +362,7 @@ namespace PrintStreamer.Services
         /// from configuration and forwards the command via the MoonrakerClient helper. Returns a SendResult
         /// describing the outcome. When the command matches a prefix listed in RequireConfirmation and the
         /// caller did not set confirmed=true, the method returns Ok=false with Message="confirmation-required".
+        /// Commands are queued and rate-limited to avoid overwhelming Moonraker.
         /// </summary>
         public async Task<SendResult> SendCommandAsync(string cmd, bool confirmed = false, CancellationToken ct = default)
         {
@@ -318,22 +394,32 @@ namespace PrintStreamer.Services
                 }
             }
 
-            // Rate limiting (simple cooldown based on CommandsPerMinute)
-            var cpm = _cfg.GetValue<int?>("Stream:Console:RateLimit:CommandsPerMinute") ?? 0;
-            if (cpm > 0)
+            // Enqueue the command for processing with rate limiting
+            var tcs = new TaskCompletionSource<SendResult>();
+            EnqueueCommand(async (innerCt) =>
             {
-                var minInterval = TimeSpan.FromSeconds(60.0 / cpm);
-                var now = DateTime.UtcNow;
-                if (now - _lastSent < minInterval)
+                try
                 {
-                    var wait = (minInterval - (now - _lastSent)).TotalSeconds;
-                    var msg = $"Rate limited: try again in {wait:F1}s";
-                    AddLine(new ConsoleLine { Text = msg, Level = "warn", FromLocal = true });
-                    return new SendResult { Ok = false, Message = msg };
+                    var result = await SendCommandInternalAsync(cmd, innerCt);
+                    tcs.SetResult(result);
+                    return result;
                 }
-                _lastSent = now;
-            }
+                catch (Exception ex)
+                {
+                    var result = new SendResult { Ok = false, Message = ex.Message, SentCommand = cmd };
+                    tcs.SetResult(result);
+                    return result;
+                }
+            });
 
+            return await tcs.Task;
+        }
+
+        /// <summary>
+        /// Internal method that actually sends the command (called from the command queue)
+        /// </summary>
+        private async Task<SendResult> SendCommandInternalAsync(string cmd, CancellationToken ct)
+        {
             // Attempt to resolve Moonraker base URI
             Uri? baseUri = null;
             var cfgBase = _cfg.GetValue<string>("Moonraker:BaseUrl");
@@ -341,7 +427,7 @@ namespace PrintStreamer.Services
             if (baseUri == null)
             {
                 var streamSource = _cfg.GetValue<string>("Stream:Source");
-                if (!string.IsNullOrWhiteSpace(streamSource)) baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(streamSource);
+                if (!string.IsNullOrWhiteSpace(streamSource)) baseUri = _moonrakerClient.GetPrinterBaseUriFromStreamSource(streamSource);
             }
 
             if (baseUri == null)
@@ -356,7 +442,7 @@ namespace PrintStreamer.Services
             {
                 var apiKey = _cfg.GetValue<string>("Moonraker:ApiKey");
                 var authHeader = _cfg.GetValue<string>("Moonraker:AuthHeader");
-                var resp = await MoonrakerClient.SendGcodeScriptAsync(baseUri, cmd, apiKey, authHeader, ct);
+                var resp = await _moonrakerClient.SendGcodeScriptAsync(baseUri, cmd, apiKey, authHeader, ct);
                 if (resp == null)
                 {
                     var msg = "Moonraker did not accept command (no response)";
@@ -399,17 +485,133 @@ namespace PrintStreamer.Services
 
         public async Task<SendResult> SetTemperaturesAsync(int? toolTemp, int? bedTemp, int toolIndex = 0, CancellationToken ct = default)
         {
-            SendResult? last = null;
+            // Validate ranges
+            var toolMax = _cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
+            var bedMax = _cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
+            
+            if (toolTemp.HasValue && (toolTemp.Value < 0 || toolTemp.Value > toolMax))
+            {
+                return new SendResult { Ok = false, Message = $"Tool temp out of range (0..{toolMax})" };
+            }
+            if (bedTemp.HasValue && (bedTemp.Value < 0 || bedTemp.Value > bedMax))
+            {
+                return new SendResult { Ok = false, Message = $"Bed temp out of range (0..{bedMax})" };
+            }
+
+            // Build command lines
+            var commands = new List<string>();
             if (toolTemp.HasValue)
             {
-                last = await SetToolTemperatureAsync(toolIndex, toolTemp.Value, ct);
-                if (!last.Ok) return last;
+                commands.Add(toolIndex <= 0 ? $"M104 S{toolTemp.Value}" : $"M104 T{toolIndex} S{toolTemp.Value}");
             }
             if (bedTemp.HasValue)
             {
-                last = await SetBedTemperatureAsync(bedTemp.Value, ct);
+                commands.Add($"M140 S{bedTemp.Value}");
             }
-            return last ?? new SendResult { Ok = true, Message = "No-op" };
+
+            if (commands.Count == 0)
+            {
+                return new SendResult { Ok = true, Message = "No-op" };
+            }
+
+            // If only one command, send it directly
+            if (commands.Count == 1)
+            {
+                return await SendCommandAsync(commands[0], confirmed: false, ct);
+            }
+
+            // If both commands, use gcode_script endpoint (Moonraker's proper way to send multi-line scripts)
+            // This avoids rate limiting by treating them as a single script request
+            try
+            {
+                var baseUri = new Uri(_cfg.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125");
+                var apiKey = _cfg.GetValue<string>("Moonraker:ApiKey");
+                var authHeader = _cfg.GetValue<string>("Moonraker:AuthHeader");
+                var script = string.Join("\n", commands);
+                
+                var result = await _moonrakerClient.SendGcodeScriptAsync(baseUri, script, apiKey, authHeader, ct);
+                if (result != null)
+                {
+                    var msg = $"Temperatures set: Tool {toolTemp}°C, Bed {bedTemp}°C";
+                    AddLine(new ConsoleLine { Text = msg, Level = "info", FromLocal = true });
+                    return new SendResult { Ok = true, Message = msg, SentCommand = script };
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "[Console] Error sending gcode script for temperatures");
+            }
+
+            // Fallback: send them separately with a small delay
+            var last = await SendCommandAsync(commands[0], confirmed: false, ct);
+            if (!last.Ok) return last;
+            await Task.Delay(150, ct);
+            return await SendCommandAsync(commands[1], confirmed: false, ct);
+        }
+
+        /// <summary>
+        /// Background task that processes queued commands with rate limiting
+        /// </summary>
+        private async Task ProcessCommandQueueAsync(CancellationToken ct)
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    // Wait for a command to be queued
+                    await _commandQueueSemaphore.WaitAsync(ct);
+                    
+                    if (ct.IsCancellationRequested) break;
+
+                    // Get next command from queue
+                    Func<CancellationToken, Task<SendResult>>? command = null;
+                    lock (_lock)
+                    {
+                        if (_commandQueue.Count > 0)
+                        {
+                            command = _commandQueue.Dequeue();
+                        }
+                    }
+
+                    if (command != null)
+                    {
+                        // Enforce minimum interval between commands
+                        var timeSinceLastSend = DateTime.UtcNow - _lastSent;
+                        if (timeSinceLastSend.TotalMilliseconds < _minCommandIntervalMs)
+                        {
+                            var delay = _minCommandIntervalMs - (int)timeSinceLastSend.TotalMilliseconds;
+                            await Task.Delay(delay, ct);
+                        }
+
+                        try
+                        {
+                            await command(ct);
+                            _lastSent = DateTime.UtcNow;
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.LogWarning(ex, "[Console] Error processing queued command");
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "[Console] Command queue processor error");
+            }
+        }
+
+        /// <summary>
+        /// Enqueue a command to be sent with rate limiting
+        /// </summary>
+        private void EnqueueCommand(Func<CancellationToken, Task<SendResult>> commandFunc)
+        {
+            lock (_lock)
+            {
+                _commandQueue.Enqueue(commandFunc);
+            }
+            _commandQueueSemaphore.Release();
         }
     }
 }

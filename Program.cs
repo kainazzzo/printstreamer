@@ -130,6 +130,7 @@ if (!File.Exists(fallbackImagePath))
 }
 
 // Register application services
+webBuilder.Services.AddSingleton<MoonrakerClient>();
 webBuilder.Services.AddSingleton<TimelapseManager>();
 // Expose TimelapseManager as ITimelapseMetadataProvider for overlay text enrichment
 webBuilder.Services.AddSingleton<PrintStreamer.Overlay.ITimelapseMetadataProvider>(sp => sp.GetRequiredService<TimelapseManager>());
@@ -161,13 +162,22 @@ webBuilder.Services.AddSingleton<PrintStreamer.Overlay.OverlayTextService>(sp =>
 	var tl = sp.GetService<PrintStreamer.Overlay.ITimelapseMetadataProvider>();
 	var audio = sp.GetRequiredService<PrintStreamer.Services.AudioService>();
 	var overlayLogger = sp.GetRequiredService<ILogger<PrintStreamer.Overlay.OverlayTextService>>();
-	return new PrintStreamer.Overlay.OverlayTextService(cfg, tl, () => audio.Current, overlayLogger);
+	var moonrakerClient = sp.GetRequiredService<MoonrakerClient>();
+	return new PrintStreamer.Overlay.OverlayTextService(cfg, tl, () => audio.Current, overlayLogger, moonrakerClient);
 });
 
 // Add Blazor Server services
 webBuilder.Services.AddRazorComponents()
 	.AddInteractiveServerComponents();
-webBuilder.Services.AddHttpClient();
+
+// Register HttpClient with base address for API calls
+webBuilder.Services.AddHttpClient<PrintStreamer.Services.PrinterControlApiService>(client =>
+{
+	client.BaseAddress = new Uri("http://localhost:8080");
+});
+
+// Add controller endpoints for printer control API
+webBuilder.Services.AddControllers();
 
 // Read configuration values
 string? source = config.GetValue<string>("Stream:Source");
@@ -1297,6 +1307,10 @@ if (serveEnabled)
 
 	// Enhanced test page with timelapse management
 	// Blazor pages are now served via MapRazorComponents below
+	
+	// Map API controllers (printer control API, etc.)
+	app.MapControllers();
+
 	app.MapRazorComponents<PrintStreamer.App>()
 		.AddInteractiveServerRenderMode();
 

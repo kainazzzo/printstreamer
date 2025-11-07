@@ -1,6 +1,12 @@
 
 @using printstreamer.Components.Shared
 @inherits LayoutComponentBase
+@* 
+    IMPORTANT: DO NOT add @rendermode here!
+    MainLayout receives @Body (a RenderFragment) from the router, which cannot be serialized
+    across a render mode boundary. Each PAGE must declare its own @rendermode instead.
+    The pattern is: Static App → Static Layout → Interactive Pages
+*@
 
 <PageTitle>PrintStreamer</PageTitle>
 
@@ -40,9 +46,12 @@
         <NavLink href="/config">Configuration ⚙️</NavLink>
     </div>
 
-    <PrinterUiIframes @rendermode="@(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())" />
+    <PrinterUiIframes />
 
     @Body
+
+    <!-- Printer Control Popout - appears on all pages -->
+    <PrinterControlPopout />
 </div>
 
 @code {

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using PrintStreamer.Services;
 
 namespace PrintStreamer.Timelapse
 {
@@ -11,15 +12,17 @@ namespace PrintStreamer.Timelapse
     {
     private readonly IConfiguration _config;
     private readonly ILogger<TimelapseManager>? _logger;
+    private readonly MoonrakerClient _moonrakerClient;
     private readonly string _mainTimelapseDir;
     private readonly ConcurrentDictionary<string, TimelapseSession> _activeSessions = new();
     private readonly Timer _captureTimer;
     private bool _disposed = false;
 
-    public TimelapseManager(IConfiguration config, ILogger<TimelapseManager>? logger = null)
+    public TimelapseManager(IConfiguration config, ILogger<TimelapseManager>? logger = null, MoonrakerClient? moonrakerClient = null)
     {
         _config = config;
         _logger = logger;
+        _moonrakerClient = moonrakerClient ?? throw new ArgumentNullException(nameof(moonrakerClient));
         _mainTimelapseDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
         Directory.CreateDirectory(_mainTimelapseDir);
 
@@ -60,12 +63,12 @@ namespace PrintStreamer.Timelapse
                 var baseUrl = _config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125";
                 var apiKey = _config.GetValue<string>("Moonraker:ApiKey");
                 var authHeader = _config.GetValue<string>("Moonraker:AuthHeader");
-                var baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(baseUrl) ?? new Uri(baseUrl);
+                var baseUri = _moonrakerClient.GetPrinterBaseUriFromStreamSource(baseUrl) ?? new Uri(baseUrl);
 
                 _logger?.LogInformation("[TimelapseManager] Skipping remote G-code download/list for: {File}. Timelapse now expects slicer to embed print stats via SET_PRINT_STATS_INFO.", moonrakerFilename);
                 try
                 {
-                    var meta = await MoonrakerClient.GetFileMetadataAsync(baseUri, moonrakerFilename!, apiKey, authHeader, CancellationToken.None);
+                    var meta = await _moonrakerClient.GetFileMetadataAsync(baseUri, moonrakerFilename!, apiKey, authHeader, CancellationToken.None);
                     if (meta != null)
                     {
                         session.MetadataRaw = meta;

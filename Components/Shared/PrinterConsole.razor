@@ -45,9 +45,11 @@
 
     private void HandleNewLine(ConsoleLine l)
     {
-        // Update copy and trim
-        _lines.Add(l);
-        if (_lines.Count > MaxLines) _lines.RemoveRange(0, _lines.Count - MaxLines);
+        // Update copy and trim - make a new list to avoid collection modified exceptions
+        var newLines = new List<ConsoleLine>(_lines);
+        newLines.Add(l);
+        if (newLines.Count > MaxLines) newLines.RemoveRange(0, newLines.Count - MaxLines);
+        _lines = newLines;
         // Safe UI update and auto-scroll
         _ = InvokeAsync(async () =>
         {

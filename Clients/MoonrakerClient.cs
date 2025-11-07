@@ -2,24 +2,13 @@
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
-internal static class MoonrakerClient
+public class MoonrakerClient
 {
-    // Logger must be provided by the host; ILogger is required for logging.
-    private static ILogger? s_logger;
+    private readonly ILogger<MoonrakerClient> _logger;
 
-    /// <summary>
-    /// Set the logger the MoonrakerClient will use for all logging.
-    /// This must be called before any methods that produce logs are invoked.
-    /// </summary>
-    public static void SetLogger(ILogger logger)
+    public MoonrakerClient(ILogger<MoonrakerClient> logger)
     {
-        s_logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
-
-    private static ILogger LoggerOrThrow()
-    {
-        if (s_logger == null) throw new InvalidOperationException("MoonrakerClient logger not set. Call MoonrakerClient.SetLogger(logger) before use.");
-        return s_logger;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     // Minimal MoonrakerPrintInfo used by Program.cs and other callers
@@ -71,7 +60,7 @@ internal static class MoonrakerClient
     /// Best-effort: fetch a small summary of the current print job. Implemented as a stub that
     /// attempts common Moonraker endpoints. Returns null when information cannot be retrieved.
     /// </summary>
-    public static async Task<MoonrakerPrintInfo?> GetPrintInfoAsync(Uri baseUri, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    public async Task<MoonrakerPrintInfo?> GetPrintInfoAsync(Uri baseUri, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -185,13 +174,13 @@ internal static class MoonrakerClient
     /// Helper to merge filament metadata from file metadata endpoint into MoonrakerPrintInfo.
     /// Only updates fields that are currently missing (null/empty).
     /// </summary>
-    private static async Task MergeFilamentFromMetadataAsync(MoonrakerPrintInfo info, Uri baseUri, string? apiKey, string? authHeader, CancellationToken cancellationToken)
+    private async Task MergeFilamentFromMetadataAsync(MoonrakerPrintInfo info, Uri baseUri, string? apiKey, string? authHeader, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(info.Filename)) return;
 
         try
         {
-            var metadataNode = await GetFileMetadataAsync(baseUri, info.Filename, apiKey, authHeader, cancellationToken);
+            var metadataNode = await this.GetFileMetadataAsync(baseUri, info.Filename, apiKey, authHeader, cancellationToken);
             if (metadataNode == null) return;
 
             // Navigate to result object (typical structure: { "result": { ... } })
@@ -226,9 +215,9 @@ internal static class MoonrakerClient
                                        (GetFilamentDouble(result, "filament_total_m") * 1000.0);
             }
         }
-        catch (Exception ex)
+        catch
         {
-            LoggerOrThrow().LogWarning(ex, "[Moonraker] Failed to merge filament metadata");
+            _logger.LogWarning("[Moonraker] Failed to merge filament metadata");
         }
     }
 
@@ -430,7 +419,7 @@ internal static class MoonrakerClient
     /// Try to extract a base printer URI (scheme + host) from the configured Stream:Source URL.
     /// Returns a Uri pointing at the printer host with port 7125 (Moonraker default) when possible.
     /// </summary>
-    public static Uri? GetPrinterBaseUriFromStreamSource(string source)
+    public Uri? GetPrinterBaseUriFromStreamSource(string source)
     {
         try
         {
@@ -462,11 +451,11 @@ internal static class MoonrakerClient
     /// Fetch file metadata for a given filename from Moonraker: /server/files/metadata?filename=...
     /// Returns the parsed JsonNode (raw response) or null on failure.
     /// </summary>
-    public static async Task<JsonNode?> GetFileMetadataAsync(Uri baseUri, string filename, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    public async Task<JsonNode?> GetFileMetadataAsync(Uri baseUri, string filename, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(8) };
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(15) };
             if (!string.IsNullOrWhiteSpace(apiKey))
             {
                 var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
@@ -484,16 +473,11 @@ internal static class MoonrakerClient
 
             foreach (var endpoint in endpoints)
             {
-                LoggerOrThrow().LogInformation("[Moonraker] GET {Endpoint}", endpoint);
                 var resp = await http.GetAsync(endpoint, cancellationToken);
                 if (resp.IsSuccessStatusCode)
                 {
                     var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
                     return JsonNode.Parse(txt);
-                }
-                else
-                {
-                    LoggerOrThrow().LogWarning("[Moonraker] Metadata request failed for '{Endpoint}': {StatusCode} {ReasonPhrase}", endpoint, (int)resp.StatusCode, resp.ReasonPhrase);
                 }
             }
             return null;
@@ -518,7 +502,7 @@ internal static class MoonrakerClient
     /// Fetch the printer print_stats object via /printer/objects/query?print_stats
     /// Returns the parsed JsonNode or null on failure.
     /// </summary>
-    public static async Task<JsonNode?> GetPrintStatsAsync(Uri baseUri, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    public async Task<JsonNode?> GetPrintStatsAsync(Uri baseUri, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -531,7 +515,7 @@ internal static class MoonrakerClient
             }
 
             var endpoint = "/printer/objects/query?print_stats";
-            LoggerOrThrow().LogInformation("[Moonraker] GET {Endpoint}", endpoint);
+            _logger.LogInformation("[Moonraker] GET {Endpoint}", endpoint);
             var resp = await http.GetAsync(endpoint, cancellationToken);
             if (resp.IsSuccessStatusCode)
             {
@@ -540,12 +524,12 @@ internal static class MoonrakerClient
             }
             else
             {
-                LoggerOrThrow().LogWarning("[Moonraker] print_stats request failed: {StatusCode} {ReasonPhrase}", (int)resp.StatusCode, resp.ReasonPhrase);
+                _logger.LogWarning("[Moonraker] print_stats request failed: {StatusCode} {ReasonPhrase}", (int)resp.StatusCode, resp.ReasonPhrase);
             }
         }
         catch (Exception ex)
         {
-            LoggerOrThrow().LogError(ex, "[Moonraker] GetPrintStatsAsync error");
+            _logger.LogError(ex, "[Moonraker] GetPrintStatsAsync error");
         }
         return null;
     }
@@ -555,11 +539,11 @@ internal static class MoonrakerClient
     /// Posts JSON: { "script": "<command>" }
     /// Returns the parsed Moonraker JSON response or null on failure.
     /// </summary>
-    public static async Task<JsonNode?> SendGcodeScriptAsync(Uri baseUri, string command, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    public async Task<JsonNode?> SendGcodeScriptAsync(Uri baseUri, string command, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(8) };
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(30) };
             if (!string.IsNullOrWhiteSpace(apiKey))
             {
                 var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
@@ -570,11 +554,11 @@ internal static class MoonrakerClient
             var json = System.Text.Json.JsonSerializer.Serialize(new { script = command });
             var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
             var endpoint = "/printer/gcode/script";
-            LoggerOrThrow().LogInformation("[Moonraker] POST {Endpoint} -> {Command}", endpoint, command);
+            _logger.LogInformation("[Moonraker] POST {Endpoint} -> {Command}", endpoint, command);
             var resp = await http.PostAsync(endpoint, content, cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
-                LoggerOrThrow().LogWarning("[Moonraker] SendGcodeScriptAsync failed: {StatusCode} {ReasonPhrase}", (int)resp.StatusCode, resp.ReasonPhrase);
+                _logger.LogWarning("[Moonraker] SendGcodeScriptAsync failed: {StatusCode} {ReasonPhrase}", (int)resp.StatusCode, resp.ReasonPhrase);
                 return null;
             }
             var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
@@ -582,7 +566,7 @@ internal static class MoonrakerClient
         }
         catch (Exception ex)
         {
-            LoggerOrThrow().LogError(ex, "[Moonraker] SendGcodeScriptAsync error");
+            _logger.LogError(ex, "[Moonraker] SendGcodeScriptAsync error");
             return null;
         }
     }

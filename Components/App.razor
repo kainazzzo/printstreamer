@@ -2,6 +2,13 @@
 @using printstreamer.Components.Layout
 @using System.Reflection
 @using System.IO
+@using Microsoft.AspNetCore.Components.Web
+@* 
+    IMPORTANT: DO NOT add @rendermode here!
+    App.razor contains the <html> root element and MUST remain static.
+    Root components cannot be marked as interactive in Blazor .NET 8.
+    See: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/render-modes
+*@
 @{
     // Use the server assembly file write time (UTC) as a cache-buster so each build
     // produces a stable timestamp and clients will fetch fresh assets after a deploy.
@@ -42,7 +49,7 @@
             <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
         </Found>
         <NotFound>
-            <p>Sorry, there's nothing at this address.</p>
+            <p style="color: white; padding: 20px;">Sorry, there's nothing at this address.</p>
         </NotFound>
     </Router>
     <script src="/Components/app.js?v=@assetsTimestamp"></script>

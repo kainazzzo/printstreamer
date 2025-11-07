@@ -1,0 +1,29 @@
+@using PrintStreamer.Services
+
+<style>
+    .test-popout {
+        position: fixed;
+        bottom: 100px;
+        right: 20px;
+        width: 200px;
+        padding: 20px;
+        background: #ff0000;
+        color: white;
+        border-radius: 8px;
+        z-index: 10000;
+        font-weight: bold;
+    }
+</style>
+
+<div class="test-popout">
+    TEST: Popout System Active ✓
+    <br/>
+    <small>If you see this, components render fine</small>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        System.Diagnostics.Debug.WriteLine("=== TEST POPOUT RENDERED ===");
+    }
+}

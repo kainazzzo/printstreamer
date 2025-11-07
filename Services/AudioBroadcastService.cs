@@ -206,9 +206,19 @@ namespace PrintStreamer.Services
                         }
                     }
                     catch (OperationCanceledException) { break; }
+                    catch (System.Net.HttpListenerException ex) when (ex.Message.Contains("Connection reset") || ex.Message.Contains("reset by peer"))
+                    {
+                        // Client disconnected - ignore gracefully
+                        break;
+                    }
+                    catch (IOException ex) when (ex.InnerException is System.Net.Sockets.SocketException se && se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionReset)
+                    {
+                        // Client disconnected - ignore gracefully
+                        break;
+                    }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[AudioBroadcast] Feed request error");
+                        _logger.LogDebug(ex, "[AudioBroadcast] Feed request ended (client disconnect or cancellation)");
                     }
 
                     // Close and return after serving; ffmpeg will reconnect to get the new file

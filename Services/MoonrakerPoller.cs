@@ -9,7 +9,11 @@ namespace PrintStreamer.Services
 {
     internal static class MoonrakerPoller
     {
-    // Shared runtime state to allow promoting the currently-running encoder to a live broadcast
+#pragma warning disable CS0649 // Field 'MoonrakerPoller._moonrakerClient' is never assigned to, and will always have its default value null
+        private static MoonrakerClient? _moonrakerClient;
+#pragma warning restore CS0649
+
+        // Shared runtime state to allow promoting the currently-running encoder to a live broadcast
         private static readonly object _streamLock = new object();
         private static IStreamer? _currentStreamer;
         private static CancellationTokenSource? _currentStreamerCts;
@@ -197,7 +201,7 @@ namespace PrintStreamer.Services
                 FfmpegOverlayOptions? overlayOptions = null;
                 if (!(config.GetValue<bool?>("Serve:Enabled") ?? true) && (config.GetValue<bool?>("Overlay:Enabled") ?? false))
                 {
-                    var overlayService = new OverlayTextService(config, null, null, loggerFactory.CreateLogger<OverlayTextService>());
+                    var overlayService = new OverlayTextService(config, null, null, loggerFactory.CreateLogger<OverlayTextService>(), _moonrakerClient!);
                     overlayService.Start();
                     overlayOptions = new FfmpegOverlayOptions
                     {
@@ -402,7 +406,7 @@ namespace PrintStreamer.Services
             try
             {
                 // Initialize TimelapseManager for G-code caching and frame capture
-                timelapseManager = new TimelapseManager(config, loggerFactory);
+                timelapseManager = new TimelapseManager(config, loggerFactory, _moonrakerClient!);
                 
                 // Initialize YouTube service if credentials are provided (for timelapse upload)
                 var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
@@ -433,7 +437,7 @@ namespace PrintStreamer.Services
                     {
                     // Query Moonraker job queue
                     var baseUri = new Uri(moonrakerBase);
-                    var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+                    var info = _moonrakerClient != null ? await _moonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken) : null;
                     var currentJob = info?.Filename;
                     var jobQueueId = info?.JobQueueId;
                     var state = info?.State;
@@ -914,7 +918,7 @@ namespace PrintStreamer.Services
                 {
                     try
                     {
-                        overlayService = new OverlayTextService(config, timelapseProvider, null, loggerFactory.CreateLogger<OverlayTextService>());
+                        overlayService = new OverlayTextService(config, timelapseProvider, null, loggerFactory.CreateLogger<OverlayTextService>(), _moonrakerClient!);
                         overlayService.Start();
                         overlayOptions = new FfmpegOverlayOptions
                         {

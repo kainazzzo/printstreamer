@@ -1,0 +1,758 @@
+@using PrintStreamer.Services
+@* Component needs InteractiveServer to handle button clicks and state changes *@
+@rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())
+@implements IAsyncDisposable
+@inject PrinterConsoleService PrinterConsoleService
+@inject IConfiguration Cfg
+@inject IJSRuntime JS
+@inject PrinterControlApiService PrinterApi
+
+<style>
+    .popout-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 400px;
+        max-height: 95vh;
+        height: 90vh;
+        background: linear-gradient(135deg, #1a1a1a 0%, #252525 100%);
+        border: 2px solid #00bfff;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8), inset 0 0 20px rgba(0, 191, 255, 0.05);
+        display: flex;
+        flex-direction: column;
+        z-index: 9999;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        backdrop-filter: blur(8px);
+        transition: all 0.3s ease;
+    }
+
+    .popout-container.minimized {
+        width: 60px;
+        height: 60px;
+        max-height: none;
+    }
+
+    .popout-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid rgba(0, 191, 255, 0.3);
+        background: linear-gradient(90deg, rgba(0, 100, 150, 0.3), rgba(0, 191, 255, 0.1));
+        border-radius: 10px 10px 0 0;
+        cursor: move;
+    }
+
+    .popout-header h3 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: #00bfff;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        flex: 1;
+    }
+
+    .popout-header-controls {
+        display: flex;
+        gap: 8px;
+    }
+
+    .popout-header button {
+        background: transparent;
+        border: none;
+        color: #00bfff;
+        cursor: pointer;
+        padding: 6px 10px;
+        font-size: 18px;
+        font-weight: bold;
+        transition: all 0.2s;
+        border-radius: 4px;
+        position: relative;
+    }
+
+    .popout-header button:hover {
+        background: rgba(0, 191, 255, 0.3);
+        color: #fff;
+    }
+
+    .popout-header button:active {
+        transform: scale(0.95);
+    }
+
+    .popout-content {
+        flex: 1;
+        overflow: hidden;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-height: 0;
+    }
+
+    .popout-container.minimized .popout-content {
+        display: none;
+    }
+
+    .control-section {
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(0, 191, 255, 0.2);
+        border-radius: 8px;
+        padding: 12px;
+        flex-shrink: 0;
+    }
+
+    .control-section.console-section {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .control-section h4 {
+        margin: 0 0 8px 0;
+        font-size: 11px;
+        color: #00bfff;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 600;
+    }
+
+    .control-section.console-section h4 {
+        margin: 0 0 6px 0;
+    }
+
+    .temperature-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .temp-input-group {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        font-size: 11px;
+    }
+
+    .temp-input-group label {
+        flex: 0 0 40px;
+        font-size: 11px;
+        color: #aaa;
+        font-weight: 500;
+    }
+
+    .temp-input-group input {
+        flex: 1;
+        padding: 4px 6px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(0, 191, 255, 0.3);
+        color: #fff;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 11px;
+    }
+
+    .temp-input-group button {
+        padding: 4px 10px;
+        background: rgba(0, 191, 255, 0.2);
+        border: 1px solid rgba(0, 191, 255, 0.5);
+        color: #00bfff;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        transition: all 0.2s;
+    }
+
+    .temp-input-group button:hover {
+        background: rgba(0, 191, 255, 0.4);
+        border-color: #00bfff;
+    }
+
+    .current-temp {
+        flex: 0 0 auto;
+        font-size: 1rem;
+        color: #888;
+        font-family: monospace;
+        min-width: 40px;
+        text-align: right;
+    }
+
+    .preset-buttons {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+    }
+
+    .preset-btn {
+        padding: 6px 10px;
+        background: rgba(0, 191, 255, 0.15);
+        border: 1px solid rgba(0, 191, 255, 0.4);
+        color: #00bfff;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        transition: all 0.2s;
+    }
+
+    .preset-btn:hover {
+        background: rgba(0, 191, 255, 0.3);
+        border-color: #00bfff;
+        transform: translateY(-1px);
+    }
+
+    .preset-btn:active {
+        transform: translateY(0);
+    }
+
+    .cancel-btn {
+        width: 100%;
+        padding: 8px 12px;
+        background: linear-gradient(135deg, rgba(255, 107, 107, 0.3), rgba(255, 107, 107, 0.1));
+        border: 1px solid rgba(255, 107, 107, 0.5);
+        color: #ff6b6b;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        transition: all 0.2s;
+        margin-top: 6px;
+    }
+
+    .cancel-btn:hover {
+        background: linear-gradient(135deg, rgba(255, 107, 107, 0.5), rgba(255, 107, 107, 0.3));
+        border-color: #ff6b6b;
+        transform: translateY(-1px);
+    }
+
+    .cancel-btn:active {
+        transform: translateY(0);
+    }
+
+    .gcode-send-section {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .gcode-input {
+        display: flex;
+        gap: 5px;
+    }
+
+    .gcode-input input {
+        flex: 1;
+        padding: 6px 8px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(0, 191, 255, 0.3);
+        color: #fff;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 11px;
+    }
+
+    .gcode-input button {
+        padding: 6px 12px;
+        background: linear-gradient(135deg, rgba(0, 191, 255, 0.3), rgba(0, 191, 255, 0.1));
+        border: 1px solid rgba(0, 191, 255, 0.6);
+        color: #00bfff;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 11px;
+        transition: all 0.2s;
+    }
+
+    .gcode-input button:hover {
+        background: linear-gradient(135deg, rgba(0, 191, 255, 0.5), rgba(0, 191, 255, 0.3));
+        border-color: #00bfff;
+    }
+
+    .popout-content::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .popout-content::-webkit-scrollbar-track {
+        background: rgba(0, 191, 255, 0.1);
+        border-radius: 3px;
+    }
+
+    .popout-content::-webkit-scrollbar-thumb {
+        background: rgba(0, 191, 255, 0.3);
+        border-radius: 3px;
+    }
+
+    .popout-content::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 191, 255, 0.5);
+    }
+
+    .console-output {
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(0, 191, 255, 0.2);
+        border-radius: 6px;
+        padding: 8px;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        color: #aaa;
+        flex: 1;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .console-lines {
+        flex: 1;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-height: 0;
+    }
+
+    .console-lines.flipped {
+        flex-direction: column-reverse;
+    }
+
+    .console-line {
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.3;
+    }
+
+    .console-line.info {
+        color: #aaa;
+    }
+
+    .console-line.error {
+        color: #ff6b6b;
+    }
+
+    .console-line.warn {
+        color: #ffd93d;
+    }
+
+    .console-controls {
+        display: flex;
+        gap: 5px;
+        margin-top: 6px;
+        padding-top: 5px;
+        border-top: 1px solid rgba(0, 191, 255, 0.1);
+        flex-shrink: 0;
+    }
+
+    .console-controls button {
+        flex: 1;
+        padding: 3px 6px;
+        background: rgba(0, 191, 255, 0.15);
+        border: 1px solid rgba(0, 191, 255, 0.3);
+        color: #00bfff;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 600;
+        transition: all 0.2s;
+    }
+
+    .console-controls button:hover {
+        background: rgba(0, 191, 255, 0.3);
+        border-color: #00bfff;
+    }
+
+    .console-controls button:active {
+        transform: scale(0.95);
+    }
+
+    .console-controls button.active {
+        background: rgba(0, 191, 255, 0.3);
+        border-color: #00bfff;
+        box-shadow: inset 0 0 8px rgba(0, 191, 255, 0.2);
+    }
+</style>
+
+<div class="popout-container @(_minimized ? "minimized" : "")">
+    <div class="popout-header" @onclick="HandleHeaderClick" style="@(_minimized ? "cursor: pointer;" : "")">
+        @if (!_minimized)
+        {
+            <h3>🖨️ PRINTER CONTROL</h3>
+        }
+        else
+        {
+            <h3 style="text-align: center; width: 100%; margin: 0; font-size: 24px;">🖨️</h3>
+        }
+        <div class="popout-header-controls" @onclick:stopPropagation="true">
+            @if (!_minimized)
+            {
+                <button type="button" @onclick="ToggleMinimize" title="Minimize">−</button>
+            }
+        </div>
+    </div>
+
+    @if (!_minimized)
+    {
+        <div class="popout-content">
+            <div class="control-section">
+                <h4>Temperature</h4>
+                <div class="temperature-controls">
+                    <div class="temp-input-group">
+                        <label>Tool:</label>
+                        <input type="number" @bind="_toolTemp" min="0" max="@_toolMaxTemp" />
+                        <button @onclick="SetToolTemp">Set</button>
+                        <span class="current-temp">@(_currentToolTemp?.ToString("F0") ?? "—")°C</span>
+                    </div>
+                    <div class="temp-input-group">
+                        <label>Bed:</label>
+                        <input type="number" @bind="_bedTemp" min="0" max="@_bedMaxTemp" />
+                        <button @onclick="SetBedTemp">Set</button>
+                        <span class="current-temp">@(_currentBedTemp?.ToString("F0") ?? "—")°C</span>
+                    </div>
+                    <div class="preset-buttons">
+                        <button class="preset-btn" @onclick="() => ApplyPreset(200, 60)">PLA</button>
+                        <button class="preset-btn" @onclick="() => ApplyPreset(240, 70)">PETG</button>
+                        <button class="preset-btn" @onclick="() => ApplyPreset(250, 100)">ABS</button>
+                        <button class="preset-btn" @onclick="() => ApplyPreset(0, 0)">Cooldown</button>
+                    </div>
+                    <button class="cancel-btn" @onclick="CancelPrint" title="Cancel current print">🛑 Cancel Print</button>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h4>Send G-Code</h4>
+                <div class="gcode-send-section">
+                    <div class="gcode-input">
+                        <input type="text" @bind="_gcodeCommand" placeholder="Enter G-code..." @onkeydown="HandleGcodeKeydown" @ref="_gcodeInputRef" />
+                        <button @onclick="SendGcode">Send</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-section console-section">
+                <h4>Console</h4>
+                <div class="console-output">
+                    <div class="console-lines @(_consoleFlipped ? "flipped" : "")" @ref="_consoleContainer">
+                        @foreach (var line in GetDisplayConsoleLines())
+                        {
+                            <div class="console-line @line.Level">@line.Text</div>
+                        }
+                    </div>
+                </div>
+                <div class="console-controls">
+                    <button @onclick="ToggleAutoScroll" class="@(_autoScroll ? "active" : "")" title="Toggle auto-scroll">
+                        @(_autoScroll ? "↓" : "↕") Auto
+                    </button>
+                    <button @onclick="ToggleConsoleFlip" title="Flip layout">
+                        ⇅ Flip
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _minimized = true;
+    private int _toolTemp = 200;
+    private int _bedTemp = 60;
+    private int _toolMaxTemp = 350;
+    private int _bedMaxTemp = 120;
+    private double? _currentToolTemp;
+    private double? _currentBedTemp;
+    private string _gcodeCommand = string.Empty;
+    private bool _autoScroll = true;
+    private bool _consoleFlipped = false;
+    private List<ConsoleLine> _consoleLinesBuffer = new();
+    private ElementReference _consoleContainer;
+    private ElementReference _gcodeInputRef;
+    private bool _disposed = false;
+    private CancellationTokenSource? _tempUpdateCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            if (PrinterApi != null)
+            {
+                var config = await PrinterApi.GetConfigAsync();
+                if (config != null)
+                {
+                    _toolMaxTemp = config.ToolMaxTemp;
+                    _bedMaxTemp = config.BedMaxTemp;
+                }
+            }
+            else
+            {
+                _toolMaxTemp = Cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
+                _bedMaxTemp = Cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
+            }
+
+            // Subscribe to console service for new lines
+            if (PrinterConsoleService != null)
+            {
+                PrinterConsoleService.OnNewLine += OnNewConsoleLine;
+                // Load existing lines (keep up to 100 lines for scrollable history)
+                var lines = PrinterConsoleService.GetLatestLines(100);
+                _consoleLinesBuffer = new List<ConsoleLine>(lines);
+            }
+
+            // Start periodic temperature updates
+            _tempUpdateCts = new CancellationTokenSource();
+            _ = UpdateTemperaturesPeriodicAsync(_tempUpdateCts.Token);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading printer config: {ex.Message}");
+            _toolMaxTemp = Cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
+            _bedMaxTemp = Cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
+        }
+    }
+
+    private async Task UpdateTemperaturesPeriodicAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && !_disposed)
+        {
+            try
+            {
+                await Task.Delay(2000, ct); // Update every 2 seconds
+                if (ct.IsCancellationRequested || _disposed) break;
+                
+                // Get current temperatures from PrinterConsoleService (uses cached WebSocket data)
+                try
+                {
+                    var (toolTemp, bedTemp) = PrinterConsoleService.GetCurrentTemperatures();
+                    _currentToolTemp = toolTemp;
+                    _currentBedTemp = bedTemp;
+                    await InvokeAsync(StateHasChanged);
+                }
+                catch { }
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+        }
+    }
+
+    private void OnNewConsoleLine(ConsoleLine line)
+    {
+        if (_disposed) return;
+
+        // Create a new list to avoid collection modified exceptions during render
+        var newBuffer = new List<ConsoleLine>(_consoleLinesBuffer);
+        newBuffer.Add(line);
+        if (newBuffer.Count > 100)
+        {
+            newBuffer.RemoveAt(0);
+        }
+        _consoleLinesBuffer = newBuffer;
+        
+        InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            StateHasChanged();
+            if (_autoScroll)
+            {
+                await Task.Delay(10);
+                await ScrollToBottomAsync();
+            }
+        });
+    }
+
+    private List<ConsoleLine> GetDisplayConsoleLines()
+    {
+        return _consoleLinesBuffer;
+    }
+
+    private async Task ScrollToBottomAsync()
+    {
+        if (_consoleContainer.Id != null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("scrollToBottom", _consoleContainer);
+            }
+            catch { }
+        }
+    }
+
+    private void ToggleAutoScroll()
+    {
+        _autoScroll = !_autoScroll;
+        StateHasChanged();
+    }
+
+    private void ToggleConsoleFlip()
+    {
+        _consoleFlipped = !_consoleFlipped;
+        StateHasChanged();
+    }
+
+    private void ToggleMinimize()
+    {
+        _minimized = !_minimized;
+        StateHasChanged();
+    }
+
+    private void HandleHeaderClick()
+    {
+        // Only expand when minimized (clicking header)
+        if (_minimized)
+        {
+            ToggleMinimize();
+        }
+    }
+
+    private void ToggleOpen()
+    {
+        _minimized = true;
+        StateHasChanged();
+    }
+
+    private async Task SetToolTemp()
+    {
+        if (_toolTemp < 0 || _toolTemp > _toolMaxTemp)
+        {
+            await ShowToastAsync($"Tool temp out of range (0..{_toolMaxTemp})", "error");
+            return;
+        }
+        try
+        {
+            var res = await PrinterApi.SetToolTemperatureAsync(_toolTemp);
+            await ShowToastAsync(res?.Success ?? false ? $"Tool temp set to {_toolTemp}°C" : res?.Error ?? "Unknown error", res?.Success ?? false ? "success" : "error");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "error");
+        }
+    }
+
+    private async Task SetBedTemp()
+    {
+        if (_bedTemp < 0 || _bedTemp > _bedMaxTemp)
+        {
+            await ShowToastAsync($"Bed temp out of range (0..{_bedMaxTemp})", "error");
+            return;
+        }
+        try
+        {
+            var res = await PrinterApi.SetBedTemperatureAsync(_bedTemp);
+            await ShowToastAsync(res?.Success ?? false ? $"Bed temp set to {_bedTemp}°C" : res?.Error ?? "Unknown error", res?.Success ?? false ? "success" : "error");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "error");
+        }
+    }
+
+    private async Task CancelPrint()
+    {
+        try
+        {
+            var res = await PrinterApi.SendGcodeAsync("M409");
+            await ShowToastAsync(res?.Success ?? false ? "Print cancel sent" : res?.Error ?? "Failed to cancel print", res?.Success ?? false ? "success" : "error");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "error");
+        }
+    }
+
+    private async Task ApplyPreset(int toolTemp, int bedTemp)
+    {
+        try
+        {
+            var presetName = (toolTemp, bedTemp) switch
+            {
+                (200, 60) => "pla",
+                (240, 70) => "petg",
+                (250, 100) => "abs",
+                (0, 0) => "cooldown",
+                _ => "custom"
+            };
+
+            var res = await PrinterApi.ApplyPresetAsync(presetName);
+            if (res?.Success ?? false)
+            {
+                _toolTemp = toolTemp;
+                _bedTemp = bedTemp;
+                await ShowToastAsync($"Preset applied: Tool {toolTemp}°C, Bed {bedTemp}°C", "success");
+            }
+            else
+            {
+                var errorMsg = res?.Error ?? "Failed to apply preset";
+                // Check for rate limit errors
+                if (errorMsg.Contains("429") || errorMsg.Contains("rate") || errorMsg.Contains("too many"))
+                {
+                    errorMsg = "Rate limit - wait a moment and try again";
+                }
+                await ShowToastAsync(errorMsg, "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            var errorMsg = ex.Message;
+            if (errorMsg.Contains("429") || errorMsg.Contains("rate") || errorMsg.Contains("too many"))
+            {
+                errorMsg = "Rate limit - wait a moment and try again";
+            }
+            await ShowToastAsync($"Error: {errorMsg}", "error");
+        }
+    }
+
+    private async Task SendGcode()
+    {
+        if (string.IsNullOrWhiteSpace(_gcodeCommand))
+        {
+            await ShowToastAsync("Enter a G-code command", "warning");
+            return;
+        }
+
+        try
+        {
+            var res = await PrinterApi.SendGcodeAsync(_gcodeCommand);
+            await ShowToastAsync(res?.Success ?? false ? $"Sent: {_gcodeCommand}" : res?.Error ?? "Unknown error", res?.Success ?? false ? "success" : "error");
+            _gcodeCommand = string.Empty;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "error");
+        }
+    }
+
+    private async Task HandleGcodeKeydown(KeyboardEventArgs e)
+    {
+        if (e.Code == "Enter" || e.Key == "Enter")
+        {
+            await SendGcode();
+        }
+    }
+
+    private async Task ShowToastAsync(string message, string type)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("showToast", message, type);
+        }
+        catch { }
+    }
+
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        // Cancel temperature updates
+        try { _tempUpdateCts?.Cancel(); } catch { }
+        try { _tempUpdateCts?.Dispose(); } catch { }
+
+        // Unsubscribe from console service
+        if (PrinterConsoleService != null)
+        {
+            PrinterConsoleService.OnNewLine -= OnNewConsoleLine;
+        }
+
+        await ValueTask.CompletedTask;
+    }
+}

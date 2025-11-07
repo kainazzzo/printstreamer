@@ -14,6 +14,7 @@ namespace PrintStreamer.Services
         private readonly object _lock = new object();
     private readonly IConfiguration _config;
     private readonly AudioService _audioService;
+    private readonly MoonrakerClient _moonrakerClient;
         private IStreamer? _currentStreamer;
         private CancellationTokenSource? _currentCts;
         private OverlayTextService? _overlayService;
@@ -21,12 +22,13 @@ namespace PrintStreamer.Services
         private readonly ILogger<StreamService> _logger;
         private readonly ILoggerFactory _loggerFactory;
 
-        public StreamService(IConfiguration config, AudioService audioService, ILogger<StreamService> logger, ILoggerFactory loggerFactory)
+        public StreamService(IConfiguration config, AudioService audioService, ILogger<StreamService> logger, ILoggerFactory loggerFactory, MoonrakerClient moonrakerClient)
         {
             _config = config;
             _audioService = audioService;
             _logger = logger;
             _loggerFactory = loggerFactory;
+            _moonrakerClient = moonrakerClient;
         }
 
         /// <summary>
@@ -118,7 +120,7 @@ namespace PrintStreamer.Services
             {
                 try
                 {
-                    newOverlayService = new OverlayTextService(_config, overlayProvider, () => _audioService.Current, _loggerFactory.CreateLogger<OverlayTextService>());
+                    newOverlayService = new OverlayTextService(_config, overlayProvider, () => _audioService.Current, _loggerFactory.CreateLogger<OverlayTextService>(), _moonrakerClient);
                     newOverlayService.Start();
                     overlayOptions = new FfmpegOverlayOptions
                     {

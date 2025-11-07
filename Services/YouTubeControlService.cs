@@ -18,6 +18,7 @@ internal class YouTubeControlService : IDisposable
     private readonly IConfiguration _config;
     private readonly ILogger<YouTubeControlService> _logger;
     private readonly YouTubePollingManager? _pollingManager;
+    private readonly MoonrakerClient _moonrakerClient;
     private Google.Apis.YouTube.v3.YouTubeService? _youtubeService;
     private UserCredential? _credential; // Used for user OAuth flow
     private readonly string _tokenPath;
@@ -25,11 +26,12 @@ internal class YouTubeControlService : IDisposable
     private Task? _refreshTask;
     private CancellationTokenSource? _refreshCts;
 
-    public YouTubeControlService(IConfiguration config, ILogger<YouTubeControlService> logger, YouTubePollingManager? pollingManager = null)
+    public YouTubeControlService(IConfiguration config, ILogger<YouTubeControlService> logger, YouTubePollingManager? pollingManager = null, MoonrakerClient? moonrakerClient = null)
     {
         _config = config;
         _logger = logger;
         _pollingManager = pollingManager;
+        _moonrakerClient = moonrakerClient ?? throw new ArgumentNullException(nameof(moonrakerClient));
         _tokenPath = Path.Combine(Directory.GetCurrentDirectory(), "tokens", "youtube_token.json");
     }
 
@@ -150,13 +152,13 @@ internal class YouTubeControlService : IDisposable
                 else
                 {
                     var src = _config["Stream:Source"];
-                    if (!string.IsNullOrWhiteSpace(src)) baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(src);
+                    if (!string.IsNullOrWhiteSpace(src)) baseUri = _moonrakerClient.GetPrinterBaseUriFromStreamSource(src);
                 }
                 if (baseUri != null)
                 {
                     var apiKey = _config["Moonraker:ApiKey"];
                     var authHeader = _config["Moonraker:AuthHeader"];
-                    var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+                    var info = await _moonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
                     if (info != null)
                     {
                         var detailsList = new System.Collections.Generic.List<string>();
@@ -1055,14 +1057,14 @@ internal class YouTubeControlService : IDisposable
                 {
                     // Derive printer base host from Stream:Source if possible (expecting http://<ip>/...)
                     var src = _config["Stream:Source"];
-                    if (!string.IsNullOrWhiteSpace(src)) baseUri = MoonrakerClient.GetPrinterBaseUriFromStreamSource(src);
+                    if (!string.IsNullOrWhiteSpace(src)) baseUri = _moonrakerClient.GetPrinterBaseUriFromStreamSource(src);
                 }
 
                 if (baseUri != null)
                 {
                     var apiKey = _config["Moonraker:ApiKey"];
                     var authHeader = _config["Moonraker:AuthHeader"]; // e.g. X-Api-Key or Authorization
-                    var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+                    var info = await _moonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
                     moonrakerInfo = info;
 
                     if (info != null && !string.IsNullOrWhiteSpace(info.Filename))

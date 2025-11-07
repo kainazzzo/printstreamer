@@ -12,6 +12,7 @@ namespace PrintStreamer.Overlay;
 public sealed class OverlayTextService : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly MoonrakerClient _moonrakerClient;
     private readonly string _moonrakerBase;
     private readonly string? _apiKey;
     private readonly string? _authHeader;
@@ -34,11 +35,12 @@ public sealed class OverlayTextService : IDisposable
 
     public string TextFilePath => _textFilePath;
 
-    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider, Func<string?>? audioProvider, ILogger<OverlayTextService> logger)
+    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider, Func<string?>? audioProvider, ILogger<OverlayTextService> logger, MoonrakerClient moonrakerClient)
     {
         _tlProvider = timelapseProvider;
         _audioProvider = audioProvider;
         _logger = logger;
+        _moonrakerClient = moonrakerClient;
     _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
 
         _moonrakerBase = (config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125").TrimEnd('/');
@@ -293,7 +295,7 @@ public sealed class OverlayTextService : IDisposable
                 try
                 {
                     var baseUri = new Uri(_moonrakerBase);
-                    var node = await global::MoonrakerClient.GetFileMetadataAsync(baseUri, filename, _apiKey, _authHeader, ct);
+                    var node = await _moonrakerClient.GetFileMetadataAsync(baseUri, filename, _apiKey, _authHeader, ct);
                     var resultObj = node?["result"]?.AsObject();
                     if (resultObj != null)
                     {

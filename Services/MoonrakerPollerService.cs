@@ -13,18 +13,21 @@ namespace PrintStreamer.Services
         private readonly StreamOrchestrator _orchestrator;
         private readonly TimelapseManager _timelapseManager;
         private readonly ILogger<MoonrakerPollerService> _logger;
+        private readonly MoonrakerClient _moonrakerClient;
         private readonly bool _verbosePollerLogs;
 
         public MoonrakerPollerService(
             IConfiguration config,
             StreamOrchestrator orchestrator,
             TimelapseManager timelapseManager,
-            ILogger<MoonrakerPollerService> logger)
+            ILogger<MoonrakerPollerService> logger,
+            MoonrakerClient moonrakerClient)
         {
             _config = config;
             _orchestrator = orchestrator;
             _timelapseManager = timelapseManager;
             _logger = logger;
+            _moonrakerClient = moonrakerClient;
             _verbosePollerLogs = _config.GetValue<bool?>("Moonraker:VerboseLogs") ?? false;
         }
 
@@ -55,7 +58,7 @@ namespace PrintStreamer.Services
                     try
                     {
                         var baseUri = new Uri(moonrakerBase);
-                        var info = await MoonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
+                        var info = await _moonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
                         
                         var currentJob = info?.Filename;
                         var state = info?.State;
