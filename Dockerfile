@@ -1,11 +1,10 @@
 # Multi-stage build for printstreamer
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-# copy everything and publish
-COPY . ./
 
-RUN dotnet restore
-RUN dotnet publish -c Release -o /app/publish
+# copy source and publish
+COPY . ./
+RUN dotnet publish printstreamer.csproj -c Release -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 RUN apt-get update && apt-get install -y ffmpeg

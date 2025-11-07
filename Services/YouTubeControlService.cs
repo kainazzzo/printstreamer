@@ -11,9 +11,10 @@ using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Auth.OAuth2.Requests;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
-using PrintStreamer.Services;
 
-internal class YouTubeControlService : IDisposable
+namespace PrintStreamer.Services
+{
+    public class YouTubeControlService : IDisposable
 {
     private readonly IConfiguration _config;
     private readonly ILogger<YouTubeControlService> _logger;
@@ -547,6 +548,11 @@ internal class YouTubeControlService : IDisposable
                 var dataDir = Path.Combine(Directory.GetCurrentDirectory(), "data");
                 tokenFilePath = Path.Combine(dataDir, "tokens", "youtube_token.json");
             }
+            
+            _logger.LogInformation("[YouTube] Using token file path: {TokenPath}", tokenFilePath);
+            System.Console.WriteLine($"[YouTube] Using token file path: {tokenFilePath}");
+            System.Console.WriteLine($"[YouTube] Token file exists: {File.Exists(tokenFilePath)}");
+            
             var fileStore = new YoutubeTokenFileDataStore(tokenFilePath);
             IDataStore dataStore = fileStore;
 
@@ -560,11 +566,18 @@ internal class YouTubeControlService : IDisposable
 
             // Also allow loading a full token response from youtube_token.json (read via our store).
             TokenResponse? importedToken = await dataStore.GetAsync<TokenResponse>("user");
+            _logger.LogInformation("[YouTube] Loaded token from store: {HasToken}", importedToken != null ? "yes" : "no");
+            if (importedToken != null)
+            {
+                _logger.LogInformation("[YouTube] Token details: hasAccessToken={HasAccess}, hasRefreshToken={HasRefresh}", 
+                    !string.IsNullOrEmpty(importedToken.AccessToken), !string.IsNullOrEmpty(importedToken.RefreshToken));
+            }
 
             // Check if a token already exists in the store (youtube_token.json). If so, use it and skip interactive flows.
             var existingToken = importedToken;
             if (existingToken != null && !string.IsNullOrWhiteSpace(existingToken.RefreshToken))
             {
+                _logger.LogInformation("[YouTube] Found existing refresh token in store, using it for authentication");
                 var flow = new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow(
                     new Google.Apis.Auth.OAuth2.Flows.GoogleAuthorizationCodeFlow.Initializer
                     {
@@ -576,6 +589,8 @@ internal class YouTubeControlService : IDisposable
             }
             else
             {
+                _logger.LogWarning("[YouTube] No existing refresh token found (existing={HasToken}, hasRefresh={HasRefresh})", 
+                    existingToken != null, existingToken?.RefreshToken != null);
                 // No stored token, proceed with interactive or manual flow
                 try
                 {
@@ -637,8 +652,11 @@ internal class YouTubeControlService : IDisposable
                             });
 
                         var token = await flow.ExchangeCodeForTokenAsync("user", code, "urn:ietf:wg:oauth:2.0:oob", cancellationToken);
+                        _logger.LogInformation("[YouTube] Successfully exchanged auth code for token (hasRefresh={HasRefresh}, expiresIn={ExpiresIn})",
+                            !string.IsNullOrEmpty(token.RefreshToken), token.ExpiresInSeconds);
                         // Persist token to youtube_token.json so future runs can be headless
                         await dataStore.StoreAsync("user", token);
+                        _logger.LogInformation("[YouTube] Token saved to persistent store");
                         _credential = new UserCredential(flow, "user", token);
                     }
                 }
@@ -856,8 +874,21 @@ internal class YouTubeControlService : IDisposable
             await _lock.WaitAsync();
             try
             {
-                if (!File.Exists(_filePath)) return default!;
+                if (!File.Exists(_filePath))
+                {
+                    System.Console.WriteLine($"[YouTubeTokenFileDataStore] GetAsync: Token file does not exist: {_filePath}");
+                    return default!;
+                }
+                
                 var json = await File.ReadAllTextAsync(_filePath);
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    System.Console.WriteLine($"[YouTubeTokenFileDataStore] GetAsync: Token file is empty: {_filePath}");
+                    return default!;
+                }
+                
+                System.Console.WriteLine($"[YouTubeTokenFileDataStore] GetAsync: Read token file ({json.Length} bytes): {_filePath}");
+                
                 // If the requested type is TokenResponse, map possible snake_case fields
                 if (typeof(T) == typeof(TokenResponse))
                 {
@@ -871,10 +902,14 @@ internal class YouTubeControlService : IDisposable
                         if (root.TryGetProperty("expires_in", out var ei) && ei.ValueKind == JsonValueKind.Number) token.ExpiresInSeconds = ei.GetInt32();
                         if (root.TryGetProperty("scope", out var sc)) token.Scope = sc.GetString();
                         if (root.TryGetProperty("token_type", out var tt)) token.TokenType = tt.GetString();
+                        
+                        var hasRefresh = !string.IsNullOrEmpty(token.RefreshToken);
+                        System.Console.WriteLine($"[YouTubeTokenFileDataStore] GetAsync: Loaded TokenResponse with RefreshToken={hasRefresh}, ExpiresIn={token.ExpiresInSeconds}");
                         return (T)(object)token;
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        System.Console.WriteLine($"[YouTubeTokenFileDataStore] GetAsync: Failed to parse token: {ex.Message}");
                         return default!;
                     }
                 }
@@ -902,12 +937,34 @@ internal class YouTubeControlService : IDisposable
                         token_type = tr.TokenType
                     };
                     var json = JsonSerializer.Serialize(obj, new JsonSerializerOptions { WriteIndented = true });
-                    // atomic write
                     var tmp = _filePath + ".tmp";
                     var dir = Path.GetDirectoryName(_filePath);
-                    if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+                    
+                    System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: Saving token to {_filePath}");
+                    System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: Directory: {dir}");
+                    
+                    if (!string.IsNullOrWhiteSpace(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                        System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: Created directory {dir}");
+                    }
+                    
                     await File.WriteAllTextAsync(tmp, json);
+                    System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: Wrote {json.Length} bytes to temp file: {tmp}");
+                    
                     File.Move(tmp, _filePath, overwrite: true);
+                    System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: Moved temp file to {_filePath}");
+                    
+                    // Verify file was written
+                    if (File.Exists(_filePath))
+                    {
+                        var fileInfo = new System.IO.FileInfo(_filePath);
+                        System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: Verified token file exists, size: {fileInfo.Length} bytes");
+                    }
+                    else
+                    {
+                        System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: ERROR - Token file does not exist after move!");
+                    }
                     return;
                 }
 
@@ -915,7 +972,11 @@ internal class YouTubeControlService : IDisposable
                 var generic = JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
                 var tmp2 = _filePath + ".tmp";
                 var dir2 = Path.GetDirectoryName(_filePath);
-                if (!string.IsNullOrWhiteSpace(dir2)) Directory.CreateDirectory(dir2);
+                if (!string.IsNullOrWhiteSpace(dir2))
+                {
+                    Directory.CreateDirectory(dir2);
+                    System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync (generic): Created directory {dir2}");
+                }
                 await File.WriteAllTextAsync(tmp2, generic);
                 File.Move(tmp2, _filePath, overwrite: true);
             }
@@ -1733,5 +1794,5 @@ internal class YouTubeControlService : IDisposable
             _logger.LogError(ex, "Error logging broadcast/stream resources: {Message}", ex.Message);
         }
     }
-}
+    }
 }

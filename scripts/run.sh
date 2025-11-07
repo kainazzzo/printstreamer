@@ -67,6 +67,10 @@ fi
 
 # Ensure ~/.printstreamer directory structure exists
 PRINTSTREAMER_HOME="$HOME/.printstreamer"
+TOKENS_DIR="$PRINTSTREAMER_HOME/tokens"
+
+# Create tokens directory early so Docker can mount it
+mkdir -p "$TOKENS_DIR"
 
 # Broadcast reuse store (caches broadcast IDs to avoid creating duplicates)
 BROADCAST_STORE_HOST="$PRINTSTREAMER_HOME/youtube_reuse_store.json"
@@ -75,6 +79,7 @@ if [[ ! -f "$BROADCAST_STORE_HOST" ]]; then
 fi
 
 echo "  Broadcast store : ${BROADCAST_STORE_HOST}"
+echo "  Tokens dir      : ${TOKENS_DIR}"
 
 # Only detach if not running interactively
 DOCKER_DETACH_FLAG=""
