@@ -3,7 +3,9 @@ using PrintStreamer.Timelapse;
 using PrintStreamer.Overlay;
 using PrintStreamer.Utils;
 using PrintStreamer.Interfaces;
+using PrintStreamer.Models;
 using Microsoft.Extensions.Logging;
+using System.Collections.Generic;
 
 namespace PrintStreamer.Services
 {
@@ -23,6 +25,15 @@ namespace PrintStreamer.Services
     private static volatile bool _isWaitingForIngestion = false;
     // Semaphore to prevent concurrent broadcast creation
     private static readonly SemaphoreSlim _broadcastCreationLock = new SemaphoreSlim(1, 1);
+
+    // Events fired when printer state changes (for PrintStreamOrchestrator to subscribe to)
+    public static event PrintStateChangedEventHandler? PrintStateChanged;
+    public static event PrintStartedEventHandler? PrintStarted;
+    public static event PrintEndedEventHandler? PrintEnded;
+
+    // Current printer state
+    private static PrinterState? _currentPrinterState;
+    public static PrinterState? CurrentPrinterState => _currentPrinterState;
 
     // Camera simulation and blackout logic is handled only by WebCamManager.
 
@@ -85,6 +96,14 @@ namespace PrintStreamer.Services
         public static string? CurrentBroadcastId => _currentBroadcastId;
     public static bool IsStreamerRunning => _currentStreamer != null;
     public static bool IsWaitingForIngestion => _isWaitingForIngestion;
+
+        /// <summary>
+        /// Register a PrintStreamOrchestrator to handle printer state changes.
+        /// </summary>
+        public static async void RegisterPrintStreamOrchestrator(PrintStreamOrchestrator orchestrator)
+        {
+            PrintStateChanged += async (prev, curr) => await orchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
+        }
 
         /// <summary>
         /// Promote the currently-running encoder to a YouTube live broadcast by creating
@@ -402,6 +421,39 @@ namespace PrintStreamer.Services
             // New state to support last-layer early finalize
             bool lastLayerTriggered = false;
             Task? timelapseFinalizeTask = null;
+            var offlineGrace = config.GetValue<TimeSpan?>("Timelapse:OfflineGracePeriod") ?? TimeSpan.FromMinutes(10);
+            var idleFinalizeDelay = config.GetValue<TimeSpan?>("Timelapse:IdleFinalizeDelay") ?? TimeSpan.FromSeconds(20);
+            var activeStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "printing",
+                "paused",
+                "pausing",
+                "resuming",
+                "resumed",
+                "cancelling",
+                "finishing",
+                "heating",
+                "preheating",
+                "cooling"
+            };
+            var doneStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "standby",
+                "idle",
+                "ready",
+                "complete",
+                "completed",
+                "success",
+                "cancelled",
+                "canceled",
+                "error"
+            };
+            DateTime lastInfoSeenAt = DateTime.UtcNow;
+            DateTime? lastPrintingSeenAt = null;
+            DateTime? idleStateSince = null;
+            DateTime? jobMissingSince = null;
+            string? activeTimelapseJobFilename = null;
+            bool waitingForResumeLogged = false;
 
             try
             {
@@ -438,6 +490,16 @@ namespace PrintStreamer.Services
                     // Query Moonraker job queue
                     var baseUri = new Uri(moonrakerBase);
                     var info = _moonrakerClient != null ? await _moonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken) : null;
+                    var infoAvailable = info != null;
+                    if (infoAvailable)
+                    {
+                        lastInfoSeenAt = DateTime.UtcNow;
+                        if (waitingForResumeLogged)
+                        {
+                            waitingForResumeLogged = false;
+                        }
+                    }
+
                     var currentJob = info?.Filename;
                     var jobQueueId = info?.JobQueueId;
                     var state = info?.State;
@@ -448,6 +510,56 @@ namespace PrintStreamer.Services
                     var totalLayers = info?.TotalLayers;
 
                     watcherLogger.LogDebug("[Watcher] Poll result - Filename: '{Filename}', State: '{State}', Progress: {Progress}%, Remaining: {Remaining}, Layer: {Layer}/{Total}", currentJob, state, progressPct?.ToString("F1") ?? "n/a", remaining?.ToString() ?? "n/a", currentLayer?.ToString() ?? "n/a", totalLayers?.ToString() ?? "n/a");
+
+                    // Fire PrinterState events for subscribers (e.g., PrintStreamOrchestrator)
+                    UpdateAndFirePrinterStateEvents(watcherLogger, state, currentJob, jobQueueId, progressPct, remaining, currentLayer, totalLayers);
+
+                    if (isPrinting || (!string.IsNullOrWhiteSpace(state) && activeStates.Contains(state)))
+                    {
+                        lastPrintingSeenAt = DateTime.UtcNow;
+                        idleStateSince = null;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(state) && doneStates.Contains(state))
+                    {
+                        idleStateSince ??= DateTime.UtcNow;
+                    }
+
+                    if (activeTimelapseSessionName != null)
+                    {
+                        if (string.IsNullOrWhiteSpace(currentJob))
+                        {
+                            jobMissingSince ??= DateTime.UtcNow;
+                        }
+                        else
+                        {
+                            jobMissingSince = null;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(activeTimelapseJobFilename) && !string.IsNullOrWhiteSpace(currentJob))
+                        {
+                            activeTimelapseJobFilename = currentJob;
+                        }
+                    }
+                    else
+                    {
+                        jobMissingSince = null;
+                    }
+
+                    bool forceFinalizeActiveSession = false;
+                    if (isPrinting && activeTimelapseSessionName != null && !string.IsNullOrWhiteSpace(currentJob))
+                    {
+                        if (!string.IsNullOrWhiteSpace(activeTimelapseJobFilename) &&
+                            !string.Equals(currentJob, activeTimelapseJobFilename, StringComparison.OrdinalIgnoreCase))
+                        {
+                            forceFinalizeActiveSession = true;
+                            watcherLogger.LogInformation("[Watcher] Detected job change while timelapse session {Session} remains active. Previous job: {PreviousJob}, new job: {CurrentJob}. Preparing to finalize current timelapse.", activeTimelapseSessionName, activeTimelapseJobFilename, currentJob);
+                        }
+                    }
+
+                    if (isPrinting)
+                    {
+                        waitingForResumeLogged = false;
+                    }
 
                     // Inform TimelapseManager about current progress so it can stop capturing when last-layer threshold is reached
                     try
@@ -467,12 +579,24 @@ namespace PrintStreamer.Services
                     // Track if a stream is already active
                     var streamingActive = streamCts != null && streamTask != null && !streamTask.IsCompleted;
 
-                    // Start stream when actively printing (even if filename is missing initially)
-                    if (isPrinting && !streamingActive && (string.IsNullOrWhiteSpace(currentJob) || currentJob != lastJobFilename))
+                    if (!forceFinalizeActiveSession && isPrinting && !streamingActive &&
+                        (activeTimelapseSessionName != null || string.IsNullOrWhiteSpace(currentJob) || !string.Equals(currentJob, lastJobFilename, StringComparison.OrdinalIgnoreCase)))
                     {
-                        // New job detected, start stream and timelapse
-                        watcherLogger.LogInformation("[Watcher] New print job detected: {Job}", currentJob ?? "(unknown)");
-                        lastJobFilename = currentJob ?? $"__printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
+                        var fallbackJobName = $"__printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
+                        var jobLabel = !string.IsNullOrWhiteSpace(currentJob)
+                            ? currentJob
+                            : (!string.IsNullOrWhiteSpace(lastJobFilename) ? lastJobFilename! : fallbackJobName);
+                        var jobNameSafe = SanitizeFilename(jobLabel);
+
+                        if (activeTimelapseSessionName == null)
+                        {
+                            watcherLogger.LogInformation("[Watcher] New print job detected: {Job}", currentJob ?? "(unknown)");
+                        }
+                        else
+                        {
+                            watcherLogger.LogInformation("[Watcher] Stream inactive; resuming active timelapse session: {Session}", activeTimelapseSessionName);
+                        }
+
                         if (streamCts != null)
                         {
                             try { streamCts.Cancel(); } catch { }
@@ -483,40 +607,43 @@ namespace PrintStreamer.Services
                         {
                             try
                             {
-                                // In polling mode, disable internal timelapse in streaming path to avoid duplicate uploads
-                                // Also check if a broadcast is already active (from manual start); if so, don't create another
                                 var alreadyBroadcasting = IsBroadcastActive;
                                 await StartYouTubeStreamAsync(config, loggerFactory, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: !alreadyBroadcasting);
                             }
-                                catch (Exception ex)
+                            catch (Exception ex)
                             {
                                 watcherLogger.LogError(ex, "[Watcher] Stream error");
                             }
                         }, streamCts.Token);
-                        // Start timelapse using TimelapseManager (will download G-code and cache metadata)
+
+                        if (activeTimelapseSessionName == null)
                         {
-                            var jobNameSafe = !string.IsNullOrWhiteSpace(currentJob) ? SanitizeFilename(currentJob) : $"printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
-                            watcherLogger.LogInformation("[Watcher] Starting timelapse session: {Session}", jobNameSafe);
-                            watcherLogger.LogInformation("[Watcher]   - currentJob: '{CurrentJob}'", currentJob);
-                            watcherLogger.LogDebug("[Watcher]   - jobNameSafe: '{JobNameSafe}'", jobNameSafe);
-                            
-                            // Start timelapse via manager (downloads G-code, caches metadata, captures initial frame)
                             activeTimelapseSessionName = await timelapseManager!.StartTimelapseAsync(jobNameSafe, currentJob);
                             if (activeTimelapseSessionName != null)
                             {
                                 watcherLogger.LogInformation("[Watcher] Timelapse session started: {Session}", activeTimelapseSessionName);
+                                activeTimelapseJobFilename = currentJob;
                             }
                             else
                             {
                                 watcherLogger.LogWarning("[Watcher] Warning: Failed to start timelapse session");
                             }
-                            
-                            lastLayerTriggered = false; // reset for new job
+
+                            lastJobFilename = currentJob ?? jobLabel;
+                            lastLayerTriggered = false;
                             timelapseFinalizeTask = null;
-                            
-                            // Note: TimelapseManager handles periodic frame capture internally via its timer
-                            // No need for manual timelapseTask in poll mode
                         }
+                        else
+                        {
+                            if (!string.IsNullOrWhiteSpace(currentJob))
+                            {
+                                lastJobFilename = currentJob;
+                            }
+                        }
+
+                        jobMissingSince = null;
+                        idleStateSince = null;
+                        lastPrintingSeenAt = DateTime.UtcNow;
                     }
                     // Detect last-layer and finalize timelapse early (while keeping live stream running)
                     else if (isPrinting && activeTimelapseSessionName != null && !lastLayerTriggered)
@@ -577,106 +704,150 @@ namespace PrintStreamer.Services
 
                             // Clear the active session reference so end-of-print path won't double-run
                             activeTimelapseSessionName = null;
+                            activeTimelapseJobFilename = null;
                         }
                     }
-                    else if (!isPrinting && (streamCts != null || streamTask != null))
+                    else if ((forceFinalizeActiveSession || !isPrinting) && (streamCts != null || streamTask != null || activeTimelapseSessionName != null))
                     {
-                        // Job finished, end stream and finalize timelapse
-                        watcherLogger.LogInformation("[Watcher] Print job finished: {Job}", lastJobFilename);
-                        // Preserve the filename we detected at job start for upload metadata
-                        var finishedJobFilename = lastJobFilename;
-                        lastCompletedJobFilename = finishedJobFilename;
-                        lastJobFilename = null;
-                        
-                        // Properly stop the broadcast (ends YouTube stream and cleans up) only in auto-broadcast mode.
-                        // In manual mode (auto-broadcast disabled), keep the YouTube broadcast running until the user stops it.
-                        var autoBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
-                        if (autoBroadcastEnabled)
+                        var now = DateTime.UtcNow;
+                        var layerOffset = config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
+                        if (layerOffset < 0) layerOffset = 0;
+
+                        bool layersComplete = currentLayer.HasValue && totalLayers.HasValue && totalLayers.Value > 0 &&
+                                              currentLayer.Value >= Math.Max(0, totalLayers.Value - layerOffset);
+                        bool progressComplete = progressPct.HasValue && progressPct.Value >= 99.0;
+                        bool idleMet = idleStateSince.HasValue && (now - idleStateSince.Value) >= idleFinalizeDelay;
+                        bool jobMissingMet = jobMissingSince.HasValue && (now - jobMissingSince.Value) >= offlineGrace;
+                        bool offlineMet = lastPrintingSeenAt.HasValue && (now - lastPrintingSeenAt.Value) >= offlineGrace && (now - lastInfoSeenAt) >= offlineGrace;
+
+                        var shouldFinalize = forceFinalizeActiveSession || layersComplete || progressComplete || idleMet || jobMissingMet || offlineMet;
+
+                        if (!shouldFinalize)
                         {
-                            try
+                            if (!waitingForResumeLogged)
                             {
-                                var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None, loggerFactory);
-                                if (ok)
-                                {
-                                    watcherLogger.LogInformation("[Watcher] Broadcast stopped successfully");
-                                }
-                                else
-                                {
-                                    watcherLogger.LogWarning("[Watcher] Error stopping broadcast: {Message}", msg);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                watcherLogger.LogError(ex, "[Watcher] Exception stopping broadcast");
+                                watcherLogger.LogDebug("[Watcher] Holding timelapse open (state={State}, progress={Progress}%, idleFor={Idle}, jobMissingFor={JobMissing}, offlineFor={Offline}).",
+                                    state ?? "n/a",
+                                    progressPct?.ToString("F1") ?? "n/a",
+                                    idleStateSince.HasValue ? (now - idleStateSince.Value).ToString(@"hh\\:mm\\:ss") : "n/a",
+                                    jobMissingSince.HasValue ? (now - jobMissingSince.Value).ToString(@"hh\\:mm\\:ss") : "n/a",
+                                    lastPrintingSeenAt.HasValue ? (now - lastPrintingSeenAt.Value).ToString(@"hh\\:mm\\:ss") : "n/a");
+                                waitingForResumeLogged = true;
                             }
                         }
                         else
                         {
-                            watcherLogger.LogInformation("[Watcher] Auto-broadcast is disabled; leaving live broadcast running (manual mode).");
-                        }
-                        
-                        // Clean up local stream references
-                        if (streamCts != null)
-                        {
-                            try { streamCts.Cancel(); } catch { }
-                            if (streamTask != null) await streamTask;
-                            streamCts = null;
-                            streamTask = null;
-                        }
-                        if (timelapseCts != null)
-                        {
-                            try { timelapseCts.Cancel(); } catch { }
-                            if (timelapseTask != null)
+                            waitingForResumeLogged = false;
+
+                            // Job finished, end stream and finalize timelapse
+                            var jobLogName = lastJobFilename ?? activeTimelapseSessionName ?? "(unknown)";
+                            if (forceFinalizeActiveSession)
                             {
-                                try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
+                                watcherLogger.LogInformation("[Watcher] Finalizing active timelapse session before starting new job: {Job}", jobLogName);
                             }
-                            timelapseCts = null;
-                            timelapseTask = null;
-                        }
-                        if (timelapseFinalizeTask != null)
-                        {
-                            // Early finalize already started; wait for it to complete
-                            try { await timelapseFinalizeTask; } catch { }
-                            timelapseFinalizeTask = null;
-                        }
-                        else if (activeTimelapseSessionName != null)
-                        {
-                            watcherLogger.LogInformation("[Timelapse] Stopping timelapse session (end of print): {Session}", activeTimelapseSessionName);
-                            try
+                            else
                             {
-                                var createdVideoPath = await timelapseManager!.StopTimelapseAsync(activeTimelapseSessionName);
-                                
-                                // Upload the timelapse video to YouTube if enabled and video was created successfully
-                                if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
+                                watcherLogger.LogInformation("[Watcher] Print job finished: {Job}", jobLogName);
+                            }
+                            // Preserve the filename we detected at job start for upload metadata
+                            var finishedJobFilename = lastJobFilename;
+                            if (!forceFinalizeActiveSession)
+                            {
+                                lastCompletedJobFilename = finishedJobFilename;
+                            }
+                            lastJobFilename = null;
+                            
+                            // Properly stop the broadcast (ends YouTube stream and cleans up) only when this is a true job completion.
+                            if (!forceFinalizeActiveSession)
+                            {
+                                var autoBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
+                                if (autoBroadcastEnabled)
                                 {
-                                    var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-                                    if (uploadTimelapse && ytService != null)
+                                    try
                                     {
-                                        watcherLogger.LogInformation("[Timelapse] Uploading timelapse video to YouTube...");
-                                        try
+                                        var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None, loggerFactory);
+                                        if (ok)
                                         {
-                                            // Use the timelapse folder name (sanitized) for nicer titles
-                                            var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, activeTimelapseSessionName, CancellationToken.None);
-                                            if (!string.IsNullOrWhiteSpace(videoId))
+                                            watcherLogger.LogInformation("[Watcher] Broadcast stopped successfully");
+                                        }
+                                        else
+                                        {
+                                            watcherLogger.LogWarning("[Watcher] Error stopping broadcast: {Message}", msg);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        watcherLogger.LogError(ex, "[Watcher] Exception stopping broadcast");
+                                    }
+                                }
+                                else
+                                {
+                                    watcherLogger.LogInformation("[Watcher] Auto-broadcast is disabled; leaving live broadcast running (manual mode).");
+                                }
+                            }
+
+                            // Clean up local stream references
+                            if (streamCts != null)
+                            {
+                                try { streamCts.Cancel(); } catch { }
+                                if (streamTask != null) await streamTask;
+                                streamCts = null;
+                                streamTask = null;
+                            }
+                            if (timelapseCts != null)
+                            {
+                                try { timelapseCts.Cancel(); } catch { }
+                                if (timelapseTask != null)
+                                {
+                                    try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
+                                }
+                                timelapseCts = null;
+                                timelapseTask = null;
+                            }
+                            if (timelapseFinalizeTask != null)
+                            {
+                                // Early finalize already started; wait for it to complete
+                                try { await timelapseFinalizeTask; } catch { }
+                                timelapseFinalizeTask = null;
+                            }
+                            else if (activeTimelapseSessionName != null)
+                            {
+                                watcherLogger.LogInformation("[Timelapse] Stopping timelapse session (end of print): {Session}", activeTimelapseSessionName);
+                                try
+                                {
+                                    var createdVideoPath = await timelapseManager!.StopTimelapseAsync(activeTimelapseSessionName);
+                                    
+                                    // Upload the timelapse video to YouTube if enabled and video was created successfully
+                                    if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
+                                    {
+                                        var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
+                                        if (uploadTimelapse && ytService != null)
+                                        {
+                                            watcherLogger.LogInformation("[Timelapse] Uploading timelapse video to YouTube...");
+                                            try
                                             {
-                                                watcherLogger.LogInformation("[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={VideoId}", videoId);
-                                                try
+                                                // Use the timelapse folder name (sanitized) for nicer titles
+                                                var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, activeTimelapseSessionName, CancellationToken.None);
+                                                if (!string.IsNullOrWhiteSpace(videoId))
                                                 {
-                                                    var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
-                                                    if (!string.IsNullOrWhiteSpace(playlistName))
+                                                    watcherLogger.LogInformation("[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={VideoId}", videoId);
+                                                    try
                                                     {
-                                                        var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
-                                                        var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, CancellationToken.None);
-                                                        if (!string.IsNullOrWhiteSpace(pid))
+                                                        var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
+                                                        if (!string.IsNullOrWhiteSpace(playlistName))
                                                         {
-                                                            await ytService.AddVideoToPlaylistAsync(pid, videoId, CancellationToken.None);
+                                                            var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
+                                                            var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, CancellationToken.None);
+                                                            if (!string.IsNullOrWhiteSpace(pid))
+                                                            {
+                                                                await ytService.AddVideoToPlaylistAsync(pid, videoId, CancellationToken.None);
+                                                            }
                                                         }
                                                     }
-                                                }
-                                                catch (Exception ex)
-                                                {
-                                                    watcherLogger.LogError(ex, "[YouTube] Failed to add timelapse to playlist");
-                                                }
+                                                    catch (Exception ex)
+                                                    {
+                                                        watcherLogger.LogError(ex, "[YouTube] Failed to add timelapse to playlist");
+                                                    }
                                                     try
                                                     {
                                                         // Set thumbnail from last frame if available
@@ -696,25 +867,35 @@ namespace PrintStreamer.Services
                                                     {
                                                         watcherLogger.LogError(ex, "[Timelapse] Failed to set video thumbnail");
                                                     }
+                                                }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                watcherLogger.LogError(ex, "[Timelapse] Failed to upload video to YouTube");
                                             }
                                         }
-                                        catch (Exception ex)
+                                        else if (!uploadTimelapse)
                                         {
-                                            watcherLogger.LogError(ex, "[Timelapse] Failed to upload video to YouTube");
+                                            watcherLogger.LogInformation("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
                                         }
                                     }
-                                    else if (!uploadTimelapse)
-                                    {
-                                        watcherLogger.LogInformation("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
-                                    }
                                 }
+                                catch (Exception ex)
+                                {
+                                    watcherLogger.LogError(ex, "[Timelapse] Failed to create video");
+                                }
+                                activeTimelapseSessionName = null;
                             }
-                            catch (Exception ex)
-                            {
-                                watcherLogger.LogError(ex, "[Timelapse] Failed to create video");
-                            }
-                            activeTimelapseSessionName = null;
+
+                            jobMissingSince = null;
+                            idleStateSince = null;
+                            lastPrintingSeenAt = null;
+                            activeTimelapseJobFilename = null;
                         }
+                    }
+                    else
+                    {
+                        waitingForResumeLogged = false;
                     }
 
                     // Adaptive polling: poll faster when we're near completion (must be inside try block)
@@ -1466,6 +1647,51 @@ namespace PrintStreamer.Services
             
             // Ensure we have a valid result
             return string.IsNullOrWhiteSpace(result) ? "unknown" : result;
+        }
+
+        /// <summary>
+        /// Create a PrinterState snapshot from Moonraker poll data and fire events if state changed.
+        /// </summary>
+        private static void UpdateAndFirePrinterStateEvents(
+            ILogger logger,
+            string? state,
+            string? filename,
+            string? jobQueueId,
+            double? progressPercent,
+            TimeSpan? remaining,
+            int? currentLayer,
+            int? totalLayers)
+        {
+            var newState = new PrinterState
+            {
+                State = state,
+                Filename = filename,
+                JobQueueId = jobQueueId,
+                ProgressPercent = progressPercent,
+                Remaining = remaining,
+                CurrentLayer = currentLayer,
+                TotalLayers = totalLayers,
+                SnapshotTime = DateTime.UtcNow
+            };
+
+            var previousState = _currentPrinterState;
+            _currentPrinterState = newState;
+
+            // Fire generic "state changed" event
+            PrintStateChanged?.Invoke(previousState, newState);
+
+            // Fire specific events for print start/end transitions
+            bool wasPrinting = previousState?.IsActivelyPrinting ?? false;
+            bool isPrintingNow = newState.IsActivelyPrinting;
+
+            if (!wasPrinting && isPrintingNow)
+            {
+                PrintStarted?.Invoke(newState);
+            }
+            else if (wasPrinting && !isPrintingNow)
+            {
+                PrintEnded?.Invoke(newState);
+            }
         }
     }
 }

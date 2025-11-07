@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Autofac.Extras.Moq;
+using PrintStreamer.Services;
 
 namespace PrintStreamer.Utils.Tests
 {

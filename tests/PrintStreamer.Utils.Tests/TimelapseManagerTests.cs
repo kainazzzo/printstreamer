@@ -47,7 +47,9 @@ namespace PrintStreamer.Utils.Tests
                     .Returns(section.Value);
             }
 
-            _sut = new TimelapseManager(config, _loggerFactoryMock.Object);
+            // MoonrakerClient requires HTTP clients, so we pass null and let it handle gracefully
+            // The tests don't use features that require MoonrakerClient anyway
+            _sut = new TimelapseManager(config, _loggerFactoryMock.Object, null!);
         }
 
         [TestCleanup]

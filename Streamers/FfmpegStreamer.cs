@@ -15,6 +15,7 @@ namespace PrintStreamer.Streamers
 		private readonly int _bitrateKbps;
 		private readonly FfmpegOverlayOptions? _overlay;
 		private readonly ILogger<FfmpegStreamer> _logger;
+		private readonly string _contextLabel;
 		private Process? _proc;
 		private TaskCompletionSource<object?>? _exitTcs;
 
@@ -29,6 +30,20 @@ namespace PrintStreamer.Streamers
 			_overlay = overlay;
 			_audioUrl = audioUrl;
 			_logger = logger;
+			
+			// Build a descriptive label for logging context
+			if (!string.IsNullOrWhiteSpace(rtmpUrl))
+			{
+				_contextLabel = "YouTube RTMP Output";
+			}
+			else if (!string.IsNullOrWhiteSpace(audioUrl))
+			{
+				_contextLabel = "Local Stream (with Audio)";
+			}
+			else
+			{
+				_contextLabel = "Local Stream (Silent)";
+			}
 		}
 
 		public Task StartAsync(CancellationToken cancellationToken = default)
@@ -40,7 +55,7 @@ namespace PrintStreamer.Streamers
 
 			var ffmpegArgs = BuildFfmpegArgs(_source, _rtmpUrl, _targetFps, _bitrateKbps, _overlay, _audioUrl);
 
-			_logger.LogInformation("Starting ffmpeg with args: {Args}", ffmpegArgs);
+			_logger.LogInformation("[{ContextLabel}] Starting ffmpeg with args: {Args}", _contextLabel, ffmpegArgs);
 
 			var psi = new ProcessStartInfo
 			{
@@ -58,11 +73,11 @@ namespace PrintStreamer.Streamers
 				_proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
 				_proc.Exited += (s, e) =>
 				{
-					_logger.LogInformation("ffmpeg exited with code {ExitCode}", _proc?.ExitCode);
+					_logger.LogInformation("[{ContextLabel}] ffmpeg exited with code {ExitCode}", _contextLabel, _proc?.ExitCode);
 					_exitTcs.TrySetResult(null);
 				};
 
-				_proc.OutputDataReceived += (s, e) => { if (e.Data != null) _logger.LogDebug("[ffmpeg stdout] {Data}", e.Data); };
+				_proc.OutputDataReceived += (s, e) => { if (e.Data != null) _logger.LogDebug("[{ContextLabel}] [ffmpeg stdout] {Data}", _contextLabel, e.Data); };
 				
 				// Improved error handling: suppress benign decode warnings that don't affect stream quality
 				var lastBenignWarning = DateTime.MinValue;
@@ -78,20 +93,30 @@ namespace PrintStreamer.Streamers
 							var now = DateTime.UtcNow;
 							if ((now - lastBenignWarning).TotalSeconds > 30)
 							{
-								_logger.LogDebug("[ffmpeg] Suppressing benign MJPEG decode warnings (last 30s)");
+								_logger.LogDebug("[{ContextLabel}] Suppressing benign MJPEG decode warnings (last 30s)", _contextLabel);
+								lastBenignWarning = now;
+							}
+						}
+						// Suppress benign audio frame errors too
+						else if (line.Contains("Header missing") || line.Contains("Error while decoding stream"))
+						{
+							var now = DateTime.UtcNow;
+							if ((now - lastBenignWarning).TotalSeconds > 30)
+							{
+								_logger.LogDebug("[{ContextLabel}] Audio frame decode issue (continuing), line: {Line}", _contextLabel, line);
 								lastBenignWarning = now;
 							}
 						}
 						else
 						{
-							_logger.LogWarning("[ffmpeg stderr] {Data}", line);
+							_logger.LogWarning("[{ContextLabel}] [ffmpeg stderr] {Data}", _contextLabel, line);
 						}
 					}
 				};
 
 				if (!_proc.Start())
 				{
-					_logger.LogError("Failed to start ffmpeg process");
+					_logger.LogError("[{ContextLabel}] Failed to start ffmpeg process", _contextLabel);
 					_exitTcs.TrySetResult(null);
 					return _exitTcs.Task;
 				}
@@ -99,7 +124,7 @@ namespace PrintStreamer.Streamers
 				_proc.BeginOutputReadLine();
 				_proc.BeginErrorReadLine();
 
-				_logger.LogInformation("Streaming... press Ctrl+C to stop");
+				_logger.LogInformation("[{ContextLabel}] Streaming... press Ctrl+C to stop", _contextLabel);
 
 				// Handle cancellation
 				cancellationToken.Register(() =>
@@ -109,7 +134,7 @@ namespace PrintStreamer.Streamers
 			}
 			catch (Exception ex)
 			{
-				_logger.LogError(ex, "Error starting ffmpeg");
+				_logger.LogError(ex, "[{ContextLabel}] Error starting ffmpeg", _contextLabel);
 				_exitTcs.TrySetResult(null);
 			}
 
@@ -122,7 +147,7 @@ namespace PrintStreamer.Streamers
 			{
 				if (_proc != null && !_proc.HasExited)
 				{
-					_logger.LogInformation("Stopping ffmpeg...");
+					_logger.LogInformation("[{ContextLabel}] Stopping ffmpeg...", _contextLabel);
 					try
 					{
 						// send 'q' to request ffmpeg to quit gracefully
@@ -134,19 +159,19 @@ namespace PrintStreamer.Streamers
 					}
 					catch (Exception ex)
 					{
-						_logger.LogWarning(ex, "Warning: failed to send quit to ffmpeg stdin");
+						_logger.LogWarning(ex, "[{ContextLabel}] Warning: failed to send quit to ffmpeg stdin", _contextLabel);
 					}
-					// wait briefly for ffmpeg to exit on its own
-					if (!_proc.WaitForExit(5000))
+					// wait briefly for ffmpeg to exit on its own (increased from 5s to 15s for better cleanup)
+					if (!_proc.WaitForExit(15000))
 					{
-						_logger.LogWarning("ffmpeg did not exit within timeout, killing...");
+						_logger.LogWarning("[{ContextLabel}] ffmpeg did not exit within timeout, killing...", _contextLabel);
 						_proc.Kill(true);
 					}
 				}
 			}
 			catch (Exception ex)
 			{
-				_logger.LogError(ex, "Error stopping ffmpeg");
+				_logger.LogError(ex, "[{ContextLabel}] Error stopping ffmpeg", _contextLabel);
 			}
 		}
 
@@ -208,11 +233,12 @@ namespace PrintStreamer.Streamers
 				// Video input + HTTP MP3 audio input from API endpoint
 				// Increase reconnect attempts and use analyzeduration/probesize to handle stream issues better
 				var reconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
-				var audioReconnect = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1";
+				var audioReconnect = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_network_error 1";
 				// Add analyzeduration and probesize to handle variable/unstable streams
 				// Set max_delay to help with sync recovery after input issues
-				inputArgs = $"{baseFlags} {reconnectArgs} -re -thread_queue_size 1024 -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -re -thread_queue_size 1024 -fflags +genpts+discardcorrupt -analyzeduration 2M -probesize 5M -i \"{audioUrl}\"";
-				// Map audio from second input
+				// Add -read_timeout for audio input to prevent hangs on broken streams
+				inputArgs = $"{baseFlags} {reconnectArgs} -re -thread_queue_size 1024 -fflags +genpts+discardcorrupt -analyzeduration 5M -probesize 10M -max_delay 5000000 -f mjpeg -use_wallclock_as_timestamps 1 -i \"{srcArg}\" {audioReconnect} -re -thread_queue_size 1024 -fflags +genpts+discardcorrupt -analyzeduration 2M -probesize 5M -rw_timeout 10000000 -i \"{audioUrl}\"";
+				// Map audio from second input (but ffmpeg will gracefully continue if audio fails)
 				audioMap = "-map 1:a:0";
 				audioEncArgs = "-c:a aac -b:a 128k -ar 44100 -ac 2";
 			}

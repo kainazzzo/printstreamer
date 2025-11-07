@@ -21,6 +21,9 @@ namespace PrintStreamer.Services
         private bool _isWaitingForIngestion = false;
         private bool _disposed = false;
         private bool _endStreamAfterSong = false;
+        private Timer? _healthCheckTimer;
+        private int _consecutiveHealthCheckFailures = 0;
+        private const int MAX_CONSECUTIVE_FAILURES = 3;
 
         public StreamOrchestrator(StreamService streamService, IConfiguration config, ILoggerFactory loggerFactory, YouTubePollingManager pollingManager, YouTubeControlService youtubeService)
         {
@@ -30,6 +33,14 @@ namespace PrintStreamer.Services
             _pollingManager = pollingManager;
             _youtubeService = youtubeService;
             _logger = loggerFactory.CreateLogger<StreamOrchestrator>();
+            
+            // Start background health check timer (runs every 10 seconds when broadcasting)
+            _healthCheckTimer = new Timer(
+                callback: _ => _ = MonitorStreamHealthAsync(),
+                state: null,
+                dueTime: TimeSpan.FromSeconds(10),
+                period: TimeSpan.FromSeconds(10)
+            );
         }
 
         /// <summary>
@@ -205,6 +216,22 @@ namespace PrintStreamer.Services
                         CancellationToken.None
                     );
                     _logger.LogInformation("[Orchestrator] Transition to live: {Result}", (success ? "success" : "failed"));
+
+                    if (success)
+                    {
+                        var welcomeMessage = _config.GetValue<string>("YouTube:LiveBroadcast:WelcomeMessage");
+                        if (!string.IsNullOrWhiteSpace(welcomeMessage))
+                        {
+                            try
+                            {
+                                await _youtubeService.SendChatMessageAsync(broadcastId, welcomeMessage, CancellationToken.None);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "[Orchestrator] Failed to post welcome message to live chat");
+                            }
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -391,10 +418,79 @@ namespace PrintStreamer.Services
             await _streamService.StopStreamAsync();
         }
 
+        /// <summary>
+        /// Background health monitor: checks if stream is still running when broadcasting.
+        /// If stream has crashed, automatically restarts it with the current broadcast (no new broadcast created).
+        /// </summary>
+        private async Task MonitorStreamHealthAsync()
+        {
+            if (_disposed) return;
+
+            string? broadcastId = null;
+            string? rtmpUrl = null;
+            
+            lock (_lock)
+            {
+                if (!string.IsNullOrWhiteSpace(_currentBroadcastId))
+                {
+                    broadcastId = _currentBroadcastId;
+                    rtmpUrl = _currentRtmpUrl;
+                }
+            }
+
+            // Only monitor if broadcasting
+            if (string.IsNullOrWhiteSpace(broadcastId))
+            {
+                _consecutiveHealthCheckFailures = 0;
+                return;
+            }
+
+            try
+            {
+                // Check if stream is still running
+                if (!_streamService.IsStreaming)
+                {
+                    _consecutiveHealthCheckFailures++;
+                    _logger.LogWarning("[Orchestrator] Health check #{Count}: Stream is not running (broadcast={BroadcastId})", 
+                        _consecutiveHealthCheckFailures, broadcastId);
+
+                    // After 3 consecutive failures, attempt auto-restart
+                    if (_consecutiveHealthCheckFailures >= MAX_CONSECUTIVE_FAILURES && !string.IsNullOrWhiteSpace(rtmpUrl))
+                    {
+                        _logger.LogWarning("[Orchestrator] Stream crashed ({Count} checks). Auto-restarting with same broadcast...", 
+                            _consecutiveHealthCheckFailures);
+                        
+                        try
+                        {
+                            // Restart stream with same RTMP URL (reuse broadcast)
+                            await _streamService.StartStreamAsync(rtmpUrl, null, CancellationToken.None);
+                            _consecutiveHealthCheckFailures = 0;
+                            _logger.LogInformation("[Orchestrator] Stream restarted successfully. Broadcast still active: {BroadcastId}", broadcastId);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "[Orchestrator] Failed to auto-restart stream");
+                        }
+                    }
+                }
+                else
+                {
+                    // Stream is healthy
+                    _consecutiveHealthCheckFailures = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Orchestrator] Error during health check");
+            }
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
+
+            try { _healthCheckTimer?.Dispose(); } catch { }
 
             lock (_lock)
             {

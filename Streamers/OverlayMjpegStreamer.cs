@@ -32,11 +32,14 @@ namespace PrintStreamer.Streamers
 
         public async Task StartAsync(CancellationToken cancellationToken = default)
         {
+            const string contextLabel = "Overlay MJPEG Compositing";
+            
             try { _overlayText.Start(); } catch { }
 
             var source = _config.GetValue<string>("Stream:Source");
             if (string.IsNullOrWhiteSpace(source))
             {
+                _logger.LogError("[{ContextLabel}] Stream source not configured", contextLabel);
                 _ctx.Response.StatusCode = 500;
                 await _ctx.Response.WriteAsync("Stream source not configured", cancellationToken);
                 _exitTcs.TrySetResult(null);
@@ -148,7 +151,11 @@ namespace PrintStreamer.Streamers
                             if (n > 0)
                             {
                                 var s = new string(buf, 0, n).Trim();
-                                if (!string.IsNullOrWhiteSpace(s)) _logger.LogWarning("[OverlayMJPEG ffmpeg] {Output}", s);
+                                if (!string.IsNullOrWhiteSpace(s) && 
+                                    !s.Contains("unable to decode APP fields", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    _logger.LogWarning("[{ContextLabel}] [ffmpeg stderr] {Output}", contextLabel, s);
+                                }
                             }
                         }
                     }
@@ -160,10 +167,12 @@ namespace PrintStreamer.Streamers
             }
             catch (OperationCanceledException)
             {
+                _logger.LogInformation("[{ContextLabel}] Request cancelled", contextLabel);
                 _exitTcs.TrySetResult(null);
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "[{ContextLabel}] Pipeline error: {Message}", contextLabel, ex.Message);
                 if (!_ctx.Response.HasStarted)
                 {
                     _ctx.Response.StatusCode = 502;

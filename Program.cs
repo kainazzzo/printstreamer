@@ -143,6 +143,7 @@ webBuilder.Services.AddSingleton<PrintStreamer.Services.YouTubeControlService>()
 webBuilder.Services.AddSingleton<PrintStreamer.Services.WebCamManager>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamOrchestrator>();
+webBuilder.Services.AddSingleton<PrintStreamer.Services.PrintStreamOrchestrator>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.MoonrakerPollerService>();
 webBuilder.Services.AddHostedService<PrintStreamer.Services.MoonrakerHostedService>();
 webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioService>();
@@ -230,6 +231,13 @@ ProxyUtil.Logger = app.Services.GetRequiredService<ILogger<Program>>();
 	var orchestrator = app.Services.GetRequiredService<PrintStreamer.Services.StreamOrchestrator>();
 	var audioBroadcast = app.Services.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
 	audioBroadcast.SetTrackFinishedCallback(() => orchestrator.OnAudioTrackFinishedAsync());
+}
+
+// Wire up PrintStreamOrchestrator to subscribe to PrinterState events from MoonrakerPoller
+{
+	var printStreamOrchestrator = app.Services.GetRequiredService<PrintStreamer.Services.PrintStreamOrchestrator>();
+	PrintStreamer.Services.MoonrakerPoller.PrintStateChanged += (prev, curr) => 
+		_ = printStreamOrchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
 }
 
 // Get a logger for the application
@@ -978,6 +986,32 @@ if (serveEnabled)
 			}
 
 			var ok = await yt.UpdateBroadcastPrivacyAsync(broadcastId, body.Privacy, ctx.RequestAborted);
+			return Results.Json(new { success = ok });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	app.MapPost("/api/live/chat", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
+			if (!orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(orchestrator.CurrentBroadcastId))
+			{
+				return Results.Json(new { success = false, error = "No active broadcast" });
+			}
+
+			var chatRequest = await ctx.Request.ReadFromJsonAsync<ChatMessageRequest>();
+			if (chatRequest == null || string.IsNullOrWhiteSpace(chatRequest.Message))
+			{
+				return Results.Json(new { success = false, error = "Message is required" });
+			}
+
+			var yt = ctx.RequestServices.GetRequiredService<YouTubeControlService>();
+			var ok = await yt.SendChatMessageAsync(orchestrator.CurrentBroadcastId!, chatRequest.Message, ctx.RequestAborted);
 			return Results.Json(new { success = ok });
 		}
 		catch (Exception ex)
@@ -2315,4 +2349,9 @@ try{
 internal class PrivacyUpdateRequest
 {
 	public string? Privacy { get; set; }
+}
+
+internal class ChatMessageRequest
+{
+	public string Message { get; set; } = string.Empty;
 }

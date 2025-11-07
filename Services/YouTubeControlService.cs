@@ -4,6 +4,7 @@ using Google.Apis.Services;
 using Google.Apis.YouTube.v3;
 using Google.Apis.YouTube.v3.Data;
 using System.Text.Json;
+using System.Linq;
 using Google.Apis.Util.Store;
 // using Google.Apis.Auth.OAuth2.Flows; // not used with the standard broker flow
 using System.Collections.Concurrent;
@@ -26,6 +27,7 @@ namespace PrintStreamer.Services
     private readonly InMemoryDataStore _inMemoryStore = new InMemoryDataStore();
     private Task? _refreshTask;
     private CancellationTokenSource? _refreshCts;
+    private readonly ConcurrentDictionary<string, string> _liveChatIds = new();
 
     public YouTubeControlService(IConfiguration config, ILogger<YouTubeControlService> logger, YouTubePollingManager? pollingManager = null, MoonrakerClient? moonrakerClient = null)
     {
@@ -1132,9 +1134,25 @@ namespace PrintStreamer.Services
                     {
                         moonrakerFilename = info.Filename;
                         var cleanFilename = System.IO.Path.GetFileNameWithoutExtension(info.Filename);
-                        if (!string.IsNullOrWhiteSpace(cleanFilename))
+
+                        var state = info.State?.Trim();
+                        var hasActiveProgress = info.ProgressPercent.HasValue && info.ProgressPercent.Value > 0 && info.ProgressPercent.Value < 100;
+                        var hasRemaining = info.Remaining.HasValue && info.Remaining.Value > TimeSpan.Zero;
+                        var shouldAugmentTitle = !string.IsNullOrWhiteSpace(cleanFilename)
+                            && (
+                                string.Equals(state, "printing", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(state, "paused", StringComparison.OrdinalIgnoreCase)
+                                || hasActiveProgress
+                                || hasRemaining
+                            );
+
+                        if (shouldAugmentTitle)
                         {
                             title = $"{title} - {cleanFilename}";
+                        }
+                        else
+                        {
+                            _logger.LogInformation("[YouTube] Skipping Moonraker filename append. State={State}, Progress={Progress}, Remaining={Remaining}", state ?? "<null>", info.ProgressPercent, info.Remaining);
                         }
                     }
 
@@ -1195,8 +1213,15 @@ namespace PrintStreamer.Services
 
             var broadcastRequest = _youtubeService.LiveBroadcasts.Insert(broadcast, "snippet,status,contentDetails");
             var createdBroadcast = await broadcastRequest.ExecuteAsync(cancellationToken);
+            var createdBroadcastId = createdBroadcast.Id;
 
-            _logger.LogInformation("Broadcast created with ID: {Id}", createdBroadcast.Id);
+            _logger.LogInformation("Broadcast created with ID: {Id}", createdBroadcastId);
+
+            var liveChatId = createdBroadcast.Snippet?.LiveChatId;
+            if (!string.IsNullOrWhiteSpace(createdBroadcastId) && !string.IsNullOrWhiteSpace(liveChatId))
+            {
+                _liveChatIds[createdBroadcastId] = liveChatId;
+            }
 
             // 2. Create LiveStream
             var stream = new LiveStream
@@ -1237,12 +1262,12 @@ namespace PrintStreamer.Services
 
             _logger.LogInformation("RTMP URL: {Rtmp}", rtmpUrl);
             _logger.LogInformation("Stream Key: {Key}", streamKey);
-            _logger.LogInformation("Broadcast URL: https://www.youtube.com/watch?v={BroadcastId}", createdBroadcast.Id);
+            _logger.LogInformation("Broadcast URL: https://www.youtube.com/watch?v={BroadcastId}", createdBroadcastId);
 
             // Return streamId in tuple via broadcastId position isn't ideal; for now we return broadcastId and maintain streamId in the created stream object.
             // Caller can fetch streamId via createdStream.Id if needed. We'll also store last created stream id in a field if debugging required.
             _lastCreatedStreamId = streamId;
-            return (rtmpUrl, streamKey, createdBroadcast.Id, moonrakerFilename);
+            return (rtmpUrl, streamKey, createdBroadcastId, moonrakerFilename);
         }
         catch (Google.GoogleApiException gae)
         {
@@ -1271,6 +1296,96 @@ namespace PrintStreamer.Services
             _logger.LogError(ex, "Failed to create live broadcast: {Message}", ex.Message);
             return (null, null, null, null);
         }
+    }
+
+    private async Task<string?> GetLiveChatIdAsync(string broadcastId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(broadcastId)) return null;
+
+        if (_liveChatIds.TryGetValue(broadcastId, out var cached))
+        {
+            return cached;
+        }
+
+        if (_youtubeService == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var request = _youtubeService.LiveBroadcasts.List("snippet");
+            request.Id = broadcastId;
+            var response = await request.ExecuteAsync(cancellationToken);
+            var chatId = response?.Items?.FirstOrDefault()?.Snippet?.LiveChatId;
+            if (!string.IsNullOrWhiteSpace(chatId))
+            {
+                _liveChatIds[broadcastId] = chatId;
+                return chatId;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[YouTube] Failed to retrieve live chat id for broadcast {BroadcastId}", broadcastId);
+        }
+
+        return null;
+    }
+
+    public async Task<bool> SendChatMessageAsync(string broadcastId, string message, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(broadcastId) || string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        if (_youtubeService == null)
+        {
+            var authed = await AuthenticateAsync(cancellationToken);
+            if (!authed || _youtubeService == null)
+            {
+                _logger.LogWarning("[YouTube] Cannot send chat message, authentication failed");
+                return false;
+            }
+        }
+
+        var chatId = await GetLiveChatIdAsync(broadcastId, cancellationToken);
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            _logger.LogWarning("[YouTube] No live chat id available for broadcast {BroadcastId}", broadcastId);
+            return false;
+        }
+
+        try
+        {
+            var chatMessage = new LiveChatMessage
+            {
+                Snippet = new LiveChatMessageSnippet
+                {
+                    LiveChatId = chatId,
+                    Type = "textMessageEvent",
+                    TextMessageDetails = new LiveChatTextMessageDetails
+                    {
+                        MessageText = message
+                    }
+                }
+            };
+
+            var insertRequest = _youtubeService.LiveChatMessages.Insert(chatMessage, "snippet");
+            await insertRequest.ExecuteAsync(cancellationToken);
+            _logger.LogInformation("[YouTube] Posted live chat message for broadcast {BroadcastId}", broadcastId);
+            return true;
+        }
+        catch (Google.GoogleApiException gae)
+        {
+            _logger.LogError(gae, "[YouTube] Failed to send chat message: {Message}", gae.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[YouTube] Unexpected error while sending chat message");
+        }
+
+        return false;
     }
 
     /// <summary>

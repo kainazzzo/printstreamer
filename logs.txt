@@ -1,0 +1,77 @@
+info: PrintStreamer.Startup[0]
+      Checking for client secrets file at: /app/data/tokens/client_secret.json
+info: PrintStreamer.Startup[0]
+      ClientSecretsProvider Load() called with path: /app/data/tokens/client_secret.json
+info: PrintStreamer.Startup[0]
+      ClientSecretsProvider: Read 402 bytes from /app/data/tokens/client_secret.json
+info: PrintStreamer.Startup[0]
+      ClientSecretsProvider: Found 'installed' or 'web' property
+info: PrintStreamer.Startup[0]
+      ClientSecretsProvider: Set ClientId (length=72)
+info: PrintStreamer.Startup[0]
+      ClientSecretsProvider: Set ClientSecret (length=35)
+info: PrintStreamer.Startup[0]
+      Loaded client secrets from '/app/data/tokens/client_secret.json': ClientId=present, ClientSecret=present
+info: PrintStreamer.Startup[0]
+      DataProtection key ring at: //dpkeys
+info: PrintStreamer.Startup[0]
+      Generating fallback_black.jpg...
+info: PrintStreamer.Startup[0]
+      fallback_black.jpg created successfully
+warn: Microsoft.AspNetCore.DataProtection.Repositories.FileSystemXmlRepository[60]
+      Storing keys in a directory '/dpkeys' that may not be persisted outside of the container. Protected data will be unavailable when container is destroyed. For more information go to https://aka.ms/aspnet/dataprotectionwarning
+warn: Microsoft.AspNetCore.DataProtection.KeyManagement.XmlKeyManager[35]
+      No XML encryptor configured. Key {63133d9a-1768-4208-84f0-19515c6543eb} may be persisted to storage in unencrypted form.
+warn: Microsoft.AspNetCore.Server.Kestrel[0]
+      Overriding address(es) 'http://*:8080'. Binding to endpoints defined via IConfiguration and/or UseKestrel() instead.
+[TimelapseManager] Skipping remote G-code download/list for: All Terrain Assault Benchy.gcode.
+[TimelapseManager] Timelapse now expects slicer to embed print stats via SET_PRINT_STATS_INFO.
+[TimelapseManager] Started timelapse session: All_Terrain_Assault_Benchy_4
+[TimelapseManager]   Output directory: /app/data/timelapse/All_Terrain_Assault_Benchy_4
+[TimelapseManager]   Gating enabled: frames will start when layer >= 1
+[TimelapseManager] Started capture timer with period: 00:00:15
+[TimelapseManager]   Timer will fire every 15 seconds
+[TimelapseManager]   Stream source: http://192.168.1.117/webcam/?action=stream&octoAppPortOverride=80&cacheBust=1759967901624&advance_headers=1
+warn: PrintStreamer.Streamers.OverlayMjpegStreamer[0]
+      [OverlayMJPEG ffmpeg] [mjpeg @ 0x55fe3344ea80] unable to decode APP fields: Invalid data found when processing input
+warn: PrintStreamer.Streamers.OverlayMjpegStreamer[0]
+      [OverlayMJPEG ffmpeg] [mjpeg @ 0x55fe33450880] unable to decode APP fields: Invalid data found when processing input
+fail: Microsoft.AspNetCore.Antiforgery.DefaultAntiforgery[7]
+      An exception was thrown while deserializing the token.
+      Microsoft.AspNetCore.Antiforgery.AntiforgeryValidationException: The antiforgery token could not be decrypted.
+       ---> System.Security.Cryptography.CryptographicException: The key {72241d93-0317-44d1-aadf-651876057bdc} was not found in the key ring. For more information go to https://aka.ms/aspnet/dataprotectionwarning
+         at Microsoft.AspNetCore.DataProtection.KeyManagement.KeyRingBasedDataProtector.UnprotectCore(Byte[] protectedData, Boolean allowOperationsOnRevokedKeys, UnprotectStatus& status)
+         at Microsoft.AspNetCore.DataProtection.KeyManagement.KeyRingBasedDataProtector.Unprotect(Byte[] protectedData)
+         at Microsoft.AspNetCore.Antiforgery.DefaultAntiforgeryTokenSerializer.Deserialize(String serializedToken)
+         --- End of inner exception stack trace ---
+         at Microsoft.AspNetCore.Antiforgery.DefaultAntiforgeryTokenSerializer.Deserialize(String serializedToken)
+         at Microsoft.AspNetCore.Antiforgery.DefaultAntiforgery.GetCookieTokenDoesNotThrow(HttpContext httpContext)
+warn: PrintStreamer.Streamers.OverlayMjpegStreamer[0]
+      [OverlayMJPEG ffmpeg] [mjpeg @ 0x55da4d66ba80] unable to decode APP fields: Invalid data found when processing input
+warn: PrintStreamer.Streamers.OverlayMjpegStreamer[0]
+      [OverlayMJPEG ffmpeg] [mjpeg @ 0x55da4d66d880] unable to decode APP fields: Invalid data found when processing input
+[TimelapseManager] Starting frame capture at layer 108 for session All_Terrain_Assault_Benchy_4
+[TimelapseManager] Captured frame for All_Terrain_Assault_Benchy_4 (101308 bytes)
+[YouTube] Using token file path: /app/data/tokens/youtube_token.json
+[YouTube] Token file exists: True
+[YouTubeTokenFileDataStore] GetAsync: Read token file (506 bytes): /app/data/tokens/youtube_token.json
+[YouTubeTokenFileDataStore] GetAsync: Loaded TokenResponse with RefreshToken=True, ExpiresIn=3599
+[YouTubeTokenFileDataStore] StoreAsync: Saving token to /app/data/tokens/youtube_token.json
+[YouTubeTokenFileDataStore] StoreAsync: Directory: /app/data/tokens
+[YouTubeTokenFileDataStore] StoreAsync: Created directory /app/data/tokens
+[YouTubeTokenFileDataStore] StoreAsync: Wrote 506 bytes to temp file: /app/data/tokens/youtube_token.json.tmp
+[YouTubeTokenFileDataStore] StoreAsync: Moved temp file to /app/data/tokens/youtube_token.json
+[YouTubeTokenFileDataStore] StoreAsync: Verified token file exists, size: 506 bytes
+warn: PrintStreamer.Services.StreamOrchestrator[0]
+      [Orchestrator] Health check #1: Stream is not running (broadcast=YcBsUivwqgc)
+[TimelapseManager] Captured frame for All_Terrain_Assault_Benchy_4 (98721 bytes)
+warn: PrintStreamer.Services.StreamOrchestrator[0]
+      [Orchestrator] Health check #2: Stream is not running (broadcast=YcBsUivwqgc)
+warn: PrintStreamer.Streamers.FfmpegStreamer[0]
+      ffmpeg did not exit within timeout, killing...
+warn: PrintStreamer.Streamers.OverlayMjpegStreamer[0]
+      [OverlayMJPEG ffmpeg] [mjpeg @ 0x559b0d036a80] unable to decode APP fields: Invalid data found when processing input
+warn: PrintStreamer.Streamers.OverlayMjpegStreamer[0]
+      [OverlayMJPEG ffmpeg] [mjpeg @ 0x559b0d038880] unable to decode APP fields: Invalid data found when processing input
+[TimelapseManager] Captured frame for All_Terrain_Assault_Benchy_4 (101255 bytes)
+[TimelapseManager] Captured frame for All_Terrain_Assault_Benchy_4 (104793 bytes)
