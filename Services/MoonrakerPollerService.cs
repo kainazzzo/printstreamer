@@ -81,12 +81,27 @@ namespace PrintStreamer.Services
                         // Update last state for next iteration
                         lastState = state;
 
-                        // Update timelapse progress
-                        if (activeTimelapseSession != null)
+                        // Update timelapse progress and check if it auto-finalized
+                        if (activeTimelapseSession != null && !lastLayerTriggered)
                         {
                             try
                             {
-                                _timelapseManager.NotifyPrintProgress(activeTimelapseSession, currentLayer, totalLayers);
+                                var videoPath = await _timelapseManager.NotifyPrintProgressAsync(activeTimelapseSession, currentLayer, totalLayers);
+                                if (!string.IsNullOrWhiteSpace(videoPath))
+                                {
+                                    // Timelapse auto-finalized via NotifyPrintProgressAsync
+                                    _logger.LogInformation("[MoonrakerPoller] Timelapse auto-finalized: {VideoPath}", videoPath);
+                                    activeTimelapseSession = null;
+                                    lastLayerTriggered = true;
+                                    
+                                    // Upload if enabled
+                                    var uploadEnabled = _config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
+                                    if (uploadEnabled && File.Exists(videoPath))
+                                    {
+                                        // TODO: Upload timelapse via YouTubeControlService
+                                        _logger.LogInformation("[MoonrakerPoller] Timelapse video ready for upload: {VideoPath}", videoPath);
+                                    }
+                                }
                             }
                             catch (Exception ex)
                             {
@@ -145,48 +160,6 @@ namespace PrintStreamer.Services
                             
                             activeTimelapseSession = await _timelapseManager.StartTimelapseAsync(jobNameSafe, currentJob);
                             lastLayerTriggered = false;
-                        }
-                        // Detect last layer and finalize timelapse early
-                        else if (isPrinting && activeTimelapseSession != null && !lastLayerTriggered)
-                        {
-                            var thresholdSecs = _config.GetValue<int?>("Timelapse:LastLayerRemainingSeconds") ?? 30;
-                            var thresholdPct = _config.GetValue<double?>("Timelapse:LastLayerProgressPercent") ?? 98.5;
-                            var layerThreshold = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
-
-                            bool lastLayerByTime = remaining.HasValue && remaining.Value <= TimeSpan.FromSeconds(thresholdSecs);
-                            bool lastLayerByProgress = progressPct.HasValue && progressPct.Value >= thresholdPct;
-                            bool lastLayerByLayer = currentLayer.HasValue && totalLayers.HasValue &&
-                                                    totalLayers.Value > 0 &&
-                                                    currentLayer.Value >= (totalLayers.Value - layerThreshold);
-
-                            if (lastLayerByTime || lastLayerByProgress || lastLayerByLayer)
-                            {
-                                _logger.LogInformation("[MoonrakerPoller] Last layer detected, finalizing timelapse");
-                                lastLayerTriggered = true;
-
-                                var sessionToFinalize = activeTimelapseSession;
-                                activeTimelapseSession = null;
-
-                                _ = Task.Run(async () =>
-                                {
-                                        try
-                                        {
-                                            var videoPath = await _timelapseManager.StopTimelapseAsync(sessionToFinalize!);
-                                            
-                                            // Upload if enabled
-                                            var uploadEnabled = _config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-                                            if (uploadEnabled && !string.IsNullOrWhiteSpace(videoPath) && File.Exists(videoPath))
-                                            {
-                                                // TODO: Upload timelapse via YouTubeControlService
-                                                _logger.LogInformation("[MoonrakerPoller] Timelapse video ready: {VideoPath}", videoPath);
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            _logger.LogError(ex, "[MoonrakerPoller] Error finalizing timelapse");
-                                        }
-                                }, CancellationToken.None);
-                            }
                         }
                         // Stop/cleanup when print finishes (state transition from printing to complete/standby)
                         // If we have a lastJobFilename, we were tracking a print and must reset regardless of broadcast state

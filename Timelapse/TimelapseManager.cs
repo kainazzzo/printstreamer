@@ -154,7 +154,69 @@ namespace PrintStreamer.Timelapse
 
     /// <summary>
     /// Notify the manager of current print layer progress for a named session.
+    /// When the configured last-layer threshold is reached, the manager will finalize
+    /// the timelapse (create the video) and return the created video path.
+    /// </summary>
+    /// <returns>Video path if timelapse was auto-finalized, null otherwise</returns>
+    public async Task<string?> NotifyPrintProgressAsync(string? sessionName, int? currentLayer, int? totalLayers)
+    {
+        if (string.IsNullOrWhiteSpace(sessionName)) return null;
+        if (!_activeSessions.TryGetValue(sessionName, out var session)) return null;
+
+        try
+        {
+            // Enable capture once we reach layer 1 (skip leveling at layer 0)
+            if (session.StartAfterLayer1 && !session.CaptureEnabled)
+            {
+                if (currentLayer.HasValue && currentLayer.Value >= 1)
+                {
+                    session.CaptureEnabled = true;
+                    session.LoggedWaitingForLayer = false;
+                    Console.WriteLine($"[TimelapseManager] Starting frame capture at layer {currentLayer} for session {sessionName}");
+                }
+                else if (!session.LoggedWaitingForLayer)
+                {
+                    // Log once that we're waiting for layer info (always log, not just verbose)
+                    Console.WriteLine($"[TimelapseManager] Waiting for layer >= 1 before capturing frames for {sessionName} (current: {currentLayer?.ToString() ?? "n/a"})");
+                    session.LoggedWaitingForLayer = true;
+                }
+            }
+
+            // If we have the total layers and current layer is at or past the configured threshold, finalize the timelapse
+            var layerOffset = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
+            if (layerOffset < 0) layerOffset = 0;
+            if (currentLayer.HasValue && totalLayers.HasValue && totalLayers.Value > 0)
+            {
+                var triggerLayer = Math.Max(0, totalLayers.Value - layerOffset);
+                if (currentLayer.Value >= triggerLayer)
+                {
+                    Console.WriteLine($"[TimelapseManager] Last-layer threshold reached for session {sessionName} ({currentLayer}/{totalLayers}, offset={layerOffset}) - finalizing timelapse.");
+                    try
+                    {
+                        // Create video synchronously via existing StopTimelapseAsync to ensure proper cleanup
+                        var createdVideo = await StopTimelapseAsync(sessionName);
+                        return createdVideo;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[TimelapseManager] Error finalizing timelapse for {sessionName}: {ex.Message}");
+                        return null;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TimelapseManager] Error in NotifyPrintProgressAsync for {sessionName}: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Notify the manager of current print layer progress for a named session (synchronous version).
     /// When currentLayer >= 1 capture is enabled. When currentLayer >= (totalLayers - offset) capture stops.
+    /// Note: This version does NOT auto-finalize. Use NotifyPrintProgressAsync for auto-finalization.
     /// </summary>
     public void NotifyPrintProgress(string? sessionName, int? currentLayer, int? totalLayers)
     {
