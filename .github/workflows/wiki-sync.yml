@@ -70,7 +70,7 @@ jobs:
 
           # Rewrite patterns like (docs/path/file.md) or (/docs/path/file.md) or blob URLs ending with /docs/...
           # Use a small Python script to do atomic in-place edits to avoid sed quoting/portability issues
-          python3 - <<'PY'
+          TMPDOCS="$TMPDOCS" python3 - <<'PY'
           import os, re, pathlib, tempfile
 
           root = pathlib.Path(os.environ['TMPDOCS'])
