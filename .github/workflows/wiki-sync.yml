@@ -18,13 +18,55 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Sync to Wiki
-      uses: Andrew-Chen-Wang/github-wiki-action@v1
-      with:
-        WIKI_DIR: docs/
-        GH_PAT: ${{ secrets.GH_PAT }}
-        REPO: ${{ github.repository }}
-        WIKI_PUSH_MESSAGE: "Sync documentation from main repository [skip ci]"
+    - name: Publish docs to wiki (inline)
       env:
-        GH_MAIL: github-actions[bot]@users.noreply.github.com
+        GH_PAT: ${{ secrets.GH_PAT }}
         GH_NAME: github-actions[bot]
+        GH_MAIL: github-actions[bot]@users.noreply.github.com
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -d "docs" ]; then
+          echo "docs/ directory not found — nothing to publish."
+          exit 0
+        fi
+
+        git --version
+        git config --global user.email "$GH_MAIL"
+        git config --global user.name "$GH_NAME"
+
+        WIKI_URL="https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git"
+        TMPDIR=$(mktemp -d)
+        echo "Cloning wiki into $TMPDIR"
+        if ! git clone "$WIKI_URL" "$TMPDIR"; then
+          echo "Could not clone wiki repo — initializing empty repo at $TMPDIR"
+          mkdir -p "$TMPDIR"
+          git -C "$TMPDIR" init
+        fi
+
+        echo "Syncing docs/ -> wiki"
+        rsync -a --delete docs/ "$TMPDIR/"
+
+        cd "$TMPDIR"
+        # Ensure we have a branch to push to (wiki repos commonly use master)
+        if ! git rev-parse --verify --quiet master >/dev/null; then
+          git checkout -b master || true
+        else
+          git checkout master || true
+        fi
+
+        git add --all
+        if git diff --staged --quiet; then
+          echo "No changes to publish to wiki."
+          exit 0
+        fi
+
+        git commit -m "Sync docs from repo [skip ci]"
+        echo "Pushing to wiki"
+        # Try master then main
+        if git push origin master; then
+          echo "Pushed to master"
+        else
+          git push origin main || (echo "Push failed; please check PAT permissions and remote branch" && exit 1)
+        fi
