@@ -33,33 +33,7 @@ jobs:
         fi
 
         git --version
-        git config --global user.email "$GH_MAIL"
-        git config --global user.name "$GH_NAME"
-
-        WIKI_URL="https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git"
         WORKDIR=$(pwd)
-        TMPDIR=$(mktemp -d)
-        echo "Cloning wiki into $TMPDIR"
-        if ! git clone "$WIKI_URL" "$TMPDIR"; then
-          echo "Could not clone wiki repo — initializing empty repo at $TMPDIR"
-          mkdir -p "$TMPDIR"
-          git -C "$TMPDIR" init
-        fi
-
-        echo "Preparing docs copy and rewriting repo-specific links for wiki"
-        # Create a temporary copy of docs to rewrite links without modifying the repo
-        TMPDOCS=$(mktemp -d)
-        rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
-
-        # Rewrite links that point to the repo's docs/ paths into wiki-relative links.
-        # Examples handled:
-        #  - (docs/Path/File.md) -> (Path/File)
-        #  - (/docs/Path/File.md) -> (Path/File)
-        #  - (https://github.com/OWNER/REPO/blob/main/docs/Path/File.md) -> (Path/File)
-        # Build a map of actual wiki pages and rewrite links to the exact wiki targets.
-        # This prevents 404s when the wiki stores pages with different paths/names.
-        cd "$TMPDIR"
-        MAPFILE="$TMPDIR/wiki_map.tsv"
         : > "$MAPFILE"
         find . -type f -name '*.md' -print0 | while IFS= read -r -d '' f; do
           rel="${f#./}"
