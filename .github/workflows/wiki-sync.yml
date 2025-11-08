@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pages: write
     steps:
     - uses: actions/checkout@v4
       with:
@@ -19,7 +20,10 @@ jobs:
 
     - name: Sync to Wiki
       uses: Andrew-Chen-Wang/github-wiki-action@v1
-      env:
-        WIKI_DIR: docs/
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        EXCLUDED_FILES: README.md
+      with:
+        path: docs/
+        token: ${{ secrets.GITHUB_TOKEN }}
+        email: github-actions[bot]@users.noreply.github.com
+        name: github-actions[bot]
+        exclude: "docs/README.md"
+        commit_message: "Sync documentation from main repository [skip ci]"

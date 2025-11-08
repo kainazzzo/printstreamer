@@ -67,6 +67,11 @@ Just commit and push the workflow files - the wiki will be created and populated
 
 **Wiki doesn't exist yet:**
 - The sync process will create it automatically on first run
+- Make sure the wiki feature is enabled in repository settings
+
+**ACTION_MAIL ENV is missing:**
+- This error indicates missing git user configuration
+- The workflow is now configured with proper `email` and `name` parameters
 
 **Authentication issues:**
 - The `GITHUB_TOKEN` is automatically provided by GitHub Actions
@@ -74,11 +79,13 @@ Just commit and push the workflow files - the wiki will be created and populated
 
 **Permission issues:**
 - Check repository settings for Actions permissions
+- The workflow includes `contents: read` and `pages: write` permissions
 - The GITHUB_TOKEN should have write access to the wiki
 
 **Sync fails:**
 - Check repository permissions
 - Verify the wiki branch exists (created automatically)
+- Ensure the `docs/` directory exists and contains markdown files
 
 ---
 
