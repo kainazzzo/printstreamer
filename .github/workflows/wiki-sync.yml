@@ -14,86 +14,86 @@ jobs:
       contents: write
       pages: write
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Publish docs to wiki (inline)
-      env:
-        GH_PAT: ${{ secrets.GH_PAT }}
-        GH_NAME: github-actions[bot]
-        GH_MAIL: github-actions[bot]@users.noreply.github.com
-        REPO: ${{ github.repository }}
-      run: |
-        set -euo pipefail
+      - name: Publish docs to wiki (inline)
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_NAME: github-actions[bot]
+          GH_MAIL: github-actions[bot]@users.noreply.github.com
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
 
-        if [ ! -d "docs" ]; then
-          echo "docs/ directory not found — nothing to publish."
-          exit 0
-        fi
+          if [ ! -d "docs" ]; then
+            echo "docs/ directory not found — nothing to publish."
+            exit 0
+          fi
 
-        git --version
-        git config --global user.email "$GH_MAIL"
-        git config --global user.name "$GH_NAME"
-        WORKDIR=$(pwd)
+          git --version
+          git config --global user.email "$GH_MAIL"
+          git config --global user.name "$GH_NAME"
+          WORKDIR=$(pwd)
 
-        # Temporary workspace for rewriting
-        TMPDIR=$(mktemp -d)
-        TMPDOCS="$TMPDIR/docs_copy"
-        mkdir -p "$TMPDOCS"
-        MAPFILE="$TMPDIR/wiki_map.tsv"
-        : > "$MAPFILE"
+          TMPDIR=$(mktemp -d)
+          TMPDOCS="$TMPDIR/docs_copy"
+          mkdir -p "$TMPDOCS"
 
-        # Build mapping of repo docs paths -> wiki targets
-        find . -type f -name '*.md' -print0 | while IFS= read -r -d '' f; do
-          rel="${f#./}"
-          val="${rel%.md}"
-          printf '%s\t%s\n' "$val" "$val" >> "$MAPFILE"
-          no_docs="${val#docs/}"
-          if [ "$no_docs" != "$val" ]; then printf '%s\t%s\n' "$no_docs" "$val" >> "$MAPFILE"; fi
-          no_arch="${val#archive/}"
-          if [ "$no_arch" != "$val" ]; then printf '%s\t%s\n' "$no_arch" "$val" >> "$MAPFILE"; fi
-          base="${val##*/}"
-          if [ "$base" != "$val" ]; then printf '%s\t%s\n' "$base" "$val" >> "$MAPFILE"; fi
-        done
+          echo "Cloning wiki into $TMPDIR"
+          declare -a CANDIDATES
+          if [ -n "${GH_PAT-}" ]; then
+            CANDIDATES+=("https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git")
+          else
+            CANDIDATES+=("git@github.com:${REPO}.wiki.git" "https://github.com/${REPO}.wiki.git")
+          fi
+          CLONED=0
+          for url in "${CANDIDATES[@]}"; do
+            echo "Trying: $url"
+            if git clone --depth 1 "$url" "$TMPDIR" >/dev/null 2>&1; then
+              echo "Cloned wiki from $url"
+              CLONED=1
+              break
+            else
+              echo "Failed to clone from $url"
+            fi
+          done
+          if [ "$CLONED" -ne 1 ]; then
+            echo "Warning: could not clone wiki (wiki may not be enabled or authentication failed)." >&2
+            echo "Proceeding with empty wiki clone at $TMPDIR so we can still compare file lists." >&2
+            mkdir -p "$TMPDIR"
+          fi
 
-        # Copy docs to temp and rewrite links that point to docs/ or GitHub blob URLs
-        rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
-        # Use a small Python script per-file to avoid complex shell quoting issues with regex
-        find "$TMPDOCS" -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
-          python3 - <<'PY' "$file"
-import sys, re
-p = re.compile(r'\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)\#]+)(#?[^)]*)\)')
-path = sys.argv[1]
-with open(path, 'r', encoding='utf-8') as fh:
-    s = fh.read()
-s2 = p.sub(r'(\1\2)', s)
-if s2 != s:
-    with open(path, 'w', encoding='utf-8') as fh:
-        fh.write(s2)
-PY
-        done
+          # Copy docs into a temp folder and rewrite simple docs/ prefixes in links
+          rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
 
-        echo "Syncing rewritten docs -> wiki"
-        cd "$TMPDIR"
-        rsync -a --delete --exclude='.git' "$TMPDOCS/" .
+          # Rewrite patterns like (docs/path/file.md) or (/docs/path/file.md) or blob URLs ending with /docs/...
+          # This sed attempts to capture the common cases and remove the leading docs/ path while preserving anchors
+          find "$TMPDOCS" -type f -name '*.md' -print0 | xargs -0 sed -Ei \
+            -e "s#\((https?://[^)]+/blob/[^/]+/)?/?docs/([^\)\#]+)(#?[^)]*)\)#(\2\3)#g" \
+            -e "s#\(\./docs/([^\)]+)\)#(\1)#g" || true
 
-        if ! git rev-parse --verify --quiet master >/dev/null; then
-          git checkout -b master || true
-        else
-          git checkout master || true
-        fi
+          echo "Syncing rewritten docs -> wiki"
+          cd "$TMPDIR"
+          rsync -a --delete --exclude='.git' "$TMPDOCS/" .
 
-        git add --all
-        if git diff --staged --quiet; then
-          echo "No changes to publish to wiki."
-          exit 0
-        fi
+          if ! git rev-parse --verify --quiet master >/dev/null; then
+            git checkout -b master || true
+          else
+            git checkout master || true
+          fi
 
-        git commit -m "Sync docs from repo [skip ci]"
-        echo "Pushing to wiki"
-        if git push origin master; then
-          echo "Pushed to master"
-        else
-          git push origin main || (echo "Push failed; please check PAT permissions and remote branch" && exit 1)
-        fi
+          git add --all
+          if git diff --staged --quiet; then
+            echo "No changes to publish to wiki."
+            exit 0
+          fi
+
+          git commit -m "Sync docs from repo [skip ci]"
+          echo "Pushing to wiki"
+          if git push origin master; then
+            echo "Pushed to master"
+          else
+            git push origin main || (echo "Push failed; please check PAT permissions and remote branch" && exit 1)
+          fi
