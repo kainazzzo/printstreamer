@@ -46,11 +46,24 @@ jobs:
           git -C "$TMPDIR" init
         fi
 
-        echo "Syncing docs/ -> wiki"
-        # cd into the wiki clone and rsync from the repository workspace into it.
-        # Exclude .git so rsync doesn't remove git metadata (avoid 'not a git repository').
+        echo "Preparing docs copy and rewriting repo-specific links for wiki"
+        # Create a temporary copy of docs to rewrite links without modifying the repo
+        TMPDOCS=$(mktemp -d)
+        rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
+
+        # Rewrite links that point to the repo's docs/ paths into wiki-relative links.
+        # Examples handled:
+        #  - (docs/Path/File.md) -> (Path/File)
+        #  - (/docs/Path/File.md) -> (Path/File)
+        #  - (https://github.com/OWNER/REPO/blob/main/docs/Path/File.md) -> (Path/File)
+        find "$TMPDOCS" -type f -name '*.md' -print0 | xargs -0 sed -E -i \
+          -e "s!\((/?docs/([^)]+)\.md)\)!(\2)!g" \
+          -e "s!\((https://github\.com/[^/]+/[^/]+/blob/[^/]+/docs/([^)]+)\.md)\)!(\2)!g"
+
+        echo "Syncing rewritten docs -> wiki"
+        # cd into the wiki clone and rsync from the rewritten docs copy into it.
         cd "$TMPDIR"
-        rsync -a --delete --exclude='.git' "$WORKDIR/docs/" .
+        rsync -a --delete --exclude='.git' "$TMPDOCS/" .
 
         # Ensure we have a branch to push to (wiki repos commonly use master)
         if ! git rev-parse --verify --quiet master >/dev/null; then
