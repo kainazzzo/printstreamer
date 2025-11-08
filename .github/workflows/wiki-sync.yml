@@ -37,12 +37,14 @@ jobs:
           git config --global user.name "$GH_NAME"
           WORKDIR=$(pwd)
 
-          TMPDIR=$(mktemp -d)
-          TMPDOCS="$TMPDIR/docs_copy"
+          TMPROOT=$(mktemp -d)
+          TMPWIKI="$TMPROOT/wiki"
+          TMPDOCS="$TMPROOT/docs_copy"
           mkdir -p "$TMPDOCS"
 
-          echo "Cloning wiki into $TMPDIR"
+          echo "Cloning wiki into $TMPWIKI"
           declare -a CANDIDATES
+          LAST_URL=""
           if [ -n "${GH_PAT-}" ]; then
             CANDIDATES+=("https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git")
           else
@@ -51,7 +53,8 @@ jobs:
           CLONED=0
           for url in "${CANDIDATES[@]}"; do
             echo "Trying: $url"
-            if git clone --depth 1 "$url" "$TMPDIR" >/dev/null 2>&1; then
+            LAST_URL="$url"
+            if git clone --depth 1 "$url" "$TMPWIKI" >/dev/null 2>&1; then
               echo "Cloned wiki from $url"
               CLONED=1
               break
@@ -61,8 +64,14 @@ jobs:
           done
           if [ "$CLONED" -ne 1 ]; then
             echo "Warning: could not clone wiki (wiki may not be enabled or authentication failed)." >&2
-            echo "Proceeding with empty wiki clone at $TMPDIR so we can still compare file lists." >&2
-            mkdir -p "$TMPDIR"
+            echo "Proceeding with a local placeholder repo at $TMPWIKI so we can still stage docs." >&2
+            mkdir -p "$TMPWIKI"
+            git -C "$TMPWIKI" init >/dev/null
+            git -C "$TMPWIKI" checkout -b master >/dev/null 2>&1 || git -C "$TMPWIKI" checkout master >/dev/null 2>&1 || true
+            if [ -n "$LAST_URL" ]; then
+              git -C "$TMPWIKI" remote remove origin >/dev/null 2>&1 || true
+              git -C "$TMPWIKI" remote add origin "$LAST_URL" || true
+            fi
           fi
 
           # Copy docs into a temp folder and rewrite simple docs/ prefixes in links
@@ -92,7 +101,7 @@ jobs:
           PY
 
           echo "Syncing rewritten docs -> wiki"
-          cd "$TMPDIR"
+          cd "$TMPWIKI"
           rsync -a --delete --exclude='.git' "$TMPDOCS/" .
 
           if ! git rev-parse --verify --quiet master >/dev/null; then
