@@ -78,24 +78,27 @@ jobs:
           rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
 
           # Rewrite patterns like (docs/path/file.md) or (/docs/path/file.md) or blob URLs ending with /docs/...
-          # Keep .md extensions in links since wiki files retain them
+          # Strip .md extensions from all links since wiki auto-renders markdown
           # Use a small Python script to do atomic in-place edits to avoid sed quoting/portability issues
           TMPDOCS="$TMPDOCS" python3 - <<'PY'
           import os, re, pathlib, tempfile
 
           root = pathlib.Path(os.environ['TMPDOCS'])
-          # Remove docs/ prefix but KEEP the .md extension
-          pat_blob = re.compile(r"\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)#]+\.md)(#?[^)]*)\)")
-          # Remove ./docs/ prefix  
-          pat_dot = re.compile(r"\(\./docs/([^\)]+)\)")
+          # Remove docs/ prefix AND .md extension in one pass
+          pat_docs_md = re.compile(r"\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)#]+?)\.md(#?[^)]*)\)")
+          # Remove ./docs/ prefix and strip .md
+          pat_dot_md = re.compile(r"\(\./docs/([^\)#]+?)\.md(#?[^)]*)\)")
+          # Strip .md from any remaining link (archive/FILE.md -> archive/FILE)
+          pat_md = re.compile(r"\(([^:#)]+?)\.md(#?[^)]*)\)")
 
           for p in root.rglob('*.md'):
             try:
               text = p.read_text(encoding='utf-8')
             except Exception:
               continue
-            new = pat_blob.sub(r"(\1\2)", text)
-            new = pat_dot.sub(r"(\1)", new)
+            new = pat_docs_md.sub(r"(\1\2)", text)
+            new = pat_dot_md.sub(r"(\1\2)", new)
+            new = pat_md.sub(r"(\1\2)", new)
             if new != text:
               fd, tmp = tempfile.mkstemp(dir=str(p.parent))
               with os.fdopen(fd, 'w', encoding='utf-8') as f:
