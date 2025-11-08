@@ -36,34 +36,21 @@ jobs:
         git config --global user.email "$GH_MAIL"
         git config --global user.name "$GH_NAME"
 
-        WIKI_URL="https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git"
-        TMPDIR=$(mktemp -d)
-        echo "Cloning wiki into $TMPDIR"
+  WIKI_URL="https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git"
+  WORKDIR=$(pwd)
+  TMPDIR=$(mktemp -d)
+  echo "Cloning wiki into $TMPDIR"
         if ! git clone "$WIKI_URL" "$TMPDIR"; then
-          echo "Could not clone wiki repo. Trying to enable wiki via GitHub API and retry..."
-          # Try to enable the wiki feature for the repository (requires PAT with repo scope)
-          ENABLE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
-            -H "Authorization: token ${GH_PAT}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${REPO}" \
-            -d '{"has_wiki":true}') || ENABLE_STATUS=0
-
-          if [ "$ENABLE_STATUS" = "200" ] || [ "$ENABLE_STATUS" = "201" ] || [ "$ENABLE_STATUS" = "204" ]; then
-            echo "Enabled wiki (HTTP $ENABLE_STATUS), retrying clone..."
-            if ! git clone "$WIKI_URL" "$TMPDIR"; then
-              echo "Clone still failed after enabling wiki. Aborting."
-              exit 1
-            fi
-          else
-            echo "Failed to enable wiki (HTTP $ENABLE_STATUS). Aborting. Check that GH_PAT has repo permissions and that the repository exists and you have admin access."
-            exit 1
-          fi
+          echo "Could not clone wiki repo — initializing empty repo at $TMPDIR"
+          mkdir -p "$TMPDIR"
+          git -C "$TMPDIR" init
         fi
 
-        echo "Syncing docs/ -> wiki"
-        rsync -a --delete docs/ "$TMPDIR/"
-
-        cd "$TMPDIR"
+  echo "Syncing docs/ -> wiki"
+  # cd into the wiki clone and rsync from the repository workspace into it.
+  # Exclude .git so rsync doesn't remove git metadata (avoid 'not a git repository').
+  cd "$TMPDIR"
+  rsync -a --delete --exclude='.git' "$WORKDIR/docs/" .
         # Ensure we have a branch to push to (wiki repos commonly use master)
         if ! git rev-parse --verify --quiet master >/dev/null; then
           git checkout -b master || true
