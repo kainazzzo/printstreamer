@@ -25,4 +25,5 @@ jobs:
         GH_PAT: ${{ secrets.GITHUB_TOKEN }}
         GH_MAIL: github-actions[bot]@users.noreply.github.com
         GH_NAME: github-actions[bot]
+        REPO: ${{ github.repository }}
         WIKI_PUSH_MESSAGE: "Sync documentation from main repository [skip ci]"
