@@ -78,13 +78,18 @@ jobs:
           rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
 
           # Rewrite patterns like (docs/path/file.md) or (/docs/path/file.md) or blob URLs ending with /docs/...
+          # Also strip .md extensions from all links since wiki pages display without extension
           # Use a small Python script to do atomic in-place edits to avoid sed quoting/portability issues
           TMPDOCS="$TMPDOCS" python3 - <<'PY'
           import os, re, pathlib, tempfile
 
           root = pathlib.Path(os.environ['TMPDOCS'])
+          # Remove docs/ prefix and blob URLs containing docs/
           pat_blob = re.compile(r"\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)#]+)(#?[^)]*)\)")
+          # Remove ./docs/ prefix
           pat_dot = re.compile(r"\(\./docs/([^\)]+)\)")
+          # Strip .md extension from all wiki-relative links (but preserve anchors)
+          pat_md = re.compile(r"\(([^:#)]+)\.md(#?[^)]*)\)")
 
           for p in root.rglob('*.md'):
             try:
@@ -93,6 +98,7 @@ jobs:
               continue
             new = pat_blob.sub(r"(\1\2)", text)
             new = pat_dot.sub(r"(\1)", new)
+            new = pat_md.sub(r"(\1\2)", new)
             if new != text:
               fd, tmp = tempfile.mkstemp(dir=str(p.parent))
               with os.fdopen(fd, 'w', encoding='utf-8') as f:
