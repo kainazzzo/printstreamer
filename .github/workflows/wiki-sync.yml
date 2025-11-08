@@ -68,11 +68,28 @@ jobs:
           # Copy docs into a temp folder and rewrite simple docs/ prefixes in links
           rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
 
-          # Rewrite patterns like (docs/path/file.md) or (/docs/path/file.md) or blob URLs ending with /docs/...
-          # This sed attempts to capture the common cases and remove the leading docs/ path while preserving anchors
-          find "$TMPDOCS" -type f -name '*.md' -print0 | xargs -0 sed -Ei \
-            -e "s#\((https?://[^)]+/blob/[^/]+/)?/?docs/([^\)\#]+)(#?[^)]*)\)#(\2\3)#g" \
-            -e "s#\(\./docs/([^\)]+)\)#(\1)#g" || true
+      # Rewrite patterns like (docs/path/file.md) or (/docs/path/file.md) or blob URLs ending with /docs/...
+      # Use a small Python script to do atomic in-place edits to avoid sed quoting/portability issues
+      python3 - <<'PY'
+import os, re, pathlib, tempfile
+
+root = pathlib.Path(os.environ['TMPDOCS'])
+pat_blob = re.compile(r"\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)#]+)(#?[^)]*)\)")
+pat_dot = re.compile(r"\(\./docs/([^\)]+)\)")
+
+for p in root.rglob('*.md'):
+  try:
+    text = p.read_text(encoding='utf-8')
+  except Exception:
+    continue
+  new = pat_blob.sub(r"(\1\2)", text)
+  new = pat_dot.sub(r"(\1)", new)
+  if new != text:
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent))
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+      f.write(new)
+    os.replace(tmp, p)
+PY
 
           echo "Syncing rewritten docs -> wiki"
           cd "$TMPDIR"
