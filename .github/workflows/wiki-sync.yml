@@ -56,9 +56,12 @@ jobs:
         #  - (docs/Path/File.md) -> (Path/File)
         #  - (/docs/Path/File.md) -> (Path/File)
         #  - (https://github.com/OWNER/REPO/blob/main/docs/Path/File.md) -> (Path/File)
-        find "$TMPDOCS" -type f -name '*.md' -print0 | xargs -0 sed -E -i \
-          -e "s!\((/?docs/([^)]+)\.md)\)!(\2)!g" \
-          -e "s!\((https://github\.com/[^/]+/[^/]+/blob/[^/]+/docs/([^)]+)\.md)\)!(\2)!g"
+        # More robust link rewriting using Perl to handle anchors and blob URLs.
+        find "$TMPDOCS" -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
+          perl -0777 -pe '
+            s{\((?:/?docs/|https://github\.com/[^/]+/[^/]+/blob/[^/]+/docs/)([^)#]+)\.md(#?[^)]*)\)}{(\1\2)}g;
+          ' -i "$file"
+        done
 
         echo "Syncing rewritten docs -> wiki"
         # cd into the wiki clone and rsync from the rewritten docs copy into it.
