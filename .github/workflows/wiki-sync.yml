@@ -59,8 +59,20 @@ jobs:
 
         # Copy docs to temp and rewrite links that point to docs/ or GitHub blob URLs
         rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
-        find "$TMPDOCS" -type f -name '*.md' -print0 | \
-          xargs -0 perl -0777 -pi -e 's#\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)#]+)(#?[^)]*)\)#(\1\2)#g;'
+        # Use a small Python script per-file to avoid complex shell quoting issues with regex
+        find "$TMPDOCS" -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
+          python3 - <<'PY' "$file"
+import sys, re
+p = re.compile(r'\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)\#]+)(#?[^)]*)\)')
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as fh:
+    s = fh.read()
+s2 = p.sub(r'(\1\2)', s)
+if s2 != s:
+    with open(path, 'w', encoding='utf-8') as fh:
+        fh.write(s2)
+PY
+        done
 
         echo "Syncing rewritten docs -> wiki"
         cd "$TMPDIR"
