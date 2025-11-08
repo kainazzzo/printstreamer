@@ -33,12 +33,21 @@ jobs:
         fi
 
         git --version
+        git config --global user.email "$GH_MAIL"
+        git config --global user.name "$GH_NAME"
         WORKDIR=$(pwd)
+
+        # Temporary workspace for rewriting
+        TMPDIR=$(mktemp -d)
+        TMPDOCS="$TMPDIR/docs_copy"
+        mkdir -p "$TMPDOCS"
+        MAPFILE="$TMPDIR/wiki_map.tsv"
         : > "$MAPFILE"
+
+        # Build mapping of repo docs paths -> wiki targets
         find . -type f -name '*.md' -print0 | while IFS= read -r -d '' f; do
           rel="${f#./}"
           val="${rel%.md}"
-          # add specific mapping entries: full path, without docs/, without archive/, basename
           printf '%s\t%s\n' "$val" "$val" >> "$MAPFILE"
           no_docs="${val#docs/}"
           if [ "$no_docs" != "$val" ]; then printf '%s\t%s\n' "$no_docs" "$val" >> "$MAPFILE"; fi
@@ -48,26 +57,15 @@ jobs:
           if [ "$base" != "$val" ]; then printf '%s\t%s\n' "$base" "$val" >> "$MAPFILE"; fi
         done
 
-        # Now rewrite links in the temp docs using the mapping (preserve anchors)
-        find "$TMPDOCS" -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
-          perl -0777 -pe '
-            BEGIN{ open(M,"<'"$MAPFILE"'") or die $!; while(<M>){ chomp; ($k,$v)=split(/\t/, $_, 2); $m{$k} = $v unless exists $m{$k}; } }
-            s{\((?!https?://)([^)#]+?)(?:\.md)?(#?[^)]*)\)}{
-              my $t=$1; $t=~s{^\./}{};
-              my @c = ($t, $t=~s{^docs/}{}r, $t=~s{^archive/}{}r, $t=~s{.*/}{}r);
-              my $rep;
-              for my $cand (@c) { if (exists $m{$cand}) { $rep = $m{$cand}; last } }
-              defined $rep ? "(".$rep.$2.")" : "(".$1.$2.")";
-            }gsex;
-          ' -i "$file"
-        done
+        # Copy docs to temp and rewrite links that point to docs/ or GitHub blob URLs
+        rsync -a "$WORKDIR/docs/" "$TMPDOCS/"
+        find "$TMPDOCS" -type f -name '*.md' -print0 | \
+          xargs -0 perl -0777 -pi -e 's#\((?:https?://[^)]+/blob/[^/]+/)?/?docs/([^\)#]+)(#?[^)]*)\)#(\1\2)#g;'
 
         echo "Syncing rewritten docs -> wiki"
-        # cd into the wiki clone and rsync from the rewritten docs copy into it.
         cd "$TMPDIR"
         rsync -a --delete --exclude='.git' "$TMPDOCS/" .
 
-        # Ensure we have a branch to push to (wiki repos commonly use master)
         if ! git rev-parse --verify --quiet master >/dev/null; then
           git checkout -b master || true
         else
@@ -82,7 +80,6 @@ jobs:
 
         git commit -m "Sync docs from repo [skip ci]"
         echo "Pushing to wiki"
-        # Try master then main
         if git push origin master; then
           echo "Pushed to master"
         else
