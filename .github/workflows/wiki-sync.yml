@@ -11,7 +11,7 @@ jobs:
   sync-wiki:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pages: write
     steps:
     - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
       uses: Andrew-Chen-Wang/github-wiki-action@v1
       with:
         path: docs/
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.GH_PAT }}
       env:
         GH_MAIL: github-actions[bot]@users.noreply.github.com
         GH_NAME: github-actions[bot]
