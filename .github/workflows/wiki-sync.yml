@@ -23,6 +23,6 @@ jobs:
       env:
         WIKI_DIR: docs/
         GH_PAT: ${{ secrets.GITHUB_TOKEN }}
-        ACTION_MAIL: github-actions[bot]@users.noreply.github.com
-        ACTION_NAME: github-actions[bot]
+        GH_MAIL: github-actions[bot]@users.noreply.github.com
+        GH_NAME: github-actions[bot]
         WIKI_PUSH_MESSAGE: "Sync documentation from main repository [skip ci]"
