@@ -56,16 +56,35 @@ jobs:
         #  - (docs/Path/File.md) -> (Path/File)
         #  - (/docs/Path/File.md) -> (Path/File)
         #  - (https://github.com/OWNER/REPO/blob/main/docs/Path/File.md) -> (Path/File)
-        # More robust link rewriting using Perl to handle anchors and blob URLs.
+        # Build a map of actual wiki pages and rewrite links to the exact wiki targets.
+        # This prevents 404s when the wiki stores pages with different paths/names.
+        cd "$TMPDIR"
+        MAPFILE="$TMPDIR/wiki_map.tsv"
+        : > "$MAPFILE"
+        find . -type f -name '*.md' -print0 | while IFS= read -r -d '' f; do
+          rel="${f#./}"
+          val="${rel%.md}"
+          # add specific mapping entries: full path, without docs/, without archive/, basename
+          printf '%s\t%s\n' "$val" "$val" >> "$MAPFILE"
+          no_docs="${val#docs/}"
+          if [ "$no_docs" != "$val" ]; then printf '%s\t%s\n' "$no_docs" "$val" >> "$MAPFILE"; fi
+          no_arch="${val#archive/}"
+          if [ "$no_arch" != "$val" ]; then printf '%s\t%s\n' "$no_arch" "$val" >> "$MAPFILE"; fi
+          base="${val##*/}"
+          if [ "$base" != "$val" ]; then printf '%s\t%s\n' "$base" "$val" >> "$MAPFILE"; fi
+        done
+
+        # Now rewrite links in the temp docs using the mapping (preserve anchors)
         find "$TMPDOCS" -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
           perl -0777 -pe '
-            # Strip docs/ and blob/.../docs/ prefixes and remove .md while preserving anchors
-            s{\((?:/?docs/|https://github\.com/[^/]+/[^/]+/blob/[^/]+/docs/)([^)#]+)\.md(#?[^)]*)\)}{(\1\2)}g;
-            # Also convert any repo-relative markdown links like (archive/FILE.md) or (features/..../X.md)
-            # but do not touch fully qualified URLs (http:// or https://)
-            s{\((?!https?://)([^)#]+?)\.md(#?[^)]*)\)}{(\1\2)}g;
-            # Strip a leading 'archive/' prefix from links (archive/NAME -> NAME)
-            s{\((?:archive/)([^)#]+)\)}{(\1)}g;
+            BEGIN{ open(M,"<'"$MAPFILE"'") or die $!; while(<M>){ chomp; ($k,$v)=split(/\t/, $_, 2); $m{$k} = $v unless exists $m{$k}; } }
+            s{\((?!https?://)([^)#]+?)(?:\.md)?(#?[^)]*)\)}{
+              my $t=$1; $t=~s{^\./}{};
+              my @c = ($t, $t=~s{^docs/}{}r, $t=~s{^archive/}{}r, $t=~s{.*/}{}r);
+              my $rep;
+              for my $cand (@c) { if (exists $m{$cand}) { $rep = $m{$cand}; last } }
+              defined $rep ? "(".$rep.$2.")" : "(".$1.$2.")";
+            }gsex;
           ' -i "$file"
         done
 
