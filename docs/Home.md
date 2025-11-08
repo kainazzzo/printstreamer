@@ -5,30 +5,29 @@ Welcome to the PrintStreamer project documentation! This wiki contains comprehen
 ## 📚 Documentation Index
 
 ### 🚀 Getting Started
-- [Quick Start Guide](QUICKSTART.md) - Get up and running quickly
-- [Project Summary](PROJECT_SUMMARY.md) - High-level project overview
-- [Architecture Overview](ARCHITECTURE.md) - System architecture and design
+- [Quick Start Guide](archive/QUICKSTART.md) - Get up and running quickly
+- [Project Summary](features/documentation/PROJECT_SUMMARY.md) - High-level project overview
+- [Architecture Overview](features/architecture/ARCHITECTURE.md) - System architecture and design
 
 ### 🔧 Technical Documentation
-- [Data Flow Architecture](DATAFLOW_ARCHITECTURE.md) - How data flows through the system
-- [YouTube Integration](YOUTUBE_ARCHITECTURE_ANALYSIS.md) - YouTube API integration details
-- [API Endpoints](ENDPOINT_REFERENCE.md) - Complete API reference
-- [Docker Deployment](DOCKER_RELEASE.md) - Container deployment guide
+- [Data Flow Architecture](features/architecture/data_flow/DATAFLOW_ARCHITECTURE.md) - How data flows through the system
+- [YouTube Integration](features/architecture/YOUTUBE_ARCHITECTURE_ANALYSIS.md) - YouTube API integration details
+- [API Endpoints](archive/ENDPOINT_REFERENCE.md) - Complete API reference
+- [Docker Deployment](features/documentation/DOCKER_RELEASE.md) - Container deployment guide
 
 ### 🎯 Features
-- [Timelapse Management](timelapse/README.md) - Timelapse recording features
-- [Printer Control](printer_control/README.md) - Printer control integration
-- [YouTube Polling](youtube_polling/README.md) - YouTube API polling system
-- [Audio Broadcasting](audio/README.md) - Audio streaming capabilities
+- [Printer Control](features/printer_control/PRINTER_CONTROL_COMPLETE_GUIDE.md) - Printer control integration
+- [YouTube Polling](features/youtube_polling/YOUTUBE_POLLING_DESIGN.md) - YouTube API polling system
+- [Audio Broadcasting](features/documentation/STREAMER_EXAMPLES.md) - Audio streaming capabilities
 
 ### 🔄 Development
-- [Implementation Plans](IMPLEMENTATION_PLAN.md) - Development roadmap
-- [Refactoring Notes](REFACTORING_COMPLETE.md) - Code refactoring documentation
-- [Validation Reports](VALIDATION_REPORT.md) - Testing and validation results
+- [Implementation Plans](features/architecture/data_flow/IMPLEMENTATION_PLAN.md) - Development roadmap
+- [Refactoring Notes](archive/REFACTORING_COMPLETE.md) - Code refactoring documentation
+- [Validation Reports](archive/VALIDATION_REPORT.md) - Testing and validation results
 
 ### 🐛 Troubleshooting
-- [Fixes and Patches](fixes/README.md) - Bug fixes and patches
-- [Documentation Audit](DOCUMENTATION_AUDIT.md) - Documentation completeness check
+- [Bug Fixes](features/fixes/README.md) - Bug fixes and patches
+- [Documentation Audit](archive/DOCUMENTATION_AUDIT.md) - Documentation completeness check
 
 ---
 
