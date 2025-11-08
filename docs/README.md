@@ -12,13 +12,15 @@ Documentation is organized in several locations:
 
 ## 🔄 Wiki Synchronization
 
-### Option 1: Automated (Recommended)
+### Automated (GitHub Actions)
 
 A GitHub Actions workflow automatically syncs documentation to the wiki when markdown files are changed:
 
-1. **Setup**: The workflow file `.github/workflows/wiki-sync.yml` is already created
-2. **Trigger**: Automatically runs on pushes to `main` branch when `.md` files change
-3. **Requirements**: Add `GH_TOKEN` secret to your repository settings
+1. **Enable Wiki**: Repository Settings → General → Features → Wiki (recommended)
+2. **Workflow file**: `.github/workflows/wiki-sync.yml` - Already configured
+3. **Triggers**: Automatically on pushes to `main` when `.md` files change
+4. **Configuration**: Uses `GITHUB_TOKEN` with proper git user configuration
+5. **Permissions**: Includes `contents: read` and `pages: write` permissions
 
 ### Option 2: Manual Sync
 
@@ -80,4 +82,4 @@ Just commit and push the workflow files - the wiki will be created and populated
 
 ---
 
-*This documentation is part of the automated wiki sync system.*
+*This documentation is part of the automated wiki sync system.*# Test change for wiki sync
