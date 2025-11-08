@@ -64,6 +64,8 @@ jobs:
             # Also convert any repo-relative markdown links like (archive/FILE.md) or (features/..../X.md)
             # but do not touch fully qualified URLs (http:// or https://)
             s{\((?!https?://)([^)#]+?)\.md(#?[^)]*)\)}{(\1\2)}g;
+            # Strip a leading 'archive/' prefix from links (archive/NAME -> NAME)
+            s{\((?:archive/)([^)#]+)\)}{(\1)}g;
           ' -i "$file"
         done
 
