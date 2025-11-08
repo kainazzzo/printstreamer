@@ -79,6 +79,7 @@ jobs:
 
           # Rewrite patterns like (docs/path/file.md) or (/docs/path/file.md) or blob URLs ending with /docs/...
           # Strip .md extensions from all links since wiki auto-renders markdown
+          # Convert nested paths to dash-separated flat names (archive/FILE.md -> archive-FILE)
           # Use a simple Python script to do atomic in-place edits to avoid sed quoting/portability issues
           TMPDOCS="$TMPDOCS" python3 - <<'PY'
           import os, re, pathlib, tempfile
@@ -94,8 +95,17 @@ jobs:
             # Step 1: Remove docs/ prefix (handles blob URLs and ./docs/ patterns)
             new = re.sub(r'\((?:https?://[^)]+/blob/[^/]+/)?\.?/?docs/', '(', text)
             
-            # Step 2: Strip .md before ) or # (all markdown links)
-            new = re.sub(r'\.md(#[^)]*\)|\))', r'\1', new)
+            # Step 2: Replace all remaining / with - inside link targets before the anchor or )
+            # Match (path/to/file.md#anchor) -> (path-to-file#anchor)
+            # Match (path/to/file.md) -> (path-to-file)
+            def flatten_link(match):
+              link = match.group(1)
+              anchor = match.group(2) if match.group(2) else ''
+              # Replace all / with - and remove .md
+              link = link.replace('/', '-').replace('.md', '')
+              return f'({link}{anchor})'
+            
+            new = re.sub(r'\(([^)#]+\.md?)(#[^)]*)?\)', flatten_link, new)
             
             if new != text:
               fd, tmp = tempfile.mkstemp(dir=str(p.parent))
@@ -112,7 +122,24 @@ jobs:
               rm -rf "$item"
             fi
           done
-          rsync -a --exclude='.git' "$TMPDOCS/" .
+          
+          # Flatten directory structure: rename nested files to use dash separator
+          # e.g., archive/QUICKSTART.md -> archive-QUICKSTART.md (at root)
+          # This is necessary because GitHub wiki doesn't support nested URLs
+          cd "$TMPDOCS"
+          find . -type f -name "*.md" | while read file; do
+            # Get the relative path without leading ./
+            relpath="${file#./}"
+            if [[ "$relpath" == *"/"* ]]; then
+              # Has directory component - flatten it
+              newname=$(echo "$relpath" | sed 's/\//\-/g')
+              cp "$file" "$newname"
+              echo "Flattened: $relpath -> $newname"
+            fi
+          done
+          
+          cd "$TMPWIKI"
+          rsync -a --exclude='.git' "$TMPDOCS"/*.md .
 
           if ! git rev-parse --verify --quiet master >/dev/null; then
             git checkout -b master || true
