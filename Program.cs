@@ -298,6 +298,7 @@ if (serveEnabled)
 	// 3. YouTube Live Broadcast - OAuth creates broadcast, restarts ffmpeg to add RTMP output
 
 	app.MapGet("/stream", async (HttpContext ctx) => await webcamManager.HandleStreamRequest(ctx));
+	app.MapGet("/stream/source", async (HttpContext ctx) => await webcamManager.HandleStreamRequest(ctx));
 	// Overlay MJPEG endpoint: prefer the new IStreamer-based OverlayMjpegStreamer (per-request)
 	// Fall back to the legacy OverlayMjpegManager if needed (kept registered for compatibility)
 	var overlayTextSvc = app.Services.GetRequiredService<PrintStreamer.Overlay.OverlayTextService>();
@@ -322,6 +323,27 @@ if (serveEnabled)
 			{
 				ctx.Response.StatusCode = 500;
 				await ctx.Response.WriteAsync("Overlay streamer error: " + ex.Message);
+			}
+		}
+	});
+
+	// Mix video and audio streams into a single H.264+AAC output
+	app.MapGet("/stream/mix", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var config = ctx.RequestServices.GetRequiredService<IConfiguration>();
+			var logger = ctx.RequestServices.GetRequiredService<ILogger<PrintStreamer.Streamers.MixStreamer>>();
+			var streamer = new PrintStreamer.Streamers.MixStreamer(config, ctx, logger);
+			await streamer.StartAsync(ctx.RequestAborted);
+			try { streamer.Dispose(); } catch { }
+		}
+		catch (Exception ex)
+		{
+			if (!ctx.Response.HasStarted)
+			{
+				ctx.Response.StatusCode = 500;
+				await ctx.Response.WriteAsync("Mix streamer error: " + ex.Message);
 			}
 		}
 	});
@@ -1882,12 +1904,47 @@ if (serveEnabled)
 		}
 	});
 
-		// Audio broadcast diagnostics
-		app.MapGet("/api/audio/broadcast/status", (HttpContext ctx) =>
+	// Audio broadcast diagnostics
+	app.MapGet("/api/audio/broadcast/status", (HttpContext ctx) =>
+	{
+		var b = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+		return Results.Json(b.GetStatus());
+	});
+
+	// Audio stream endpoint for data flow pipeline (/stream/audio)
+	// Mirrors /api/audio/stream for consistent endpoint naming
+	app.MapGet("/stream/audio", async (HttpContext ctx) =>
+	{
+		var cfg = ctx.RequestServices.GetRequiredService<IConfiguration>();
+		var enabled = cfg.GetValue<bool?>("Audio:Enabled") ?? true;
+		if (!enabled)
 		{
-			var b = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
-			return Results.Json(b.GetStatus());
-		});
+			ctx.Response.StatusCode = 404;
+			await ctx.Response.WriteAsync("Audio stream disabled");
+			return;
+		}
+
+		ctx.Response.StatusCode = 200;
+		ctx.Response.Headers["Content-Type"] = "audio/mpeg";
+		ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+		ctx.Response.Headers["Pragma"] = "no-cache";
+		await ctx.Response.Body.FlushAsync();
+
+		var broadcaster = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+		try
+		{
+			await foreach (var chunk in broadcaster.Stream(ctx.RequestAborted))
+			{
+				await ctx.Response.Body.WriteAsync(chunk, 0, chunk.Length, ctx.RequestAborted);
+			}
+		}
+		catch (OperationCanceledException) { }
+		catch (Exception ex)
+		{
+			var logger = ctx.RequestServices.GetRequiredService<ILogger<Program>>();
+			logger.LogError(ex, "Client stream error");
+		}
+	});
 
 		// YouTube polling manager diagnostics
 		app.MapGet("/api/youtube/polling/status", (HttpContext ctx) =>
@@ -1963,6 +2020,20 @@ if (serveEnabled)
 			ServeUnknownFileTypes = false
 		});
 	}
+
+	// Debug endpoint for pipeline health check
+	app.MapGet("/api/debug/pipeline", (HttpContext ctx) =>
+	{
+		var sources = new Dictionary<string, string>
+		{
+			["stage_1_source"] = "http://127.0.0.1:8080/stream/source",
+			["stage_2_overlay"] = "http://127.0.0.1:8080/stream/overlay",
+			["stage_3_audio"] = "http://127.0.0.1:8080/stream/audio",
+			["stage_4_mix"] = "http://127.0.0.1:8080/stream/mix",
+			["description"] = "Data flow pipeline endpoints (Stage 1→2→3→4→YouTube RTMP)"
+		};
+		return Results.Json(sources);
+	});
 
 }
 

@@ -245,8 +245,11 @@ namespace PrintStreamer.Services
             try
             {
                 if (ctx.RequestAborted.IsCancellationRequested) return;
-                ctx.Response.StatusCode = 200;
-                ctx.Response.ContentType = "multipart/x-mixed-replace; boundary=frame";
+                if (!ctx.Response.HasStarted)
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "multipart/x-mixed-replace; boundary=frame";
+                }
 
                 var blackBytes = _blackJpeg;
                 var boundary = "--frame\r\n";

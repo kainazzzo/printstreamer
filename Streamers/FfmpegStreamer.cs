@@ -175,13 +175,53 @@ namespace PrintStreamer.Streamers
 			}
 		}
 
-		private static string BuildFfmpegArgs(string source, string? rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? audioUrl)
+	private static string BuildFfmpegArgs(string source, string? rtmpUrl, int fps, int bitrateKbps, FfmpegOverlayOptions? overlay, string? audioUrl)
+	{
+		// Check if source is the pre-mixed /stream/mix endpoint which already contains video+audio
+		var isPreMixed = source.Contains("/stream/mix", StringComparison.OrdinalIgnoreCase);
+		
+		if (isPreMixed)
 		{
-			// Basic ffmpeg args that should work for many MJPEG/http or v4l2 inputs.
-			// -re to read input at native frame rate
-			// Video: libx264, preset ultrafast for low-latency encoding
+			// Source is already mixed video+audio from MixStreamer
+			// Just read it and optionally re-encode or pass-through for RTMP output
+			var mixSource = source;
+			var mixReconnectArgs = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2";
+			var mixBaseFlags = $"-hide_banner -nostats -loglevel error -nostdin -err_detect ignore_err";
+			
+			// Input: already mixed MP4 with video+audio
+			var mixInputArgs = $"{mixBaseFlags} {mixReconnectArgs} -i \"{mixSource}\"";
+			
+			// Video encoding - pass through or light re-encode
+			int mixEffectiveFps = fps <= 0 ? 30 : fps;
+			var mixGop = Math.Max(2, (mixEffectiveFps > 0 ? mixEffectiveFps * 2 : 60));
+			var mixRArg = mixEffectiveFps > 0 ? $"-r {mixEffectiveFps} " : string.Empty;
+			var mixProfile = "-profile:v high -level 4.1";
+			var mixVideoEnc = $"-c:v libx264 -preset ultrafast -tune zerolatency {mixProfile} -pix_fmt yuv420p {mixRArg}-g {mixGop} -b:v {bitrateKbps}k -maxrate {bitrateKbps}k -bufsize {bitrateKbps * 2}k";
+			
+			// Audio encoding - already AAC, just encode/pass
+			var mixAudioEnc = "-c:a aac -b:a 128k -ar 44100";
+			
+			// Build output
+			var mixCmd = new System.Text.StringBuilder();
+			mixCmd.Append(mixInputArgs);
+			mixCmd.Append(" -avoid_negative_ts make_zero -fflags +genpts -vsync 1 ");
+			
+			if (!string.IsNullOrWhiteSpace(rtmpUrl))
+			{
+				// Output to RTMP for YouTube
+				var mixFlvFlags = "-flvflags no_duration_filesize";
+				mixCmd.Append($"-map 0:v -map 0:a {mixVideoEnc} {mixAudioEnc} {mixFlvFlags} -f flv -rtmp_live live \"{rtmpUrl}\"");
+				return mixCmd.ToString();
+			}
+			else
+			{
+				// No output
+				mixCmd.Append($"-map 0:v -map 0:a {mixVideoEnc} {mixAudioEnc} -f null -");
+				return mixCmd.ToString();
+			}
+		}
 
-			// If source looks like a v4l2 device on Linux, pass -f v4l2
+		// Original logic for non-mixed sources (backward compatibility)			// If source looks like a v4l2 device on Linux, pass -f v4l2
 			var srcArg = source;
 			var inputFormat = "";
 			if (source.StartsWith("/dev/") || source.StartsWith("/dev\\"))

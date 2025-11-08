@@ -85,10 +85,10 @@ namespace PrintStreamer.Services
             var serveEnabled = _config.GetValue<bool?>("Serve:Enabled") ?? true;
             if (serveEnabled)
             {
-                // Use the overlay MJPEG endpoint as the ffmpeg source so ffmpeg pulls the composited
-                // overlay over HTTP and can mix audio separately (YouTube ingestion will work as before).
-                source = "http://127.0.0.1:8080/stream/overlay";
-                _logger.LogInformation("[StreamService] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
+                // Use the pre-mixed /stream/mix endpoint which combines video+audio from the pipeline
+                // This allows FfmpegStreamer to simply read the mixed stream and broadcast to YouTube
+                source = "http://127.0.0.1:8080/stream/mix";
+                _logger.LogInformation("[StreamService] Using local mixed stream as ffmpeg source (http://127.0.0.1:8080/stream/mix)");
             }
 
             if (string.IsNullOrWhiteSpace(source))

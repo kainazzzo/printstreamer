@@ -36,20 +36,32 @@ namespace PrintStreamer.Streamers
             
             try { _overlayText.Start(); } catch { }
 
-            var source = _config.GetValue<string>("Stream:Source");
+            // Use local /stream/source endpoint instead of raw camera URL
+            // This allows the data flow pipeline to work correctly with stage isolation
+            var source = _config.GetValue<string>("Overlay:StreamSource") ?? 
+                        "http://127.0.0.1:8080/stream/source";
+
             if (string.IsNullOrWhiteSpace(source))
             {
                 _logger.LogError("[{ContextLabel}] Stream source not configured", contextLabel);
-                _ctx.Response.StatusCode = 500;
-                await _ctx.Response.WriteAsync("Stream source not configured", cancellationToken);
+                if (!_ctx.Response.HasStarted)
+                {
+                    _ctx.Response.StatusCode = 500;
+                    await _ctx.Response.WriteAsync("Stream source not configured", cancellationToken);
+                }
                 _exitTcs.TrySetResult(null);
                 return;
             }
 
+            _logger.LogInformation("[{ContextLabel}] Using video source: {Source}", contextLabel, source);
+
             // HTTP response headers
-            _ctx.Response.StatusCode = 200;
-            _ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
-            _ctx.Response.Headers["Pragma"] = "no-cache";
+            if (!_ctx.Response.HasStarted)
+            {
+                _ctx.Response.StatusCode = 200;
+                _ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+                _ctx.Response.Headers["Pragma"] = "no-cache";
+            }
             const string boundary = "frame";
             _ctx.Response.ContentType = $"multipart/x-mixed-replace; boundary={boundary}";
 
@@ -175,8 +187,16 @@ namespace PrintStreamer.Streamers
                 _logger.LogError(ex, "[{ContextLabel}] Pipeline error: {Message}", contextLabel, ex.Message);
                 if (!_ctx.Response.HasStarted)
                 {
-                    _ctx.Response.StatusCode = 502;
-                    await _ctx.Response.WriteAsync($"Overlay pipeline error: {ex.Message}", cancellationToken);
+                    try
+                    {
+                        _ctx.Response.StatusCode = 502;
+                        await _ctx.Response.WriteAsync($"Overlay pipeline error: {ex.Message}", cancellationToken);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Response headers already sent, can't change status code
+                        _logger.LogWarning("[{ContextLabel}] Could not set error status (response already started)", contextLabel);
+                    }
                 }
                 _exitTcs.TrySetException(ex);
             }
