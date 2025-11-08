@@ -70,8 +70,9 @@ Just commit and push the workflow files - the wiki will be created and populated
 - Make sure the wiki feature is enabled in repository settings
 
 **ACTION_MAIL ENV is missing:**
-- Fixed: The workflow now uses correct parameter names (`GH_MAIL`, `GH_NAME`, etc.)
-- The action expects specific environment variable names, not generic `with:` parameters
+- Fixed: The workflow now uses `ACTION_MAIL` and `ACTION_NAME` environment variables
+- The action's entrypoint script expects these specific environment variable names
+- Updated from `GH_MAIL`/`GH_NAME` to `ACTION_MAIL`/`ACTION_NAME`
 
 **Authentication issues:**
 - The `GITHUB_TOKEN` is automatically provided by GitHub Actions
