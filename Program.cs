@@ -348,6 +348,155 @@ if (serveEnabled)
 		}
 	});
 
+	// Helper function to capture single JPEG from a stream URL
+	async Task<bool> CaptureJpegFromStreamAsync(HttpContext ctx, string streamUrl, string name)
+	{
+		if (string.IsNullOrWhiteSpace(streamUrl))
+		{
+			ctx.Response.StatusCode = 503;
+			await ctx.Response.WriteAsync($"{name} source not available");
+			return false;
+		}
+
+		using var httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+		
+		try
+		{
+			// Try snapshot action first if it's an HTTP URL
+			if (Uri.TryCreate(streamUrl, UriKind.Absolute, out var srcUri))
+			{
+				var ub = new UriBuilder(srcUri);
+				var query = System.Web.HttpUtility.ParseQueryString(ub.Query);
+				query.Set("action", "snapshot");
+				ub.Query = query.ToString();
+				
+				try
+				{
+					using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, ub.Uri);
+					using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+					using var resp = await httpClient.SendAsync(req, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token);
+					if (resp.IsSuccessStatusCode)
+					{
+						var ct = resp.Content.Headers.ContentType?.MediaType ?? "image/jpeg";
+						if (ct.Contains("jpeg") || ct.Contains("jpg") || ct.Contains("image"))
+						{
+							var bytes = await resp.Content.ReadAsByteArrayAsync();
+							ctx.Response.StatusCode = 200;
+							ctx.Response.ContentType = "image/jpeg";
+							ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+							await ctx.Response.Body.WriteAsync(bytes, 0, bytes.Length, ctx.RequestAborted);
+							return true;
+						}
+					}
+				}
+				catch { /* fall through to MJPEG parse */ }
+			}
+
+			// Fallback: parse JPEG from MJPEG stream
+			using (var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, streamUrl))
+			using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6)))
+			using (var resp = await httpClient.SendAsync(req, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token))
+			{
+				resp.EnsureSuccessStatusCode();
+				using var s = await resp.Content.ReadAsStreamAsync(cts.Token);
+				
+				// Read JPEG from MJPEG stream by finding SOI (FFD8) and EOI (FFD9) markers
+				var buffer = new byte[64 * 1024];
+				using var ms = new System.IO.MemoryStream();
+				int bytesRead;
+				bool foundSoi = false;
+				int prev = -1;
+				
+				while ((bytesRead = await s.ReadAsync(buffer, 0, buffer.Length, cts.Token)) > 0)
+				{
+					for (int i = 0; i < bytesRead; i++)
+					{
+						var b = buffer[i];
+						// Check for SOI marker 0xFF 0xD8
+						if (!foundSoi && prev == 0xFF && b == 0xD8)
+						{
+							foundSoi = true;
+							ms.SetLength(0);
+							ms.WriteByte(0xFF);
+							ms.WriteByte(0xD8);
+							prev = -1;
+							continue;
+						}
+
+						if (foundSoi)
+						{
+							ms.WriteByte(b);
+							// Check for EOI marker 0xFF 0xD9
+							if (prev == 0xFF && b == 0xD9)
+							{
+								var frameBytes = ms.ToArray();
+								ctx.Response.StatusCode = 200;
+								ctx.Response.ContentType = "image/jpeg";
+								ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+								await ctx.Response.Body.WriteAsync(frameBytes, 0, frameBytes.Length, ctx.RequestAborted);
+								return true;
+							}
+						}
+
+						prev = b;
+					}
+				}
+			}
+
+			// Failed to get a frame
+			ctx.Response.StatusCode = 503;
+			await ctx.Response.WriteAsync($"Failed to capture frame from {name}");
+			return false;
+		}
+		catch (TimeoutException)
+		{
+			ctx.Response.StatusCode = 504;
+			await ctx.Response.WriteAsync("Capture timeout");
+			return false;
+		}
+		catch (Exception ex)
+		{
+			if (!ctx.Response.HasStarted)
+			{
+				ctx.Response.StatusCode = 502;
+				await ctx.Response.WriteAsync("Capture error: " + ex.Message);
+			}
+			return false;
+		}
+	}
+
+	// Stage 1: Single JPEG capture from raw source
+	app.MapGet("/stream/source/capture", async (HttpContext ctx) =>
+	{
+		try
+		{
+			var config = ctx.RequestServices.GetRequiredService<IConfiguration>();
+			var source = config.GetValue<string>("Stream:Source") ?? "";
+			await CaptureJpegFromStreamAsync(ctx, source, "stream source");
+		}
+		catch (OperationCanceledException) { }
+	});
+
+	// Stage 3: Single JPEG capture from overlayed stream
+	app.MapGet("/stream/overlay/capture", async (HttpContext ctx) =>
+	{
+		try
+		{
+			await CaptureJpegFromStreamAsync(ctx, "http://127.0.0.1:8080/stream/overlay", "overlay stream");
+		}
+		catch (OperationCanceledException) { }
+	});
+
+	// Stage 5: Single JPEG capture from mixed stream (video+audio)
+	app.MapGet("/stream/mix/capture", async (HttpContext ctx) =>
+	{
+		try
+		{
+			await CaptureJpegFromStreamAsync(ctx, "http://127.0.0.1:8080/stream/mix", "mix stream");
+		}
+		catch (OperationCanceledException) { }
+	});
+
 	// Serve the fallback black JPEG
 	app.MapGet("/fallback_black.jpg", async (HttpContext ctx) =>
 	{

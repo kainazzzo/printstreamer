@@ -424,25 +424,23 @@ namespace PrintStreamer.Timelapse
         if (_disposed || _activeSessions.IsEmpty)
             return;
 
-        var streamSource = _config.GetValue<string>("Stream:Source");
-        if (string.IsNullOrWhiteSpace(streamSource))
-            return;
-
+        // Use the /stream/source/capture endpoint to get frames from the pipeline
+        var captureEndpoint = "http://127.0.0.1:8080/stream/source/capture";
+        
         foreach (var session in _activeSessions.Values)
         {
-            await CaptureFrameForSessionAsync(session);
+            await CaptureFrameForSessionAsync(session, captureEndpoint);
         }
     }
 
-    private async Task CaptureFrameForSessionAsync(TimelapseSession session)
+    private async Task CaptureFrameForSessionAsync(TimelapseSession session, string captureEndpoint)
     {
         try
         {
-            var streamSource = _config.GetValue<string>("Stream:Source");
-            if (string.IsNullOrWhiteSpace(streamSource))
+            if (string.IsNullOrWhiteSpace(captureEndpoint))
                 return;
 
-            var frame = await FetchSingleJpegFrameAsync(streamSource, 10, CancellationToken.None);
+            var frame = await FetchSingleJpegFrameAsync(captureEndpoint, 10, CancellationToken.None);
             if (frame != null)
             {
                 await session.Service.SaveFrameAsync(frame, CancellationToken.None);

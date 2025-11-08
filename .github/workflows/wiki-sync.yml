@@ -1,0 +1,25 @@
+name: Sync Docs to Wiki
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.md'
+      - '.github/workflows/wiki-sync.yml'
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Sync to Wiki
+      uses: Andrew-Chen-Wang/github-wiki-action@v1
+      env:
+        WIKI_DIR: docs/
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        EXCLUDED_FILES: README.md

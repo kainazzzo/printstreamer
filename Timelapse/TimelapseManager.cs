@@ -500,19 +500,20 @@ namespace PrintStreamer.Timelapse
                 return;
             }
 
-            var streamSource = _config.GetValue<string>("Stream:Source");
-            if (string.IsNullOrWhiteSpace(streamSource))
+            // Use the /stream/source/capture endpoint to get frames from the pipeline
+            var captureEndpoint = "http://127.0.0.1:8080/stream/source/capture";
+            if (string.IsNullOrWhiteSpace(captureEndpoint))
             {
-                Console.WriteLine($"[TimelapseManager] No stream source configured; cannot capture frame for {session.Name}");
+                Console.WriteLine($"[TimelapseManager] Cannot capture frame for {session.Name}");
                 return;
             }
 
             if (_verboseLogs)
             {
-                Console.WriteLine($"[TimelapseManager] Fetching frame from: {streamSource}");
+                Console.WriteLine($"[TimelapseManager] Fetching frame from: {captureEndpoint}");
             }
 
-            var frame = await FetchSingleJpegFrameAsync(streamSource, 10, CancellationToken.None);
+            var frame = await FetchSingleJpegFrameAsync(captureEndpoint, 10, CancellationToken.None);
             if (frame != null)
             {
                 // Guard again right before saving in case stop flag flipped during fetch
