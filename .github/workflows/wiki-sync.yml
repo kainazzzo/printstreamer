@@ -23,3 +23,6 @@ jobs:
       with:
         path: docs/
         token: ${{ secrets.GITHUB_TOKEN }}
+      env:
+        GH_MAIL: github-actions[bot]@users.noreply.github.com
+        GH_NAME: github-actions[bot]
