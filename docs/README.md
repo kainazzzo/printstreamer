@@ -29,6 +29,7 @@ Use the provided script for manual synchronization:
 ./scripts/sync-wiki.sh
 ```
 
+
 **Requirements:**
 - GitHub CLI (`gh`) installed and authenticated
 - Push access to the repository
