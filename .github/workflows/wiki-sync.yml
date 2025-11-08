@@ -109,9 +109,12 @@ jobs:
           echo "Syncing rewritten docs -> wiki"
           cd "$TMPWIKI"
           # Remove all wiki content except .git so we get a clean sync from rewritten docs
-          find . -maxdepth 1 -type f -delete
-          find . -maxdepth 1 -type d ! -name '.git' -delete
-          rsync -a --delete --exclude='.git' "$TMPDOCS/" .
+          for item in *; do
+            if [ "$item" != ".git" ]; then
+              rm -rf "$item"
+            fi
+          done
+          rsync -a --exclude='.git' "$TMPDOCS/" .
 
           if ! git rev-parse --verify --quiet master >/dev/null; then
             git checkout -b master || true
