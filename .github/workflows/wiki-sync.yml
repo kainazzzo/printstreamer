@@ -36,21 +36,22 @@ jobs:
         git config --global user.email "$GH_MAIL"
         git config --global user.name "$GH_NAME"
 
-  WIKI_URL="https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git"
-  WORKDIR=$(pwd)
-  TMPDIR=$(mktemp -d)
-  echo "Cloning wiki into $TMPDIR"
+        WIKI_URL="https://x-access-token:${GH_PAT}@github.com/${REPO}.wiki.git"
+        WORKDIR=$(pwd)
+        TMPDIR=$(mktemp -d)
+        echo "Cloning wiki into $TMPDIR"
         if ! git clone "$WIKI_URL" "$TMPDIR"; then
           echo "Could not clone wiki repo — initializing empty repo at $TMPDIR"
           mkdir -p "$TMPDIR"
           git -C "$TMPDIR" init
         fi
 
-  echo "Syncing docs/ -> wiki"
-  # cd into the wiki clone and rsync from the repository workspace into it.
-  # Exclude .git so rsync doesn't remove git metadata (avoid 'not a git repository').
-  cd "$TMPDIR"
-  rsync -a --delete --exclude='.git' "$WORKDIR/docs/" .
+        echo "Syncing docs/ -> wiki"
+        # cd into the wiki clone and rsync from the repository workspace into it.
+        # Exclude .git so rsync doesn't remove git metadata (avoid 'not a git repository').
+        cd "$TMPDIR"
+        rsync -a --delete --exclude='.git' "$WORKDIR/docs/" .
+
         # Ensure we have a branch to push to (wiki repos commonly use master)
         if ! git rev-parse --verify --quiet master >/dev/null; then
           git checkout -b master || true
