@@ -70,21 +70,16 @@ Just commit and push the workflow files - the wiki will be created and populated
 - Make sure the wiki feature is enabled in repository settings
 
 **ACTION_MAIL ENV is missing:**
-- This error indicates missing git user configuration
-- The workflow is now configured with proper `email` and `name` parameters
+- Fixed: The workflow now uses correct parameter names (`GH_MAIL`, `GH_NAME`, etc.)
+- The action expects specific environment variable names, not generic `with:` parameters
 
 **Authentication issues:**
 - The `GITHUB_TOKEN` is automatically provided by GitHub Actions
 - For manual sync, ensure `gh auth login` is completed
 
-**Permission issues:**
-- Check repository settings for Actions permissions
-- The workflow includes `contents: read` and `pages: write` permissions
-- The GITHUB_TOKEN should have write access to the wiki
-
-**Sync fails:**
-- Check repository permissions
-- Verify the wiki branch exists (created automatically)
+**Exclude functionality:**
+- The action doesn't support file exclusion
+- Internal documentation files are renamed (e.g., `README_wiki_management.md`) to avoid wiki sync
 - Ensure the `docs/` directory exists and contains markdown files
 
 ---
