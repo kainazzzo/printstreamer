@@ -20,9 +20,9 @@ jobs:
 
     - name: Sync to Wiki
       uses: Andrew-Chen-Wang/github-wiki-action@v1
-      with:
+      env:
         WIKI_DIR: docs/
         GH_PAT: ${{ secrets.GITHUB_TOKEN }}
-        GH_MAIL: github-actions[bot]@users.noreply.github.com
-        GH_NAME: github-actions[bot]
+        ACTION_MAIL: github-actions[bot]@users.noreply.github.com
+        ACTION_NAME: github-actions[bot]
         WIKI_PUSH_MESSAGE: "Sync documentation from main repository [skip ci]"
