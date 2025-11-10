@@ -785,10 +785,6 @@ if (serveEnabled)
 				return;
 			}
 
-			// Accept the downstream WebSocket immediately to complete the handshake with the client.
-			// This prevents "connection closed before established" errors in Mainsail.
-			using var downstream = await ctx.WebSockets.AcceptWebSocketAsync();
-
 			// Build upstream ws(s):// URL from configured Moonraker:BaseUrl and preserve query (e.g., token=...)
 			var ub = new UriBuilder(moonrakerBase!);
 			if (string.Equals(ub.Scheme, "http", StringComparison.OrdinalIgnoreCase)) ub.Scheme = "ws";
@@ -803,7 +799,6 @@ if (serveEnabled)
 			// for each attempt because a failed ConnectAsync leaves it unusable.
 			System.Net.WebSockets.ClientWebSocket? upstream = null;
 			Exception? lastConnectEx = null;
-			var skipHeaders = new[] { "Connection", "Upgrade", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions", "Sec-WebSocket-Protocol", "Host" };
 			var maxAttempts = 3;
 			for (int attempt = 1; attempt <= maxAttempts; attempt++)
 			{
@@ -811,7 +806,6 @@ if (serveEnabled)
 				upstream.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
 
 				// Only forward a minimal, known-safe set of headers for the WS handshake.
-				// Forwarding arbitrary headers can cause some servers to reject the handshake.
 				var allowed = new[] { "Origin", "Cookie", "Authorization" };
 				try
 				{
@@ -868,22 +862,18 @@ if (serveEnabled)
 				}
 				catch (OperationCanceledException oce)
 				{
-					// If the downstream request was aborted (client disconnected), stop trying and return quietly.
 					if (ctx.RequestAborted.IsCancellationRequested)
 					{
 						logger.LogDebug("Client aborted websocket request while connecting to upstream {UpstreamUri}", upstreamUri);
 						try { upstream.Dispose(); } catch { }
-						return; // client went away, don't keep retrying or logging warnings
+						return;
 					}
-
-					// Otherwise treat as a connect timeout and allow retry logic to continue
 					lastConnectEx = oce;
 					logger.LogWarning(oce, "Upstream connect attempt {Attempt} timed out for {UpstreamUri}", attempt, upstreamUri);
 					try { upstream.Dispose(); } catch { }
 					upstream = null;
 					if (attempt < maxAttempts)
 					{
-						// small backoff before retry
 						await Task.Delay(TimeSpan.FromMilliseconds(500));
 						continue;
 					}
@@ -896,16 +886,15 @@ if (serveEnabled)
 					upstream = null;
 					if (attempt < maxAttempts)
 					{
-						// small backoff before retry
 						await Task.Delay(TimeSpan.FromMilliseconds(500));
 						continue;
 					}
 				}
 			}
 
+			// If upstream failed to connect, accept downstream and send a JSON-RPC style error then close
 			if (upstream == null)
 			{
-				// All attempts failed. If the last failure was caused by downstream cancellation, return quietly.
 				if (lastConnectEx is OperationCanceledException && ctx.RequestAborted.IsCancellationRequested)
 				{
 					logger.LogDebug("Aborted upstream websocket connect after downstream cancellation: {UpstreamUri}", upstreamUri);
@@ -913,35 +902,28 @@ if (serveEnabled)
 				}
 
 				logger.LogWarning(lastConnectEx, "Upstream connect failed after {Attempts} attempts: {UpstreamUri}", maxAttempts, upstreamUri);
-				
-				// Send a JSON-RPC error message to the client (Mainsail expects this format)
+
+				using var downstreamErr = await ctx.WebSockets.AcceptWebSocketAsync();
 				try
 				{
 					var errorMsg = System.Text.Json.JsonSerializer.Serialize(new
 					{
 						jsonrpc = "2.0",
-						error = new
-						{
-							code = -32000,
-							message = $"Moonraker connection failed: {lastConnectEx?.Message ?? "Unknown error"}"
-						}
+						error = new { code = -32000, message = $"Moonraker connection failed: {lastConnectEx?.Message ?? "Unknown error"}" }
 					});
 					var errorBytes = System.Text.Encoding.UTF8.GetBytes(errorMsg);
-					await downstream.SendAsync(new ArraySegment<byte>(errorBytes), System.Net.WebSockets.WebSocketMessageType.Text, true, ctx.RequestAborted);
+					await downstreamErr.SendAsync(new ArraySegment<byte>(errorBytes), System.Net.WebSockets.WebSocketMessageType.Text, true, ctx.RequestAborted);
 				}
 				catch { }
-				
-				// Close the WebSocket gracefully
-				try
-				{
-					await downstream.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.InternalServerError, "Upstream connection failed", CancellationToken.None);
-				}
-				catch { }
+				try { await downstreamErr.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.InternalServerError, "Upstream connection failed", CancellationToken.None); } catch { }
 				return;
 			}
 
-			logger.LogDebug("Upstream connected, starting bidirectional tunnel");
-			
+			// Upstream connected — accept downstream now and use the upstream-chosen subprotocol (if any)
+			logger.LogInformation("Upstream WebSocket connected. Upstream chosen subprotocol: {SubProtocol}", upstream.SubProtocol ?? "<none>");
+			using var downstream = await ctx.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol);
+			logger.LogDebug("Upstream connected, starting bidirectional tunnel (subprotocol={SubProtocol})", upstream.SubProtocol);
+
 			var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
 			var pump1 = ProxyUtil.PumpWebSocket(downstream, upstream, cts.Token);
 			var pump2 = ProxyUtil.PumpWebSocket(upstream, downstream, cts.Token);
@@ -2378,7 +2360,15 @@ internal static class ProxyUtil
 						// Determine the proxy prefix (mainsail or fluidd) from the original request path
 						string proxyPrefix = "";
 						var requestPath = ctx.Request.Path.Value ?? "";
-						if (requestPath.StartsWith("/mainsail", StringComparison.OrdinalIgnoreCase))
+						if (requestPath.StartsWith("/proxy/mainsail", StringComparison.OrdinalIgnoreCase))
+						{
+							proxyPrefix = "/proxy/mainsail";
+						}
+						else if (requestPath.StartsWith("/proxy/fluidd", StringComparison.OrdinalIgnoreCase))
+						{
+							proxyPrefix = "/proxy/fluidd";
+						}
+						else if (requestPath.StartsWith("/mainsail", StringComparison.OrdinalIgnoreCase))
 						{
 							proxyPrefix = "/mainsail";
 						}
@@ -2481,6 +2471,36 @@ try{
 									path, safeBody.Length, safeBody.Substring(0, Math.Min(200, safeBody.Length)).Replace("\n", " ").Replace("\r", ""));
 							}
 
+							// Rewrite URLs in the HTML to work with the proxy
+							if (!string.IsNullOrEmpty(proxyPrefix))
+							{
+								// Determine what we're proxying (mainsail or fluidd)
+								string uiPath = "";
+								if (proxyPrefix.Contains("mainsail", StringComparison.OrdinalIgnoreCase))
+								{
+									uiPath = "/mainsail/";
+								}
+								else if (proxyPrefix.Contains("fluidd", StringComparison.OrdinalIgnoreCase))
+								{
+									uiPath = "/fluidd/";
+								}
+								
+								if (!string.IsNullOrEmpty(uiPath))
+								{
+									Logger?.LogDebug("Rewriting URLs: {UiPath} -> {ProxyPrefix}/", uiPath, proxyPrefix);
+									
+									// Rewrite absolute paths to use the proxy prefix
+									// href="/mainsail/..." -> href="/proxy/mainsail/..."
+									// src="/mainsail/..." -> src="/proxy/mainsail/..."
+									safeBody = System.Text.RegularExpressions.Regex.Replace(
+										safeBody,
+										$@"(href|src)\s*=\s*([""'])({System.Text.RegularExpressions.Regex.Escape(uiPath)})",
+										$"$1=$2{proxyPrefix}/",
+										System.Text.RegularExpressions.RegexOptions.IgnoreCase
+									);
+								}
+							}
+
 							// Inject the proxy shim script before </head> closes
 							var idx = safeBody.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
 							var shimScript = injection.Substring(baseTag.Length); // Remove base tag since we already added it
@@ -2553,6 +2573,20 @@ try{
 				{
 					try { await to.CloseOutputAsync(result.CloseStatus ?? System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, result.CloseStatusDescription, ct); } catch { }
 					break;
+				}
+				// Log brief preview of text messages for debugging (avoid logging binary frames)
+				try
+				{
+					if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Text)
+					{
+						var text = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+						var preview = text.Length > 500 ? text.Substring(0, 500) + "..." : text;
+						Logger?.LogDebug("WS Proxy message (len={Len}): {Preview}", result.Count, preview);
+					}
+				}
+				catch (Exception ex)
+				{
+					Logger?.LogDebug(ex, "Failed to log WS message preview");
 				}
 				await to.SendAsync(new ArraySegment<byte>(buffer, 0, result.Count), result.MessageType, result.EndOfMessage, ct);
 			}

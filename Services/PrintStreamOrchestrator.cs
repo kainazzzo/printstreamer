@@ -229,10 +229,10 @@ namespace PrintStreamer.Services
             }
         }
 
-        private async Task CheckAndHandleLastLayerAsync(PrinterState state, CancellationToken cancellationToken)
+        private Task CheckAndHandleLastLayerAsync(PrinterState state, CancellationToken cancellationToken)
         {
             if (!IsActivelyPrinting(state) || _activeTimelapseSession == null || _lastLayerTriggered)
-                return;
+                return Task.CompletedTask;
 
             bool lastLayerByTime = state.Remaining.HasValue && state.Remaining.Value <= TimeSpan.FromSeconds(_lastLayerRemainingSeconds);
             bool lastLayerByProgress = state.ProgressPercent.HasValue && state.ProgressPercent.Value >= _lastLayerProgressPercent;
@@ -253,6 +253,8 @@ namespace PrintStreamer.Services
                 _activeTimelapseSession = null;
                 _activeTimelapseJobFilename = null;
             }
+
+            return Task.CompletedTask;
         }
 
         private async Task EvaluateAndHandleFinalizationAsync(PrinterState state, bool forceFinalizeActiveSession, CancellationToken cancellationToken)

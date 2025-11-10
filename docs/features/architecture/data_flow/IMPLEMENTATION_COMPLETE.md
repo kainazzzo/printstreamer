@@ -207,9 +207,9 @@ No new configuration required. All endpoints hardcoded to `localhost:8080` for i
 ## Backward Compatibility
 
 ✅ **Fully maintained:**
-- `/stream` route still works (alias to `/stream/source`)
-- `/api/audio/stream` still works (original endpoint)
-- FfmpegStreamer still supports original source types (v4l2, MJPEG URLs, etc.)
+- `/stream` route is available (alias to `/stream/source`)
+- `/api/audio/stream` remains available (original endpoint)
+- FfmpegStreamer supports original source types (v4l2, MJPEG URLs, etc.)
 - All existing configuration keys remain functional
 
 ---

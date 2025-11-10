@@ -28,23 +28,20 @@ PrintStreamer is a .NET 8.0 application for streaming 3D printer MJPEG webcam fe
 - Diagnostic tool for MJPEG stream inspection and frame extraction
 - Used for debugging MJPEG sources before streaming
 
-### ASP.NET Core Proxy Server
-- Runs HTTP server on port 8080
-- Proxies MJPEG stream to browsers and serves a test viewer page
-- Handles client connections and disconnections
+### Web UI
+- Serves the web UI and webcam MJPEG feed on port 8080
+- Configure the camera input using `Stream:Source` (direct camera URL). Use an external relay only when relaying is required.
+- Handles client connections and the test viewer page
 
 ---
 
 ## Data Flow
 
-### Serve (Proxy + YouTube)
+### Serve (Web UI + YouTube)
 ```
 3D Printer Camera (MJPEG)
         ↓
-  ┌─────────────┐
-  │ ProxyServer │
-  └─────┬───────┘
-        │
+Direct camera URL or optional external relay (configured via Stream:Source)
         ↓
    FfmpegStreamer
         ↓
@@ -102,7 +99,7 @@ See [DOCKER_RELEASE.md](./DOCKER_RELEASE.md) for Docker and secrets management. 
 
 - OAuth tokens are stored locally and should not be committed to version control
 - Use Docker secrets or a secrets manager for sensitive values in production
-- Proxy server listens on all interfaces; use firewall or reverse proxy as needed
+- The web UI serves the webcam MJPEG feed. If you deploy an external relay, ensure it listens on the intended interfaces and protect it with a firewall or reverse proxy as needed
 
 ---
 

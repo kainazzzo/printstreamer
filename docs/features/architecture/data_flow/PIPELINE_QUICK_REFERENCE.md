@@ -2,11 +2,13 @@
 
 ## Architecture Overview
 
+Mainsail and Fluidd accessory proxies have been removed. The web UI serves the webcam MJPEG feed on port 8080 — configure the camera source using `Stream:Source` or provide an external relay only when relaying is required.
+
 ```
 Physical Webcam
     ↓
 /stream/source (MJPEG) ─── WebCamManager
-    ├─ Direct camera proxy
+    ├─ Webcam source endpoint
     ├─ Fallback to black image
     │
     ├──→ /stream/source/capture (JPEG) ─── TimelapseManager
@@ -170,7 +172,7 @@ curl http://localhost:8080/api/debug/pipeline | jq
 ## Data Flow Stages
 
 ### Stage 1: Source (0ms latency)
-- Direct camera proxy
+- Webcam source endpoint
 - Fallback to black image if offline
 - Multiple consumers allowed
 

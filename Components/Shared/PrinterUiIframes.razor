@@ -13,6 +13,18 @@
     // Console is now the root route. Show console when the relative path is empty (root)
     // or when it explicitly contains 'console' (for compatibility).
     private bool showConsole => string.IsNullOrEmpty(Nav.ToBaseRelativePath(Nav.Uri)) || Nav.ToBaseRelativePath(Nav.Uri).StartsWith("console");
+    
+    // Determine if we should render the iframe at all
+    private bool shouldRender
+    {
+        get
+        {
+            var path = Nav.ToBaseRelativePath(Nav.Uri).ToLowerInvariant();
+            // Don't render iframes on streaming, timelapses, audio, or config pages
+            return !path.StartsWith("streaming") && !path.StartsWith("timelapses") 
+                && !path.StartsWith("audio") && !path.StartsWith("config");
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -43,12 +55,16 @@
             var cfg = await client.GetFromJsonAsync<ConfigResponse>("api/config");
             if (cfg?.PrinterUI != null)
             {
-                // Use direct URLs for iframes - no proxy needed, avoids CORS/Origin issues
+                // Prefer direct remote UI URLs for iframe drop-ins. Leave proxy endpoints in place for compatibility,
+                // but note they may not be functional — the UI will use the remote URL when available.
                 remoteMainsailUrl = cfg.PrinterUI.MainsailUrl;
                 remoteFluiddUrl = cfg.PrinterUI.FluiddUrl;
-                
-                mainsailUrl = remoteMainsailUrl;
-                fluiddUrl = remoteFluiddUrl;
+
+                // Use the configured remote UI endpoints for iframe drop-ins when available.
+                // Fallback to local proxy endpoints if a remote URL is not configured. Proxy endpoints are
+                // intentionally left in the codebase but may not be functional in some deployments.
+                mainsailUrl = !string.IsNullOrWhiteSpace(remoteMainsailUrl) ? remoteMainsailUrl : "/proxy/mainsail/";
+                fluiddUrl = !string.IsNullOrWhiteSpace(remoteFluiddUrl) ? remoteFluiddUrl : "/proxy/fluidd/";
 
                 // Pick a sensible default based on what's configured
                 if (string.IsNullOrWhiteSpace(mainsailUrl) && !string.IsNullOrWhiteSpace(fluiddUrl))
@@ -107,16 +123,16 @@
     }
 }
 
-<div style="display:@(showConsole ? "block" : "none");height:calc(100vh - 220px);">
+<div style="display:@(showConsole && shouldRender ? "block" : "none");height:calc(100vh - 220px);">
     <div class="section" style="margin-bottom:10px;">
         <span style="font-size: 1.1em;">
             @if (!string.IsNullOrWhiteSpace(mainsailUrl))
             {
-                <a href="javascript:void(0)" title="@remoteMainsailUrl" @onclick='@(() => OnSelectedChanged("mainsail"))' style="color: @(selectedUi == "mainsail" ? "lime" : "#66ccff"); text-decoration: none; font-weight: @(selectedUi == "mainsail" ? "bold" : "normal"); margin-right: 16px;">Mainsail</a>
+                <a href="javascript:void(0)" title='@(mainsailUrl.StartsWith("/proxy") ? (mainsailUrl + " (proxy - may not work)") : mainsailUrl)' @onclick='() => OnSelectedChanged("mainsail")' style='color: @(selectedUi == "mainsail" ? "lime" : "#66ccff"); text-decoration: none; font-weight: @(selectedUi == "mainsail" ? "bold" : "normal"); margin-right: 16px;'>Mainsail</a>
             }
             @if (!string.IsNullOrWhiteSpace(fluiddUrl))
             {
-                <a href="javascript:void(0)" title="@remoteFluiddUrl" @onclick='@(() => OnSelectedChanged("fluidd"))' style="color: @(selectedUi == "fluidd" ? "orange" : "#66ccff"); text-decoration: none; font-weight: @(selectedUi == "fluidd" ? "bold" : "normal");">Fluidd</a>
+                <a href="javascript:void(0)" title='@(fluiddUrl.StartsWith("/proxy") ? (fluiddUrl + " (proxy - may not work)") : fluiddUrl)' @onclick='() => OnSelectedChanged("fluidd")' style='color: @(selectedUi == "fluidd" ? "orange" : "#66ccff"); text-decoration: none; font-weight: @(selectedUi == "fluidd" ? "bold" : "normal");'>Fluidd</a>
             }
         </span>
     </div>
@@ -130,11 +146,11 @@
             <div class="iframe-stack" @key="selectedUi">
                 @if (!string.IsNullOrWhiteSpace(mainsailUrl))
                 {
-                    <iframe src="@mainsailUrl" style="@GetIframeStyle("mainsail")" title="Mainsail Console"></iframe>
+                    <iframe src="@mainsailUrl" style='@GetIframeStyle("mainsail")' title="Mainsail Console"></iframe>
                 }
                 @if (!string.IsNullOrWhiteSpace(fluiddUrl))
                 {
-                    <iframe src="@fluiddUrl" style="@GetIframeStyle("fluidd")" title="Fluidd Console"></iframe>
+                    <iframe src="@fluiddUrl" style='@GetIframeStyle("fluidd")' title="Fluidd Console"></iframe>
                 }
             </div>
         }

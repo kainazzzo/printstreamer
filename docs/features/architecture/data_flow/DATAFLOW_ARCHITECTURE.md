@@ -23,6 +23,8 @@
 
 PrintStreamer processes video and audio from multiple sources and combines them into a single composited stream that can be broadcast to YouTube Live or served locally. The architecture uses a **multi-stage pipeline** where each stage buffers its output into an HTTP endpoint for downstream consumption.
 
+Mainsail and Fluidd accessory proxies have been removed. The web UI serves the webcam MJPEG feed on port 8080 — configure the camera source using `Stream:Source` or provide an external relay only when relaying is required.
+
 ### Design Principles
 
 - **Decoupling:** Each stage is independent and can be tested/debugged separately
@@ -39,7 +41,7 @@ PrintStreamer processes video and audio from multiple sources and combines them 
 ```
 Webcam Source (HTTP/V4L2)
     ↓
-WebCamManager (handles camera simulation + fallback)
+WebCamManager (webcam feed + simulation)
     ↓
 /stream endpoint (MJPEG)
     ↓
@@ -90,7 +92,7 @@ Audio Service (from filesystem)
 │  Physical Webcam Source                                             │
 │  (HTTP stream, V4L2 device, or USB camera)                          │
 │         ↓                                                            │
-│  WebCamManager (proxy + simulation)                                 │
+│  WebCamManager (webcam feed + simulation)                           │
 │  • Handles camera on/off simulation                                 │
 │  • Serves fallback_black.jpg when offline                          │
 │  • MJPEG buffering and client management                           │
@@ -469,4 +471,3 @@ dotnet build -c Release
 dotnet publish -c Release -o ./publish
 # Run with: dotnet ./publish/printstreamer.dll
 ```
-

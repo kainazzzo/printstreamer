@@ -100,8 +100,9 @@ namespace PrintStreamer.Services
         /// <summary>
         /// Register a PrintStreamOrchestrator to handle printer state changes.
         /// </summary>
-        public static async void RegisterPrintStreamOrchestrator(PrintStreamOrchestrator orchestrator)
+        public static void RegisterPrintStreamOrchestrator(PrintStreamOrchestrator orchestrator)
         {
+            // The event handler is async, but the registrar itself does not need to be async.
             PrintStateChanged += async (prev, curr) => await orchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
         }
 

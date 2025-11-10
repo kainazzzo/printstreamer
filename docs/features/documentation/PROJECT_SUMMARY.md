@@ -4,7 +4,7 @@
 
 A complete .NET 8.0 application for streaming 3D printer webcams to YouTube Live with:
 - ✅ Automated YouTube broadcast creation via OAuth2
-- ✅ MJPEG proxy server for local testing
+- ✅ Webcam MJPEG feed for the UI. Mainsail and Fluidd accessory proxies have been removed.
 - ✅ FFmpeg streaming implementation
 - ✅ Docker containerization
 - ✅ Flexible configuration system
@@ -44,9 +44,8 @@ printstreamer/
 - Hardware acceleration support
 - Battle-tested reliability
 
-### 3. MJPEG Proxy Server
-- ASP.NET Core on port 8080
-- Real-time stream proxying
+### 3. Webcam MJPEG Feed (UI)
+- Serves the webcam MJPEG feed on port 8080 for the web UI
 - Test UI at `http://localhost:8080/`
 - Graceful client handling
 
@@ -122,11 +121,11 @@ export Stream__Source="http://printer.local/webcam/?action=stream"
 
 ## 🎬 Usage Examples
 
-### 1. Proxy Server Only
+### 1. Web UI Only (serves webcam feed)
 ```bash
 dotnet run
 ```
-Access at: `http://localhost:8080/stream`
+Access at: `http://localhost:8080/stream` (the application serves the webcam MJPEG feed for the UI; Mainsail and Fluidd accessory proxies have been removed)
 
 ### 2. Stream to YouTube (OAuth)
 ```bash
@@ -134,7 +133,7 @@ dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --You
 ```
 Creates broadcast automatically when promoted to live (or use the UI Go Live button)
 
-### 3. Proxy + YouTube Streaming
+### 3. Relay + YouTube Streaming
 ```bash
 dotnet run -- --Stream:Source "http://printer.local/webcam/?action=stream" --YouTube:OAuth:ClientId "xxx" --YouTube:OAuth:ClientSecret "xxx"
 ```
@@ -163,8 +162,8 @@ docker run -p 8080:8080 \
 ┌────────────────────────────────┐
 │  PrintStreamer Application     │
 │  ┌──────────┐    ┌───────────┐│
-│  │  Proxy   │    │ YouTube   ││
-│  │  Server  │    │ Streamer  ││
+│  │  Web UI  │    │ YouTube   ││
+│  │  (webcam)│    │ Streamer  ││
 │  │ :8080    │    │           ││
 │  └────┬─────┘    └─────┬─────┘│
 └───────┼────────────────┼──────┘
@@ -195,9 +194,8 @@ IStreamer (interface)
 - ✅ Use Docker secrets for containers
 
 ### Network Security
-- ⚠️ Proxy server on 0.0.0.0:8080 (all interfaces)
-- 💡 Consider reverse proxy (nginx) with TLS
-- 💡 Add authentication middleware if exposing publicly
+- ⚠️ Web UI listens on 0.0.0.0:8080 (all interfaces) and serves the webcam feed — secure it with a reverse proxy (nginx) and TLS when exposed publicly
+- 💡 Consider adding authentication middleware if exposing the UI or camera feed publicly
 
 ## 📝 Development Workflow
 
@@ -225,7 +223,7 @@ docker build -t printstreamer:local .
 
 ### Testing
 ```bash
-# Test proxy server
+# Test web UI stream
 curl -v http://localhost:8080/stream
 
 # View in browser
@@ -286,7 +284,7 @@ ffmpeg -version
 
 ### Phase 1: Core Features (✅ Complete)
 - [x] Basic ffmpeg streaming
-- [x] MJPEG proxy server
+- [x] Webcam MJPEG feed (web UI)
 - [x] YouTube OAuth integration
 - [x] Broadcast management
 - [x] Docker support

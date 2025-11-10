@@ -53,7 +53,7 @@ dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
   --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
   --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
 
-# Or run proxy + streaming together (startYouTubeInServe via config)
+# Or run web UI + streaming together (startYouTubeInServe via config)
 dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
   --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
   --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET"
@@ -71,7 +71,7 @@ dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
 
 ### Use Case 1: Just Testing?
 ```bash
-# Run proxy server only (no YouTube)
+# Run web UI only (no YouTube) — web UI serves the webcam MJPEG feed; configure camera input with `Stream:Source` (direct camera URL). Use an external relay only when relaying is required.
 dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream"
 # View at http://localhost:8080
 ```
@@ -256,7 +256,7 @@ YouTubeControlService.cs → YouTube integration
 - **RTMP**: Real-Time Messaging Protocol for streaming
 - **H.264**: Video compression codec
 - **OAuth2**: Authorization protocol for YouTube API
-- **ASP.NET Core**: Web framework for proxy server
+- **ASP.NET Core**: Web framework for the web UI
 
 ---
 

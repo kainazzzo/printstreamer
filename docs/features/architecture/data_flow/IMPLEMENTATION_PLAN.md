@@ -220,17 +220,21 @@ _logger.LogInformation("[{ContextLabel}] Using video source: {Source}", contextL
 
 **Alternative (Backward Compatible):**
 ```csharp
-// Only override if Stream:Source points to raw camera
+/*
+Only override if Stream:Source points to an external camera.
+When the source is external, route it through the local /stream/source
+endpoint so downstream overlay and buffering stages can consume it.
+*/
 var source = _config.GetValue<string>("Stream:Source");
 
-// If it's a local camera endpoint or configured to use overlay, use /stream/source instead
+// If it's an external camera, route it through the local /stream/source endpoint for overlay processing
 if (!string.IsNullOrWhiteSpace(source) && 
     !source.Contains("localhost", StringComparison.OrdinalIgnoreCase) &&
     !source.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase))
 {
-    // External camera source - proxy through /stream/source
+    // External camera source - route through local /stream/source
     source = "http://127.0.0.1:8080/stream/source";
-    _logger.LogInformation("[{ContextLabel}] Proxying camera through local /stream/source", contextLabel);
+    _logger.LogInformation("[{ContextLabel}] Routing camera through local /stream/source", contextLabel);
 }
 ```
 
@@ -622,7 +626,7 @@ var serveEnabled = _config.GetValue<bool?>("Serve:Enabled") ?? true;
 if (serveEnabled)
 {
     source = "http://127.0.0.1:8080/stream/overlay";
-    _logger.LogInformation("[StreamService] Using local overlay proxy stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
+    _logger.LogInformation("[StreamService] Using local overlay stream as ffmpeg source (http://127.0.0.1:8080/stream/overlay)");
 }
 ```
 
@@ -853,7 +857,7 @@ Add section to DATAFLOW_ARCHITECTURE.md or create a new TROUBLESHOOTING.md:
    curl -X POST http://localhost:8080/api/camera/off
    # Check /stream/source returns black image
    curl http://localhost:8080/stream/source -o fallback.mjpeg
-   # Check /stream/overlay still works with black image
+   # Check /stream/overlay responds with black image fallback
    curl http://localhost:8080/stream/overlay -o overlay_fallback.mjpeg
    ```
 

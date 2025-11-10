@@ -2,6 +2,8 @@
 
 Welcome to PrintStreamer - your complete solution for streaming 3D printer webcams to YouTube Live!
 
+The web UI serves a webcam MJPEG feed on port 8080. Configure the camera input with `Stream:Source` (direct camera URL). Use an external relay only when relaying is required.
+
 ## 📚 Documentation Structure
 
 
@@ -162,7 +164,7 @@ Add custom features
 
 ### Common Commands
 ```bash
-# Run proxy server
+# Run web UI
 dotnet run
 
 # Stream to YouTube
@@ -189,7 +191,7 @@ Serve:Enabled              # true/false (serve the web UI)
 ### Important URLs
 ```
 http://localhost:8080/        # Test viewer
-http://localhost:8080/stream  # MJPEG proxy
+http://localhost:8080/stream  # webcam MJPEG feed
 https://studio.youtube.com    # YouTube Studio
 https://console.cloud.google.com  # Google Cloud Console
 ```

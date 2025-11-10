@@ -2,14 +2,13 @@
 
 ![PrintStreamer](image.png)
 
-Stream your 3D printer webcam to YouTube Live with automated broadcast creation and MJPEG proxy server.
+Stream your 3D printer webcam to YouTube Live with automated broadcast creation. Mainsail/fluidd accessory proxies are removed. Configure a direct camera stream URL via `Stream:Source`. Use an external relay only when relaying is required. The web UI serves the webcam MJPEG feed on port 8080.
 
 This application runs a small web UI and a background poller by default. Configure behavior at runtime using configuration keys (appsettings.json, environment variables, or command-line arguments).
 
 ![PrintStreamer](image.png)
 
- By default the web UI (proxy) is served on port 8080 and the poller runs as a hosted background service.
- Control YouTube behavior with YouTube:OAuth (OAuth credentials) or YouTube:Key (manual stream key).
+By default the web UI is served on port 8080 and the poller runs as a hosted background service. Mainsail/fluidd accessory proxies are removed — set `Stream:Source` to point to your camera stream. Use an external relay only when relaying is required. Control YouTube behavior with YouTube:OAuth (OAuth credentials) or YouTube:Key (manual stream key).
 The app uses ffmpeg as the streaming engine to keep dependencies minimal and avoid reimplementing video encoding stacks.
 
 ## Quick Start
@@ -22,13 +21,13 @@ The app uses ffmpeg as the streaming engine to keep dependencies minimal and avo
 
 The app's runtime behavior is controlled by configuration keys rather than a single "mode" flag. Examples below show common usage patterns.
 
-1) Run the web UI / MJPEG proxy (default)
+1) Run the web UI (the web UI serves a webcam MJPEG feed; set `Stream:Source` to your camera or an external relay as needed)
 
 ```bash
 dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream"
 ```
 
-Open the control panel at http://localhost:8080 to view the raw MJPEG source.
+Open the control panel at http://localhost:8080. The web UI serves the webcam MJPEG feed; configure `Stream:Source` to your camera's MJPEG/streaming URL. Use an external relay only when relaying is required.
 
  2) Stream to YouTube (OAuth)
 
@@ -98,7 +97,7 @@ export Stream__Source="http://printer.local/webcam/?action=stream"
 ## Streaming Implementations
 # PrintStreamer
 
-**PrintStreamer** streams your 3D printer webcam to YouTube Live with automated broadcast creation and MJPEG proxy server. It includes a web UI and a background poller for Moonraker integration.
+**PrintStreamer** streams your 3D printer webcam to YouTube Live with automated broadcast creation. The web UI serves a webcam MJPEG feed and a background poller integrates with Moonraker.
 
 ---
 
@@ -115,7 +114,7 @@ export Stream__Source="http://printer.local/webcam/?action=stream"
 ## Key Features
 
 - Automated YouTube Live streaming (OAuth only)
-- MJPEG proxy server for local testing
+- Note: the mainsail/fluidd accessory proxies are removed. The web UI provides a webcam MJPEG feed; use a direct camera stream URL or an external relay for additional relaying or testing scenarios.
 - Polling: auto-start/stop streams based on print jobs (Moonraker)
 - Secure, production-ready deployment (see Docker guide)
 
@@ -141,5 +140,3 @@ Tip: Use `./scripts/run.sh` to run in Docker interactively for first-time OAuth.
 
 **For full details, always refer to the linked markdown documents above.**
 5. Save and continue
-
-
