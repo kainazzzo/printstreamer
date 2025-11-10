@@ -89,11 +89,26 @@ namespace PrintStreamer.Streamers
             filters.Add("pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black");
             filters.Add("format=yuv420p");
 
+            // Drawbox: allow explicit pixel height via Overlay:BoxHeight (px). If not supplied, fall back to BannerFraction.
+            var boxHeightConfig = _config.GetValue<int?>("Overlay:BoxHeight");
+
             // Keep the working drawbox (do not touch as requested)
-            var bannerFraction = _config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2;
-            if (bannerFraction < 0) bannerFraction = 0; if (bannerFraction > 0.6) bannerFraction = 0.6;
-            var bf = bannerFraction.ToString(CultureInfo.InvariantCulture);
-            var drawbox = $"drawbox=x=0:y=ih*(1-{bf}):w=iw:h=ih*{bf}:color={boxColor}:t=fill";
+            string drawbox;
+
+            if (boxHeightConfig != null && boxHeightConfig > 0)
+            {
+                // Explicit pixel height provided: position box anchored to bottom
+                var bh = boxHeightConfig.Value;
+                drawbox = $"drawbox=x=0:y=ih-{bh}:w=iw:h={bh}:color={boxColor}:t=fill";
+            }
+            else
+            {
+                var bannerFraction = _config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2;
+                if (bannerFraction < 0) bannerFraction = 0; if (bannerFraction > 0.6) bannerFraction = 0.6;
+                var bf = bannerFraction.ToString(CultureInfo.InvariantCulture);
+                drawbox = $"drawbox=x=0:y=ih*(1-{bf}):w=iw:h=ih*{bf}:color={boxColor}:t=fill";
+            }
+
             filters.Add(drawbox);
 
             // Estimate text banner height similar to FfmpegStreamer so we can place text inside the box when X/Y not provided
@@ -107,8 +122,19 @@ namespace PrintStreamer.Streamers
             var approxTextHeight = Math.Max(fontSize, 12) * Math.Max(1, lineCount);
             var padding = 32; // top+bottom padding approx
             var extra = 6; // small fudge for ascent/descent
-            var boxH = padding + approxTextHeight + boxBorderW + extra;
-            var boxHpx = padding + approxTextHeight + boxBorderW + extra; // pixel estimate used only for text placement when X/Y missing
+            int boxH;
+            int boxHpx;
+            if (boxHeightConfig != null && boxHeightConfig > 0)
+            {
+                // Use explicit configured box height (pixels)
+                boxH = boxHeightConfig.Value;
+                boxHpx = boxHeightConfig.Value;
+            }
+            else
+            {
+                boxH = padding + approxTextHeight + boxBorderW + extra;
+                boxHpx = padding + approxTextHeight + boxBorderW + extra; // pixel estimate used only for text placement when X/Y missing
+            }
             var textY = $"h-({boxH})+{padding / 2}";
             var textX = $"{x} + {padding / 2}";
             var draw = $"drawtext=fontfile='{fontFile}':textfile='{textFile}':reload=1:expansion=none:fontsize={fontSize}:fontcolor={fontColor}:x={textX}:y={textY}";
