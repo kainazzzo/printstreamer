@@ -240,6 +240,10 @@ ProxyUtil.Logger = app.Services.GetRequiredService<ILogger<Program>>();
 		_ = printStreamOrchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
 }
 
+// StreamOrchestrator is constructed and registered in DI. It should subscribe to
+// MoonrakerPoller events or call Poller helpers as needed. Do not register the
+// orchestrator with the poller here; keep inversion of control (poller -> event pub, orchestrator -> consumer).
+
 // Get a logger for the application
 var logger = app.Services.GetRequiredService<ILogger<Program>>();
 

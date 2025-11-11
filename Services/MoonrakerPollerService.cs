@@ -12,7 +12,6 @@ namespace PrintStreamer.Services
         private readonly IConfiguration _config;
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<MoonrakerPollerService> _logger;
-
         public MoonrakerPollerService(
             IConfiguration config,
             ILoggerFactory loggerFactory,
@@ -32,7 +31,7 @@ namespace PrintStreamer.Services
             
             try
             {
-                // Call the event-driven static polling method
+                // Call the event-driven static polling method. Timelapse lifecycle is handled by the orchestrator.
                 await MoonrakerPoller.PollAndStreamJobsAsync(_config, _loggerFactory, cancellationToken);
             }
             catch (OperationCanceledException)

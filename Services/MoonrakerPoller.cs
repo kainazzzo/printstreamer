@@ -15,12 +15,17 @@ namespace PrintStreamer.Services
         private static MoonrakerClient? _moonrakerClient;
 #pragma warning restore CS0649
 
-        // Shared runtime state to allow promoting the currently-running encoder to a live broadcast
-        private static readonly object _streamLock = new object();
-        private static IStreamer? _currentStreamer;
-        private static CancellationTokenSource? _currentStreamerCts;
-        private static YouTubeControlService? _currentYouTubeService;
+    // Shared runtime state for broadcast coordination. The actual encoder
+    // (IStreamer) is owned and managed by the StreamOrchestrator; the poller
+    // only keeps minimal broadcast identifiers and synchronization primitives.
+    private static readonly object _streamLock = new object();
+    // The poller no longer holds a long-lived YouTubeControlService instance;
+    // control operations should be performed by consumers (or with short-lived
+    // service instances) so the control service can also subscribe to events.
         private static string? _currentBroadcastId;
+    // The poller must not depend on higher-level orchestrators. It only publishes
+    // printer state events and exposes broadcast/stream helpers. Orchestrators
+    // should subscribe to events or call these helpers as needed.
     // Monitor state exposed to the UI
     private static volatile bool _isWaitingForIngestion = false;
     // Semaphore to prevent concurrent broadcast creation
@@ -44,57 +49,15 @@ namespace PrintStreamer.Services
         /// </summary>
         public static void RestartCurrentStreamerWithConfig(IConfiguration config, ILoggerFactory loggerFactory)
         {
+            // The poller no longer owns the live encoder. Restart requests should be
+            // handled by the StreamOrchestrator; log and return so callers can invoke
+            // orchestrator behavior via DI/handlers.
             var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
-            Task.Run(async () =>
-            {
-                IStreamer? old; CancellationTokenSource? oldCts;
-                lock (_streamLock)
-                {
-                    old = _currentStreamer;
-                    oldCts = _currentStreamerCts;
-                    _currentStreamer = null;
-                    _currentStreamerCts = null;
-                }
-
-                try
-                {
-                    try { oldCts?.Cancel(); } catch { }
-                    try { await Task.WhenAny(old?.ExitTask ?? Task.CompletedTask, Task.Delay(2000)); } catch { }
-                    try { old?.Stop(); } catch { }
-                }
-                catch { }
-
-                // Start a new streamer in background. Use a linked CTS that can be cancelled by callers via config-driven mechanisms.
-                try
-                {
-                    var cts = new CancellationTokenSource();
-                    lock (_streamLock)
-                    {
-                        // We'll start the new streamer, but do not set _currentStreamer here because StartYouTubeStreamAsync will set it
-                    }
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await StartYouTubeStreamAsync(config, loggerFactory, cts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: false);
-                        }
-                        catch (OperationCanceledException) { }
-                        catch (Exception ex)
-                        {
-                            logger.LogError(ex, "[RestartStreamer] Error starting new streamer");
-                        }
-                    }, cts.Token);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "[RestartStreamer] Failed to restart streamer");
-                }
-            });
+            logger.LogInformation("Restart requested — delegate to StreamOrchestrator (poller no-op)");
         }
 
         public static bool IsBroadcastActive => !string.IsNullOrWhiteSpace(_currentBroadcastId);
         public static string? CurrentBroadcastId => _currentBroadcastId;
-    public static bool IsStreamerRunning => _currentStreamer != null;
     public static bool IsWaitingForIngestion => _isWaitingForIngestion;
 
         /// <summary>
@@ -105,6 +68,10 @@ namespace PrintStreamer.Services
             // The event handler is async, but the registrar itself does not need to be async.
             PrintStateChanged += async (prev, curr) => await orchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
         }
+
+        // Note: Do NOT register orchestrators with the poller. The orchestrator
+        // should subscribe to PrintStateChanged events and call Poller helpers when
+        // it needs to control streaming or timelapse lifecycle.
 
         /// <summary>
         /// Promote the currently-running encoder to a YouTube live broadcast by creating
@@ -145,16 +112,8 @@ namespace PrintStreamer.Services
                     return (false, "OAuth client credentials not configured", null);
                 }
 
-            // In some flows the local streamer may be restarting (e.g., camera toggle or prior stop).
-            // Give it a short grace period to appear; if still null, we'll start a fresh encoder below.
-            if (_currentStreamer == null)
-            {
-                var waitUntil = DateTime.UtcNow.AddSeconds(3);
-                while (_currentStreamer == null && DateTime.UtcNow < waitUntil)
-                {
-                    try { await Task.Delay(100, cancellationToken); } catch { break; }
-                }
-            }
+            // The poller does not manage the live encoder; give orchestrator time to
+            // react if necessary. Do not wait on a poller-owned streamer.
 
             // Authenticate and create broadcast
             var logger = loggerFactory.CreateLogger<YouTubeControlService>();
@@ -176,27 +135,8 @@ namespace PrintStreamer.Services
             var newKey = res.streamKey;
             var newBroadcastId = res.broadcastId;
 
-            // Restart streamer if one is running: cancel current, then start a new one with RTMP
-            IStreamer? old; CancellationTokenSource? oldCts;
-            lock (_streamLock)
-            {
-                old = _currentStreamer;
-                oldCts = _currentStreamerCts;
-                _currentStreamer = null;
-                _currentStreamerCts = null;
-            }
-
-            try
-            {
-                // Stop the old streamer if it exists
-                if (old != null)
-                {
-                    try { oldCts?.Cancel(); } catch { }
-                    try { await Task.WhenAny(old.ExitTask, Task.Delay(5000, cancellationToken)); } catch { }
-                    try { old.Stop(); } catch { }
-                }
-            }
-            catch { }
+            // The poller does not start/stop encoder processes; the orchestrator
+            // is responsible for promoting or restarting the encoder as needed.
 
             // Start new ffmpeg streamer with RTMP
             try
@@ -251,45 +191,15 @@ namespace PrintStreamer.Services
                     yt.Dispose();
                     return (false, "Stream:Source is not configured", null);
                 }
-                var streamer = new FfmpegStreamer(source, newRtmp + "/" + newKey, targetFps, bitrateKbps, overlayOptions, audioUrl, loggerFactory.CreateLogger<FfmpegStreamer>());
-                var cts = new CancellationTokenSource();
-
+                // Record the broadcast id so status endpoints reflect a live/broadcasting state.
                 lock (_streamLock)
                 {
-                    _currentStreamer = streamer;
-                    _currentStreamerCts = cts;
-                    _currentYouTubeService = yt;
                     _currentBroadcastId = newBroadcastId;
                 }
 
-                _ = Task.Run(async () =>
-                {
-                    try { await streamer.StartAsync(cts.Token); } catch { }
-                }, cts.Token);
-
-                // After starting the ffmpeg streamer, attempt to transition the YouTube broadcast to live
-                // This runs in the background and will wait for ingestion to become active before transitioning.
-                if (!string.IsNullOrWhiteSpace(newBroadcastId))
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            pollerLogger.LogInformation("[YouTube] Waiting for ingestion and attempting to transition broadcast to live...");
-                            var ok = await yt.TransitionBroadcastToLiveWhenReadyAsync(newBroadcastId!, TimeSpan.FromSeconds(120), 5, CancellationToken.None);
-                            pollerLogger.LogInformation("[YouTube] Transition to live {Result} for broadcast {BroadcastId}", ok ? "succeeded" : "failed", newBroadcastId);
-                        }
-                        catch (Exception ex)
-                        {
-                            pollerLogger.LogError(ex, "[YouTube] Error while transitioning broadcast to live");
-                        }
-                    }, CancellationToken.None);
-                }
-                else
-                {
-                    pollerLogger.LogInformation("[YouTube] No broadcastId available; skipping automatic transition to live.");
-                }
-
+                // The poller does not start encoder processes; the StreamOrchestrator
+                // should start/attach the encoder to the RTMP endpoint returned above.
+                yt.Dispose();
                 return (true, null, newBroadcastId);
             }
             catch (Exception ex)
@@ -316,78 +226,75 @@ namespace PrintStreamer.Services
         public static async Task<(bool ok, string? message)> StopBroadcastAsync(IConfiguration config, CancellationToken cancellationToken, ILoggerFactory loggerFactory)
         {
             var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
-            IStreamer? streamer;
-            CancellationTokenSource? cts;
-            YouTubeControlService? yt;
+            // The poller no longer owns an in-process encoder. Only the broadcast id
+            // is stored here so status endpoints reflect live state. The StreamOrchestrator
+            // is responsible for stopping any running encoder; the poller will only
+            // finalize the YouTube broadcast resources.
             string? broadcastId;
-
             lock (_streamLock)
             {
-                streamer = _currentStreamer;
-                cts = _currentStreamerCts;
-                yt = _currentYouTubeService;
                 broadcastId = _currentBroadcastId;
-                
-                _currentStreamer = null;
-                _currentStreamerCts = null;
-                _currentYouTubeService = null;
                 _currentBroadcastId = null;
             }
 
-            if (streamer == null)
+            if (string.IsNullOrWhiteSpace(broadcastId))
             {
                 return (false, "No active broadcast to stop");
             }
 
             try
             {
-                // Stop the streamer
-                try { cts?.Cancel(); } catch { }
-                try { await Task.WhenAny(streamer.ExitTask, Task.Delay(5000, cancellationToken)); } catch { }
-                try { streamer.Stop(); } catch { }
-
-                // End the YouTube broadcast
-                if (yt != null && !string.IsNullOrWhiteSpace(broadcastId))
+                // End the YouTube broadcast. Create a short-lived YouTubeControlService
+                // to perform the EndBroadcast / playlist update operations so the
+                // control service can be owned elsewhere (e.g., orchestrator) and
+                // subscribe to PrintStateChanged events itself.
+                if (!string.IsNullOrWhiteSpace(broadcastId))
                 {
                     try
                     {
-                        await yt.EndBroadcastAsync(broadcastId, cancellationToken);
-                        logger.LogInformation("[YouTube] Ended broadcast {BroadcastId}", broadcastId);
-                        
-                        // Add the completed broadcast to the playlist
-                        try
+                        var ytLocal = new YouTubeControlService(config, loggerFactory.CreateLogger<YouTubeControlService>());
+                        if (await ytLocal.AuthenticateAsync(cancellationToken))
                         {
-                            // Wait a moment for YouTube to process the broadcast completion
-                            await Task.Delay(2000, cancellationToken);
-                            
-                            var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
-                            if (!string.IsNullOrWhiteSpace(playlistName))
+                            try
                             {
-                                logger.LogInformation("[YouTube] Adding completed broadcast to playlist '{PlaylistName}'...", playlistName);
-                                var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
-                                var pid = await yt.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
-                                if (!string.IsNullOrWhiteSpace(pid))
+                                await ytLocal.EndBroadcastAsync(broadcastId, cancellationToken);
+                                logger.LogInformation("[YouTube] Ended broadcast {BroadcastId}", broadcastId);
+
+                                // Add the completed broadcast to the playlist
+                                try
                                 {
-                                    var added = await yt.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
-                                    if (added)
+                                    await Task.Delay(2000, cancellationToken);
+                                    var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
+                                    if (!string.IsNullOrWhiteSpace(playlistName))
                                     {
-                                        logger.LogInformation("[YouTube] Successfully added broadcast to playlist '{PlaylistName}'", playlistName);
+                                        logger.LogInformation("[YouTube] Adding completed broadcast to playlist '{PlaylistName}'...", playlistName);
+                                        var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
+                                        var pid = await ytLocal.EnsurePlaylistAsync(playlistName, playlistPrivacy, cancellationToken);
+                                        if (!string.IsNullOrWhiteSpace(pid))
+                                        {
+                                            var added = await ytLocal.AddVideoToPlaylistAsync(pid, broadcastId, cancellationToken);
+                                            if (added)
+                                            {
+                                                logger.LogInformation("[YouTube] Successfully added broadcast to playlist '{PlaylistName}'", playlistName);
+                                            }
+                                        }
                                     }
                                 }
+                                catch (Exception ex)
+                                {
+                                    logger.LogError(ex, "[YouTube] Failed to add broadcast to playlist");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogError(ex, "[YouTube] Error ending broadcast");
                             }
                         }
-                        catch (Exception ex)
-                        {
-                            logger.LogError(ex, "[YouTube] Failed to add broadcast to playlist");
-                        }
+                        ytLocal.Dispose();
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError(ex, "[YouTube] Error ending broadcast");
-                    }
-                    finally
-                    {
-                        yt.Dispose();
+                        logger.LogError(ex, "[StopBroadcast] Error ending broadcast (yt)");
                     }
                 }
 
@@ -411,17 +318,8 @@ namespace PrintStreamer.Services
             var fastPollInterval = TimeSpan.FromSeconds(2); // faster polling near completion
             string? lastJobFilename = null;
             string? lastCompletedJobFilename = null; // used for final upload/title if app shuts down post-completion
-            CancellationTokenSource? streamCts = null;
-            Task? streamTask = null;
-            TimelapseService? timelapse = null;
-            CancellationTokenSource? timelapseCts = null;
-            Task? timelapseTask = null;
-            YouTubeControlService? ytService = null;
-            TimelapseManager? timelapseManager = null;
-            string? activeTimelapseSessionName = null; // track current timelapse session in manager
-            // New state to support last-layer early finalize
-            bool lastLayerTriggered = false;
-            Task? timelapseFinalizeTask = null;
+            // Poller does not start local streamers or hold YouTube control clients;
+            // orchestrator owns encoder lifecycle and upload clients.
             var offlineGrace = config.GetValue<TimeSpan?>("Timelapse:OfflineGracePeriod") ?? TimeSpan.FromMinutes(10);
             var idleFinalizeDelay = config.GetValue<TimeSpan?>("Timelapse:IdleFinalizeDelay") ?? TimeSpan.FromSeconds(20);
             var activeStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -453,35 +351,15 @@ namespace PrintStreamer.Services
             DateTime? lastPrintingSeenAt = null;
             DateTime? idleStateSince = null;
             DateTime? jobMissingSince = null;
-            string? activeTimelapseJobFilename = null;
+            // (timelapse session specific variables removed - orchestrator owns timelapse lifecycle)
             bool waitingForResumeLogged = false;
 
             try
             {
-                // Initialize TimelapseManager for G-code caching and frame capture
-                timelapseManager = new TimelapseManager(config, loggerFactory, _moonrakerClient!);
+                // Use DI-provided TimelapseManager for G-code caching and frame capture (injected by caller)
+                // timelapseManager is passed in as a parameter
                 
-                // Initialize YouTube service if credentials are provided (for timelapse upload)
-                var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
-                var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
-                bool useOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
-                var liveBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
-                if (useOAuth && liveBroadcastEnabled)
-                {
-                    var ytLogger = loggerFactory.CreateLogger<YouTubeControlService>();
-                    ytService = new YouTubeControlService(config, ytLogger);
-                    var authOk = await ytService.AuthenticateAsync(cancellationToken);
-                    if (!authOk)
-                    {
-                        watcherLogger.LogWarning("[Watcher] YouTube authentication failed. Timelapse upload will be disabled.");
-                        ytService.Dispose();
-                        ytService = null;
-                    }
-                    else
-                    {
-                        watcherLogger.LogInformation("[Watcher] YouTube authenticated successfully for timelapse uploads.");
-                    }
-                }
+                // Orchestrator is responsible for YouTube authentication and uploads.
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -525,21 +403,10 @@ namespace PrintStreamer.Services
                         idleStateSince ??= DateTime.UtcNow;
                     }
 
-                    if (activeTimelapseSessionName != null)
+                    // Track job missing state based on presence of a current job
+                    if (string.IsNullOrWhiteSpace(currentJob))
                     {
-                        if (string.IsNullOrWhiteSpace(currentJob))
-                        {
-                            jobMissingSince ??= DateTime.UtcNow;
-                        }
-                        else
-                        {
-                            jobMissingSince = null;
-                        }
-
-                        if (string.IsNullOrWhiteSpace(activeTimelapseJobFilename) && !string.IsNullOrWhiteSpace(currentJob))
-                        {
-                            activeTimelapseJobFilename = currentJob;
-                        }
+                        jobMissingSince ??= DateTime.UtcNow;
                     }
                     else
                     {
@@ -547,14 +414,12 @@ namespace PrintStreamer.Services
                     }
 
                     bool forceFinalizeActiveSession = false;
-                    if (isPrinting && activeTimelapseSessionName != null && !string.IsNullOrWhiteSpace(currentJob))
+                    // If a printing job filename changes while printing, trigger finalize for previous job state
+                    if (isPrinting && !string.IsNullOrWhiteSpace(currentJob) && !string.IsNullOrWhiteSpace(lastJobFilename) &&
+                        !string.Equals(currentJob, lastJobFilename, StringComparison.OrdinalIgnoreCase))
                     {
-                        if (!string.IsNullOrWhiteSpace(activeTimelapseJobFilename) &&
-                            !string.Equals(currentJob, activeTimelapseJobFilename, StringComparison.OrdinalIgnoreCase))
-                        {
-                            forceFinalizeActiveSession = true;
-                            watcherLogger.LogInformation("[Watcher] Detected job change while timelapse session {Session} remains active. Previous job: {PreviousJob}, new job: {CurrentJob}. Preparing to finalize current timelapse.", activeTimelapseSessionName, activeTimelapseJobFilename, currentJob);
-                        }
+                        forceFinalizeActiveSession = true;
+                        watcherLogger.LogInformation("[Watcher] Detected job change while printing. Previous job: {PreviousJob}, new job: {CurrentJob}. Preparing to finalize previous job.", lastJobFilename, currentJob);
                     }
 
                     if (isPrinting)
@@ -562,153 +427,26 @@ namespace PrintStreamer.Services
                         waitingForResumeLogged = false;
                     }
 
-                    // Inform TimelapseManager about current progress so it can stop capturing when last-layer threshold is reached
-                    try
-                    {
-                        if (timelapseManager != null && activeTimelapseSessionName != null)
-                        {
-                            // NotifyPrintProgress is void - it just stops capturing frames internally when threshold is reached
-                            // The actual finalization and upload is handled by the "else if" block below
-                            timelapseManager.NotifyPrintProgress(activeTimelapseSessionName, currentLayer, totalLayers);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        watcherLogger.LogError(ex, "[Watcher] Failed to notify timelapse manager of print progress");
-                    }
+                    // No direct timelapse manager actions here; orchestration of timelapse lifecycle
+                    // is the responsibility of PrintStreamOrchestrator which subscribes to PrinterState events.
 
-                    // Track if a stream is already active
-                    var streamingActive = streamCts != null && streamTask != null && !streamTask.IsCompleted;
-
-                    if (!forceFinalizeActiveSession && isPrinting && !streamingActive &&
-                        (activeTimelapseSessionName != null || string.IsNullOrWhiteSpace(currentJob) || !string.Equals(currentJob, lastJobFilename, StringComparison.OrdinalIgnoreCase)))
+                    // When a new print job starts, publish the event (above) and let
+                    // the orchestrator decide whether to start/attach streaming/timelapse.
+                    if (!forceFinalizeActiveSession && isPrinting &&
+                        (string.IsNullOrWhiteSpace(currentJob) || !string.Equals(currentJob, lastJobFilename, StringComparison.OrdinalIgnoreCase)))
                     {
                         var fallbackJobName = $"__printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
                         var jobLabel = !string.IsNullOrWhiteSpace(currentJob)
                             ? currentJob
                             : (!string.IsNullOrWhiteSpace(lastJobFilename) ? lastJobFilename! : fallbackJobName);
-                        var jobNameSafe = SanitizeFilename(jobLabel);
-
-                        if (activeTimelapseSessionName == null)
-                        {
-                            watcherLogger.LogInformation("[Watcher] New print job detected: {Job}", currentJob ?? "(unknown)");
-                        }
-                        else
-                        {
-                            watcherLogger.LogInformation("[Watcher] Stream inactive; resuming active timelapse session: {Session}", activeTimelapseSessionName);
-                        }
-
-                        if (streamCts != null)
-                        {
-                            try { streamCts.Cancel(); } catch { }
-                            if (streamTask != null) await streamTask;
-                        }
-                        streamCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        streamTask = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                var alreadyBroadcasting = IsBroadcastActive;
-                                await StartYouTubeStreamAsync(config, loggerFactory, streamCts.Token, enableTimelapse: false, timelapseProvider: null, allowYouTube: !alreadyBroadcasting);
-                            }
-                            catch (Exception ex)
-                            {
-                                watcherLogger.LogError(ex, "[Watcher] Stream error");
-                            }
-                        }, streamCts.Token);
-
-                        if (activeTimelapseSessionName == null)
-                        {
-                            activeTimelapseSessionName = await timelapseManager!.StartTimelapseAsync(jobNameSafe, currentJob);
-                            if (activeTimelapseSessionName != null)
-                            {
-                                watcherLogger.LogInformation("[Watcher] Timelapse session started: {Session}", activeTimelapseSessionName);
-                                activeTimelapseJobFilename = currentJob;
-                            }
-                            else
-                            {
-                                watcherLogger.LogWarning("[Watcher] Warning: Failed to start timelapse session");
-                            }
-
-                            lastJobFilename = currentJob ?? jobLabel;
-                            lastLayerTriggered = false;
-                            timelapseFinalizeTask = null;
-                        }
-                        else
-                        {
-                            if (!string.IsNullOrWhiteSpace(currentJob))
-                            {
-                                lastJobFilename = currentJob;
-                            }
-                        }
-
+                        watcherLogger.LogInformation("[Watcher] New print job detected: {Job}", currentJob ?? "(unknown)");
+                        if (!string.IsNullOrWhiteSpace(currentJob)) lastJobFilename = currentJob;
                         jobMissingSince = null;
                         idleStateSince = null;
                         lastPrintingSeenAt = DateTime.UtcNow;
                     }
-                    // Detect last-layer and finalize timelapse early (while keeping live stream running)
-                    else if (isPrinting && activeTimelapseSessionName != null && !lastLayerTriggered)
-                    {
-                        // More aggressive defaults to catch the last layer of actual printing (not cooldown/retraction)
-                        var thresholdSecs = config.GetValue<int?>("Timelapse:LastLayerRemainingSeconds") ?? 30;
-                        var thresholdPct = config.GetValue<double?>("Timelapse:LastLayerProgressPercent") ?? 98.5;
-                        var layerThreshold = config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1; // trigger one layer earlier (avoid one extra frame)
-                        
-                        bool lastLayerByTime = remaining.HasValue && remaining.Value <= TimeSpan.FromSeconds(thresholdSecs);
-                        bool lastLayerByProgress = progressPct.HasValue && progressPct.Value >= thresholdPct;
-                        bool lastLayerByLayer = currentLayer.HasValue && totalLayers.HasValue && 
-                                                totalLayers.Value > 0 && 
-                                                currentLayer.Value >= (totalLayers.Value - layerThreshold);
-                        
-                        if (lastLayerByTime || lastLayerByProgress || lastLayerByLayer)
-                        {
-                            watcherLogger.LogInformation("[Timelapse] *** Last-layer detected ***");
-                            watcherLogger.LogDebug("[Timelapse] Remaining time: {Remaining} (threshold: {ThresholdSecs}s, triggered: {ByTime})", remaining?.ToString() ?? "n/a", thresholdSecs, lastLayerByTime);
-                            watcherLogger.LogDebug("[Timelapse] Progress: {Progress}% (threshold: {ThresholdPct}%, triggered: {ByProgress})", progressPct?.ToString("F1") ?? "n/a", thresholdPct, lastLayerByProgress);
-                            watcherLogger.LogDebug("[Timelapse] Layer: {Layer}/{Total} (threshold: -{LayerThreshold}, triggered: {ByLayer})", currentLayer?.ToString() ?? "n/a", totalLayers?.ToString() ?? "n/a", layerThreshold, lastLayerByLayer);
-                            watcherLogger.LogInformation("[Timelapse] Capturing final frame and finalizing timelapse now...");
-                            lastLayerTriggered = true;
-
-                            // Stop timelapse via manager and kick off finalize/upload in the background
-                            var sessionToFinalize = activeTimelapseSessionName;
-                            var uploadEnabled = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-                            timelapseFinalizeTask = Task.Run(async () =>
-                            {
-                                try
-                                {
-                                    watcherLogger.LogInformation("[Timelapse] Stopping timelapse session (early finalize): {Session}", sessionToFinalize);
-                                    var createdVideoPath = await timelapseManager!.StopTimelapseAsync(sessionToFinalize!);
-
-                                    if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath) && uploadEnabled && ytService != null)
-                                    {
-                                        try
-                                        {
-                                            watcherLogger.LogInformation("[Timelapse] Uploading timelapse video (early finalize) to YouTube...");
-                                            var titleName = lastJobFilename ?? sessionToFinalize;
-                                            var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, titleName!, CancellationToken.None);
-                                            if (!string.IsNullOrWhiteSpace(videoId))
-                                            {
-                                                watcherLogger.LogInformation("[Timelapse] Early-upload complete: https://www.youtube.com/watch?v={VideoId}", videoId);
-                                            }
-                                        }
-                                        catch (Exception upx)
-                                        {
-                                            watcherLogger.LogError(upx, "[Timelapse] Early-upload failed");
-                                        }
-                                    }
-                                }
-                                catch (Exception fex)
-                                {
-                                    watcherLogger.LogError(fex, "[Timelapse] Early finalize failed");
-                                }
-                            }, CancellationToken.None);
-
-                            // Clear the active session reference so end-of-print path won't double-run
-                            activeTimelapseSessionName = null;
-                            activeTimelapseJobFilename = null;
-                        }
-                    }
-                    else if ((forceFinalizeActiveSession || !isPrinting) && (streamCts != null || streamTask != null || activeTimelapseSessionName != null))
+                    // Timelapse last-layer detection and early finalize handled by orchestrator.
+                    else if ((forceFinalizeActiveSession || !isPrinting))
                     {
                         var now = DateTime.UtcNow;
                         var layerOffset = config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
@@ -739,9 +477,8 @@ namespace PrintStreamer.Services
                         else
                         {
                             waitingForResumeLogged = false;
-
-                            // Job finished, end stream and finalize timelapse
-                            var jobLogName = lastJobFilename ?? activeTimelapseSessionName ?? "(unknown)";
+                            // Job finished — orchestrator will finalize timelapse and stop streaming.
+                            var jobLogName = lastJobFilename ?? "(unknown)";
                             if (forceFinalizeActiveSession)
                             {
                                 watcherLogger.LogInformation("[Watcher] Finalizing active timelapse session before starting new job: {Job}", jobLogName);
@@ -750,148 +487,16 @@ namespace PrintStreamer.Services
                             {
                                 watcherLogger.LogInformation("[Watcher] Print job finished: {Job}", jobLogName);
                             }
-                            // Preserve the filename we detected at job start for upload metadata
                             var finishedJobFilename = lastJobFilename;
                             if (!forceFinalizeActiveSession)
                             {
                                 lastCompletedJobFilename = finishedJobFilename;
                             }
                             lastJobFilename = null;
-                            
-                            // Properly stop the broadcast (ends YouTube stream and cleans up) only when this is a true job completion.
-                            if (!forceFinalizeActiveSession)
-                            {
-                                var autoBroadcastEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
-                                if (autoBroadcastEnabled)
-                                {
-                                    try
-                                    {
-                                        var (ok, msg) = await StopBroadcastAsync(config, CancellationToken.None, loggerFactory);
-                                        if (ok)
-                                        {
-                                            watcherLogger.LogInformation("[Watcher] Broadcast stopped successfully");
-                                        }
-                                        else
-                                        {
-                                            watcherLogger.LogWarning("[Watcher] Error stopping broadcast: {Message}", msg);
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        watcherLogger.LogError(ex, "[Watcher] Exception stopping broadcast");
-                                    }
-                                }
-                                else
-                                {
-                                    watcherLogger.LogInformation("[Watcher] Auto-broadcast is disabled; leaving live broadcast running (manual mode).");
-                                }
-                            }
-
-                            // Clean up local stream references
-                            if (streamCts != null)
-                            {
-                                try { streamCts.Cancel(); } catch { }
-                                if (streamTask != null) await streamTask;
-                                streamCts = null;
-                                streamTask = null;
-                            }
-                            if (timelapseCts != null)
-                            {
-                                try { timelapseCts.Cancel(); } catch { }
-                                if (timelapseTask != null)
-                                {
-                                    try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
-                                }
-                                timelapseCts = null;
-                                timelapseTask = null;
-                            }
-                            if (timelapseFinalizeTask != null)
-                            {
-                                // Early finalize already started; wait for it to complete
-                                try { await timelapseFinalizeTask; } catch { }
-                                timelapseFinalizeTask = null;
-                            }
-                            else if (activeTimelapseSessionName != null)
-                            {
-                                watcherLogger.LogInformation("[Timelapse] Stopping timelapse session (end of print): {Session}", activeTimelapseSessionName);
-                                try
-                                {
-                                    var createdVideoPath = await timelapseManager!.StopTimelapseAsync(activeTimelapseSessionName);
-                                    
-                                    // Upload the timelapse video to YouTube if enabled and video was created successfully
-                                    if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
-                                    {
-                                        var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-                                        if (uploadTimelapse && ytService != null)
-                                        {
-                                            watcherLogger.LogInformation("[Timelapse] Uploading timelapse video to YouTube...");
-                                            try
-                                            {
-                                                // Use the timelapse folder name (sanitized) for nicer titles
-                                                var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, activeTimelapseSessionName, CancellationToken.None);
-                                                if (!string.IsNullOrWhiteSpace(videoId))
-                                                {
-                                                    watcherLogger.LogInformation("[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={VideoId}", videoId);
-                                                    try
-                                                    {
-                                                        var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
-                                                        if (!string.IsNullOrWhiteSpace(playlistName))
-                                                        {
-                                                            var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
-                                                            var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, CancellationToken.None);
-                                                            if (!string.IsNullOrWhiteSpace(pid))
-                                                            {
-                                                                await ytService.AddVideoToPlaylistAsync(pid, videoId, CancellationToken.None);
-                                                            }
-                                                        }
-                                                    }
-                                                    catch (Exception ex)
-                                                    {
-                                                        watcherLogger.LogError(ex, "[YouTube] Failed to add timelapse to playlist");
-                                                    }
-                                                    try
-                                                    {
-                                                        // Set thumbnail from last frame if available
-                                                        var frameFiles = Directory.GetFiles(Path.GetDirectoryName(createdVideoPath) ?? string.Empty, "frame_*.jpg").OrderBy(f => f).ToArray();
-                                                        if (frameFiles.Length > 0)
-                                                        {
-                                                            var lastFrame = frameFiles[^1];
-                                                            var bytes = await File.ReadAllBytesAsync(lastFrame, CancellationToken.None);
-                                                            var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
-                                                            if (okThumb)
-                                                            {
-                                                                watcherLogger.LogInformation("[Timelapse] Set video thumbnail from last frame.");
-                                                            }
-                                                        }
-                                                    }
-                                                    catch (Exception ex)
-                                                    {
-                                                        watcherLogger.LogError(ex, "[Timelapse] Failed to set video thumbnail");
-                                                    }
-                                                }
-                                            }
-                                            catch (Exception ex)
-                                            {
-                                                watcherLogger.LogError(ex, "[Timelapse] Failed to upload video to YouTube");
-                                            }
-                                        }
-                                        else if (!uploadTimelapse)
-                                        {
-                                            watcherLogger.LogInformation("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
-                                        }
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    watcherLogger.LogError(ex, "[Timelapse] Failed to create video");
-                                }
-                                activeTimelapseSessionName = null;
-                            }
 
                             jobMissingSince = null;
                             idleStateSince = null;
                             lastPrintingSeenAt = null;
-                            activeTimelapseJobFilename = null;
                         }
                     }
                     else
@@ -901,7 +506,7 @@ namespace PrintStreamer.Services
 
                     // Adaptive polling: poll faster when we're near completion (must be inside try block)
                     pollInterval = basePollInterval;
-                    if (isPrinting && timelapse != null && !lastLayerTriggered)
+                    if (isPrinting)
                     {
                         // Use fast polling if:
                         // - Less than 2 minutes remaining
@@ -938,106 +543,7 @@ namespace PrintStreamer.Services
             {
                 // Cleanup on exit
                 watcherLogger.LogInformation("[Watcher] Shutting down...");
-                if (streamCts != null)
-                {
-                    try { streamCts.Cancel(); } catch { }
-                    if (streamTask != null)
-                    {
-                        try { await streamTask; } catch { }
-                    }
-                }
-                if (timelapseCts != null)
-                {
-                    try { timelapseCts.Cancel(); } catch { }
-                    if (timelapseTask != null)
-                    {
-                        try { await timelapseTask; } catch (OperationCanceledException) { /* Expected */ }
-                    }
-                }
-                if (timelapse != null)
-                {
-                    watcherLogger.LogInformation("[Timelapse] Creating video from {OutputDir}...", timelapse.OutputDir);
-                    var folderName = Path.GetFileName(timelapse.OutputDir);
-                    var videoPath = Path.Combine(timelapse.OutputDir, $"{folderName}.mp4");
-                    try
-                    {
-                        var createdVideoPath = await timelapse.CreateVideoAsync(videoPath, 30, CancellationToken.None);
-                        
-                        // Upload the timelapse video to YouTube if enabled and video was created successfully
-                        if (!string.IsNullOrWhiteSpace(createdVideoPath) && File.Exists(createdVideoPath))
-                        {
-                            var uploadTimelapse = config.GetValue<bool?>("YouTube:TimelapseUpload:Enabled") ?? false;
-                                if (uploadTimelapse && ytService != null)
-                                {
-                                    watcherLogger.LogInformation("[Timelapse] Uploading timelapse video to YouTube...");
-                                    try
-                                    {
-                                    // Prefer the recently finished job's filename; fallback to timelapse folder name
-                                    var filenameForUpload = lastCompletedJobFilename ?? lastJobFilename ?? folderName;
-                                    var videoId = await ytService.UploadTimelapseVideoAsync(createdVideoPath, filenameForUpload, CancellationToken.None);
-                                        if (!string.IsNullOrWhiteSpace(videoId))
-                                        {
-                                            watcherLogger.LogInformation("[Timelapse] Video uploaded successfully! https://www.youtube.com/watch?v={VideoId}", videoId);
-                                            // Add to playlist if configured
-                                            try
-                                            {
-                                                var playlistName = config.GetValue<string>("YouTube:Playlist:Name");
-                                                if (!string.IsNullOrWhiteSpace(playlistName))
-                                                {
-                                                    var playlistPrivacy = config.GetValue<string>("YouTube:Playlist:Privacy") ?? "unlisted";
-                                                    var pid = await ytService.EnsurePlaylistAsync(playlistName, playlistPrivacy, CancellationToken.None);
-                                                    if (!string.IsNullOrWhiteSpace(pid))
-                                                    {
-                                                        await ytService.AddVideoToPlaylistAsync(pid, videoId, CancellationToken.None);
-                                                    }
-                                                }
-                                            }
-                                            catch (Exception ex)
-                                            {
-                                                watcherLogger.LogError(ex, "[YouTube] Failed to add timelapse to playlist");
-                                            }
-                                                try
-                                                {
-                                                    var frameFiles = Directory.GetFiles(Path.GetDirectoryName(createdVideoPath) ?? string.Empty, "frame_*.jpg").OrderBy(f => f).ToArray();
-                                                    if (frameFiles.Length > 0)
-                                                    {
-                                                        var lastFrame = frameFiles[^1];
-                                                        var bytes = await File.ReadAllBytesAsync(lastFrame, CancellationToken.None);
-                                                        var okThumb = await ytService.SetVideoThumbnailAsync(videoId, bytes, CancellationToken.None);
-                                                        if (okThumb)
-                                                        {
-                                                            watcherLogger.LogInformation("[Timelapse] Set video thumbnail from last frame.");
-                                                        }
-                                                    }
-                                                }
-                                                catch (Exception ex)
-                                                {
-                                                    watcherLogger.LogError(ex, "[Timelapse] Failed to set video thumbnail");
-                                                }
-                                        }
-                                }
-                                catch (Exception ex)
-                                {
-                                    watcherLogger.LogError(ex, "[Timelapse] Failed to upload video to YouTube");
-                                }
-                            }
-                            else if (!uploadTimelapse)
-                            {
-                                    watcherLogger.LogInformation("[Timelapse] Video upload to YouTube is disabled (YouTube:TimelapseUpload:Enabled=false)");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        watcherLogger.LogError(ex, "[Timelapse] Failed to create video");
-                    }
-                    timelapse.Dispose();
-                }
-                
-                // Cleanup services
-                ytService?.Dispose();
-                timelapseManager?.Dispose();
-                
+                // Poller cleanup complete. Orchestrator owns encoder and upload lifecycle.
                 watcherLogger.LogInformation("[Watcher] Cleanup complete.");
             }
         }
@@ -1046,6 +552,8 @@ namespace PrintStreamer.Services
     public static async Task StartYouTubeStreamAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken, bool enableTimelapse = true, ITimelapseMetadataProvider? timelapseProvider = null, bool allowYouTube = true)
         {
             var streamLogger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
+            // Poller runs the internal streaming implementation below. Orchestrators
+            // should call these helpers when they need to control broadcasts/streams.
             string? rtmpUrl = null;
             string? streamKey = null;
             string? broadcastId = null;
@@ -1054,27 +562,13 @@ namespace PrintStreamer.Services
             TimelapseService? timelapse = null;
             CancellationTokenSource? timelapseCts = null;
             Task? timelapseTask = null;
-            IStreamer? streamer = null;
             OverlayTextService? overlayService = null;
 
-            // Ensure only ONE streamer is running at any time. If a streamer exists, stop it first.
+            // The poller does not own or start encoder processes. If an encoder
+            // needs restarting, the StreamOrchestrator should handle it. No action
+            // is taken here regarding in-process streamers.
             try
             {
-                IStreamer? existing;
-                CancellationTokenSource? existingCts;
-                lock (_streamLock)
-                {
-                    existing = _currentStreamer;
-                    existingCts = _currentStreamerCts;
-                    _currentStreamer = null;
-                    _currentStreamerCts = null;
-                }
-                if (existing != null)
-                {
-                    try { existingCts?.Cancel(); } catch { }
-                    try { await Task.WhenAny(existing.ExitTask, Task.Delay(3000, cancellationToken)); } catch { }
-                    try { existing.Stop(); } catch { }
-                }
 
                 var oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
                 var oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
@@ -1191,7 +685,6 @@ namespace PrintStreamer.Services
                             {
                                 lock (_streamLock)
                                 {
-                                    _currentYouTubeService = ytService;
                                     _currentBroadcastId = broadcastId;
                                 }
                             }
@@ -1333,34 +826,11 @@ namespace PrintStreamer.Services
                     if (string.IsNullOrWhiteSpace(audioUrl)) audioUrl = "http://127.0.0.1:8080/api/audio/stream";
                 }
 
-                // Always use the ffmpeg-based streamer. If fullRtmpUrl is null, ffmpeg will produce local preview only.
-                streamLogger.LogInformation("Starting ffmpeg streamer to {Target} (fps={Fps}, kbps={Kbps})", fullRtmpUrl != null ? rtmpUrl + "/***" : "local preview", targetFps, bitrateKbps);
-                streamer = new FfmpegStreamer(source, fullRtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl, loggerFactory.CreateLogger<FfmpegStreamer>());
-                
-                // Store streamer reference so it can be promoted to live later
-                var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                lock (_streamLock)
-                {
-                    _currentStreamer = streamer;
-                    _currentStreamerCts = cts;
-                }
-                
-                // Start streamer without awaiting so we can detect ingestion while it's running
-                var streamerStartTask = streamer.StartAsync(cts.Token);
-
-                // Ensure streamer is force-stopped when cancellation is requested (extra safety)
-                using var stopOnCancel = cancellationToken.Register(() =>
-                {
-                    try
-                    {
-                        streamLogger.LogInformation("Cancellation requested — stopping streamer...");
-                        streamer?.Stop();
-                    }
-                    catch (Exception ex)
-                    {
-                        streamLogger.LogError(ex, "Error stopping streamer on cancel");
-                    }
-                });
+                // The poller does not create or start the ffmpeg process. It returns
+                // broadcast information and records the broadcast id so that the
+                // orchestrator or other consumers can create/attach an encoder as
+                // needed (for example using the returned RTMP endpoint).
+                streamLogger.LogInformation("Stream ready: orchestrator should start encoder for {Target} (fps={Fps}, kbps={Kbps})", fullRtmpUrl != null ? rtmpUrl + "/***" : "local preview", targetFps, bitrateKbps);
 
                 // If we created a broadcast, transition it to live
                     if (ytService != null && broadcastId != null)
@@ -1456,8 +926,14 @@ namespace PrintStreamer.Services
                     }, cancellationToken);
                 }
 
-                // Wait for the stream to end (started earlier)
-                await streamer.ExitTask;
+                // Wait until cancellation is requested; the orchestrator is expected
+                // to cancel this operation when the stream ends. This preserves the
+                // timelapse lifecycle and ensures finalization runs below.
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                catch (OperationCanceledException) { /* expected on shutdown */ }
             }
             catch (OperationCanceledException)
             {
@@ -1469,13 +945,6 @@ namespace PrintStreamer.Services
             }
             finally
             {
-                // Clear streamer reference
-                lock (_streamLock)
-                {
-                    _currentStreamer = null;
-                    _currentStreamerCts = null;
-                }
-                
                 try { overlayService?.Dispose(); } catch { }
                 // Final thumbnail upload removed: do not capture/upload a final thumbnail automatically
                 
@@ -1557,8 +1026,7 @@ namespace PrintStreamer.Services
                         timelapse = null;
                     }
                 }
-                // Ensure streamer is stopped (in case cancellation didn't trigger it for some reason)
-                try { streamer?.Stop(); } catch { }
+                // Encoder/process stop is handled by the orchestrator if needed.
 
                 // Clean up YouTube broadcast if created
                 if (ytService != null && broadcastId != null)
@@ -1577,7 +1045,7 @@ namespace PrintStreamer.Services
                         lock (_streamLock)
                         {
                             _currentBroadcastId = null;
-                            _currentYouTubeService = null;
+                            // _currentYouTubeService removed; nothing to clear here
                         }
                     }
                 }

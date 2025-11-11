@@ -25,6 +25,9 @@
     private bool _autoScroll = true;
     private bool _flipLayout = false;
     private string _containerId = $"printer-console-{Guid.NewGuid().ToString("N")}";
+    // Presets loaded from configuration (appsettings)
+    private record Preset(string Name, int ToolTemp, int BedTemp);
+    private List<Preset> _presets = new List<Preset>();
 
     protected override void OnInitialized()
     {
@@ -36,6 +39,29 @@
             {
                 var allowFromCfg = Cfg.GetValue<bool?>("Stream:Console:AllowSend");
                 if (allowFromCfg.HasValue) AllowSend = allowFromCfg.Value;
+            }
+        }
+        catch { }
+
+        // Load quick-action presets from configuration under Stream:Console:Presets
+        // Expected config shape (array):
+        // Stream:Console:Presets:
+        //  - Name: "PLA"
+        //    ToolTemp: 200
+        //    BedTemp: 60
+        // If not present, fallback to the previous hard-coded defaults.
+        try
+        {
+            var section = Cfg.GetSection("Stream:Console:Presets");
+            if (section.Exists())
+            {
+                foreach (var child in section.GetChildren())
+                {
+                    var name = child.GetValue<string>("Name") ?? child.Key ?? "Preset";
+                    var tool = child.GetValue<int?>("ToolTemp") ?? child.GetValue<int?>("Tool") ?? 0;
+                    var bed = child.GetValue<int?>("BedTemp") ?? child.GetValue<int?>("Bed") ?? 0;
+                    _presets.Add(new Preset(name, tool, bed));
+                }
             }
         }
         catch { }
@@ -110,10 +136,21 @@
             </div>
             <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <span style="font-size:12px;color:#aaa;">Quick actions:</span>
-                <button @onclick="() => SendPreset(200,60)">PLA</button>
-                <button @onclick="() => SendPreset(240,70)">PETG</button>
-                <button @onclick="() => SendPreset(250,100)">ABS</button>
-                <button @onclick="() => SendPreset(0,0)">Cooldown</button>
+                @if (_presets != null && _presets.Count > 0)
+                {
+                    foreach (var p in _presets)
+                    {
+                        <button @onclick="() => SendPreset(p.ToolTemp, p.BedTemp)">@p.Name</button>
+                    }
+                }
+                else
+                {
+                    <!-- Fallback to original hard-coded presets when no configuration is present -->
+                    <button @onclick="() => SendPreset(200,60)">PLA</button>
+                    <button @onclick="() => SendPreset(240,70)">PETG</button>
+                    <button @onclick="() => SendPreset(250,100)">ABS</button>
+                    <button @onclick="() => SendPreset(0,0)">Cooldown</button>
+                }
             </div>
             @if (!string.IsNullOrEmpty(_lastSendMessage))
             {
