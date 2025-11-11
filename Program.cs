@@ -225,6 +225,16 @@ TimelapseManager? timelapseManager = null;
 var app = webBuilder.Build();
 
 ProxyUtil.Logger = app.Services.GetRequiredService<ILogger<Program>>();
+// Provide DI-created MoonrakerClient to the static poller so it can query printer state
+try
+{
+    MoonrakerPoller.SetMoonrakerClient(app.Services.GetRequiredService<MoonrakerClient>());
+}
+catch
+{
+    // If registration fails for any reason, continue startup but log via proxy logger
+    ProxyUtil.Logger?.LogWarning("Failed to register MoonrakerClient with MoonrakerPoller");
+}
 
 // Wire up audio track completion callback to orchestrator
 {

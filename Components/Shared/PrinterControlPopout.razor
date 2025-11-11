@@ -411,12 +411,22 @@
                         <span class="current-temp">@(_currentBedTemp?.ToString("F0") ?? "—")°C</span>
                     </div>
                     <div class="preset-buttons">
-                        <button class="preset-btn" @onclick="() => ApplyPreset(200, 60)">PLA</button>
-                        <button class="preset-btn" @onclick="() => ApplyPreset(240, 70)">PETG</button>
-                        <button class="preset-btn" @onclick="() => ApplyPreset(250, 100)">ABS</button>
-                        <button class="preset-btn" @onclick="() => ApplyPreset(0, 0)">Cooldown</button>
+                        @if (_presets != null && _presets.Count > 0)
+                        {
+                            foreach (var p in _presets)
+                            {
+                                <button class="preset-btn" @onclick="() => ApplyPreset(p.Name)">@p.Name</button>
+                            }
+                        }
+                        else
+                        {
+                            <button class="preset-btn" @onclick='() => ApplyPreset("pla")'>PLA</button>
+                            <button class="preset-btn" @onclick='() => ApplyPreset("petg")'>PETG</button>
+                            <button class="preset-btn" @onclick='() => ApplyPreset("abs")'>ABS</button>
+                            <button class="preset-btn" @onclick='() => ApplyPreset("cooldown")'>Cooldown</button>
+                        }
                     </div>
-                    <button class="cancel-btn" @onclick="CancelPrint" title="Cancel current print">🛑 Cancel Print</button>
+                    <button class="cancel-btn" @onclick="ConfirmCancel" title="Cancel current print">🛑 Cancel Print</button>
                 </div>
             </div>
 
@@ -432,8 +442,8 @@
 
             <div class="control-section console-section">
                 <h4>Console</h4>
-                <div class="console-output">
-                    <div class="console-lines @(_consoleFlipped ? "flipped" : "")" @ref="_consoleContainer">
+                    <div class="console-output">
+                        <div id="popoutConsoleLines" class="console-lines @(_consoleFlipped ? "flipped" : "")" @ref="_consoleContainer">
                         @foreach (var line in GetDisplayConsoleLines())
                         {
                             <div class="console-line @line.Level">@line.Text</div>
@@ -444,7 +454,7 @@
                     <button @onclick="ToggleAutoScroll" class="@(_autoScroll ? "active" : "")" title="Toggle auto-scroll">
                         @(_autoScroll ? "↓" : "↕") Auto
                     </button>
-                    <button @onclick="ToggleConsoleFlip" title="Flip layout">
+                    <button @onclick="ToggleConsoleFlip" class="@(_consoleFlipped ? "active" : "")" title="Flip layout">
                         ⇅ Flip
                     </button>
                 </div>
@@ -470,10 +480,25 @@
     private bool _disposed = false;
     private CancellationTokenSource? _tempUpdateCts;
 
+    // Configurable cancel macro (falls back to M409)
+    private string _cancelMacro = "M409";
+
+    // Optional configured presets loaded from appsettings (Macros:Temperature:Presets)
+    private record Preset(string Name, int ToolTemp, int BedTemp);
+    private List<Preset> _presets = new();
+
     protected override async Task OnInitializedAsync()
     {
         try
         {
+            // Load cancel macro from config (Macros:CancelPrint) with fallback
+            try
+            {
+                _cancelMacro = Cfg.GetValue<string>("Macros:CancelPrint") ?? _cancelMacro;
+            }
+            catch { }
+
+            // First try to get limits from the server-side PrinterApi when available
             if (PrinterApi != null)
             {
                 var config = await PrinterApi.GetConfigAsync();
@@ -483,11 +508,34 @@
                     _bedMaxTemp = config.BedMaxTemp;
                 }
             }
-            else
+
+            // Fallback to Macros:Temperature then legacy Stream:Console values
+            _toolMaxTemp = _toolMaxTemp != 0
+                ? _toolMaxTemp
+                : Cfg.GetValue<int?>("Macros:Temperature:ToolMaxTemp")
+                    ?? Cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
+
+            _bedMaxTemp = _bedMaxTemp != 0
+                ? _bedMaxTemp
+                : Cfg.GetValue<int?>("Macros:Temperature:BedMaxTemp")
+                    ?? Cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
+
+            // Load configured presets if present
+            try
             {
-                _toolMaxTemp = Cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
-                _bedMaxTemp = Cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
+                var section = Cfg.GetSection("Macros:Temperature:Presets");
+                if (section.Exists())
+                {
+                    foreach (var child in section.GetChildren())
+                    {
+                        var name = child.GetValue<string>("Name") ?? child.Key ?? "Preset";
+                        var tool = child.GetValue<int?>("ToolTemp") ?? child.GetValue<int?>("Tool") ?? 0;
+                        var bed = child.GetValue<int?>("BedTemp") ?? child.GetValue<int?>("Bed") ?? 0;
+                        _presets.Add(new Preset(name, tool, bed));
+                    }
+                }
             }
+            catch { }
 
             // Subscribe to console service for new lines
             if (PrinterConsoleService != null)
@@ -505,8 +553,8 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error loading printer config: {ex.Message}");
-            _toolMaxTemp = Cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
-            _bedMaxTemp = Cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
+            _toolMaxTemp = Cfg.GetValue<int?>("Macros:Temperature:ToolMaxTemp") ?? Cfg.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
+            _bedMaxTemp = Cfg.GetValue<int?>("Macros:Temperature:BedMaxTemp") ?? Cfg.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
         }
     }
 
@@ -531,6 +579,33 @@
             }
             catch (OperationCanceledException) { break; }
             catch { }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Only attempt initial auto-scroll when the popout is expanded.
+        if (firstRender && _autoScroll && !_minimized)
+        {
+            // Poll until the console element has a measurable scrollHeight (content rendered),
+            // then scroll to the correct end. This prevents the initial-load 'stuck at top' issue.
+            var tries = 0;
+            const int maxTries = 20;
+            while (tries < maxTries)
+            {
+                try
+                {
+                    var height = await JS.InvokeAsync<int>("getScrollHeightById", "popoutConsoleLines");
+                    if (height > 0) break;
+                }
+                catch { }
+                tries++;
+                await Task.Delay(50);
+            }
+
+            // Give a tiny moment for final layout, then scroll to the proper end.
+            await Task.Delay(10);
+            await ScrollToBottomAsync();
         }
     }
 
@@ -566,40 +641,74 @@
 
     private async Task ScrollToBottomAsync()
     {
-        if (_consoleContainer.Id != null)
+        try
         {
-            try
-            {
-                await JS.InvokeVoidAsync("scrollToPosition", _consoleContainer, _consoleFlipped ? "top" : "bottom");
-            }
-            catch { }
+            await JS.InvokeVoidAsync("scrollToPositionById", "popoutConsoleLines", _consoleFlipped ? "top" : "bottom");
         }
+        catch { }
     }
 
-    private void ToggleAutoScroll()
+    private async Task ToggleAutoScroll()
     {
         _autoScroll = !_autoScroll;
         StateHasChanged();
+
+        // When enabling auto-scroll, immediately jump to the correct end depending on flip state
+        if (_autoScroll)
+        {
+            await Task.Delay(10);
+            await ScrollToBottomAsync();
+        }
     }
 
-    private void ToggleConsoleFlip()
+    private async Task ToggleConsoleFlip()
     {
         _consoleFlipped = !_consoleFlipped;
         StateHasChanged();
+
+        // If auto-scroll is enabled, adjust scroll to the appropriate end after flipping
+        if (_autoScroll)
+        {
+            await Task.Delay(10);
+            await ScrollToBottomAsync();
+        }
     }
 
-    private void ToggleMinimize()
+    private async Task ToggleMinimize()
     {
+        // Toggle minimized state
         _minimized = !_minimized;
         StateHasChanged();
+
+        // If we just expanded and auto-scroll is enabled, ensure the console scrolls to the correct end.
+        if (!_minimized && _autoScroll)
+        {
+            // Wait for the DOM to render the expanded content, then poll until the console has height.
+            var tries = 0;
+            const int maxTries = 20;
+            while (tries < maxTries)
+            {
+                try
+                {
+                    var height = await JS.InvokeAsync<int>("getScrollHeightById", "popoutConsoleLines");
+                    if (height > 0) break;
+                }
+                catch { }
+                tries++;
+                await Task.Delay(50);
+            }
+
+            await Task.Delay(10);
+            await ScrollToBottomAsync();
+        }
     }
 
-    private void HandleHeaderClick()
+    private async Task HandleHeaderClick()
     {
         // Only expand when minimized (clicking header)
         if (_minimized)
         {
-            ToggleMinimize();
+            await ToggleMinimize();
         }
     }
 
@@ -645,11 +754,31 @@
         }
     }
 
+    private async Task ConfirmCancel()
+    {
+        try
+        {
+            // Use browser confirm dialog to ask for user confirmation before cancelling the print
+            var ok = false;
+            try
+            {
+                ok = await JS.InvokeAsync<bool>("confirm", "Are you sure you want to cancel the current print?");
+            }
+            catch { /* ignore JS errors and treat as cancelled */ }
+
+            if (!ok) return;
+
+            await CancelPrint();
+        }
+        catch { }
+    }
+
     private async Task CancelPrint()
     {
         try
         {
-            var res = await PrinterApi.SendGcodeAsync("M409");
+            var cmd = _cancelMacro ?? "M409";
+            var res = await PrinterApi.SendGcodeAsync(cmd);
             await ShowToastAsync(res?.Success ?? false ? "Print cancel sent" : res?.Error ?? "Failed to cancel print", res?.Success ?? false ? "success" : "error");
         }
         catch (Exception ex)
@@ -658,25 +787,18 @@
         }
     }
 
-    private async Task ApplyPreset(int toolTemp, int bedTemp)
+    private async Task ApplyPreset(string presetName)
     {
         try
         {
-            var presetName = (toolTemp, bedTemp) switch
-            {
-                (200, 60) => "pla",
-                (240, 70) => "petg",
-                (250, 100) => "abs",
-                (0, 0) => "cooldown",
-                _ => "custom"
-            };
-
             var res = await PrinterApi.ApplyPresetAsync(presetName);
             if (res?.Success ?? false)
             {
-                _toolTemp = toolTemp;
-                _bedTemp = bedTemp;
-                await ShowToastAsync($"Preset applied: Tool {toolTemp}°C, Bed {bedTemp}°C", "success");
+                // Update local inputs with returned temps when available
+                if (res.ToolTemp.HasValue) _toolTemp = res.ToolTemp.Value;
+                if (res.BedTemp.HasValue) _bedTemp = res.BedTemp.Value;
+
+                await ShowToastAsync($"Preset applied: Tool {_toolTemp}°C, Bed {_bedTemp}°C", "success");
             }
             else
             {

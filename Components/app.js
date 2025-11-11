@@ -1,4 +1,4 @@
-// PrintStreamer JavaScript Interop
+ // PrintStreamer JavaScript Interop
 // Provides MJPEG stream monitoring and toast notifications
 
 let isStreamPlaying = false; // legacy; real status comes from window._printstreamer_mjpeg_ready
@@ -65,13 +65,116 @@ window.getStreamPlayingStatus = function() {
     try { return !!window._printstreamer_mjpeg_ready; } catch (e) { return false; }
 };
 
-// Simple scroll-to-bottom helper for console windows
+ // Simple scroll-to-bottom helper for console windows
 window.psScrollToBottom = function(elementId){
     try{
         const el = document.getElementById(elementId);
         if(!el) return;
-        el.scrollTop = el.scrollHeight;
+        // Use requestAnimationFrame and scroll the last child into view when possible;
+        // this is more reliable when Blazor updates the DOM and element heights change.
+        requestAnimationFrame(() => {
+            const last = el.lastElementChild;
+            if (last && typeof last.scrollIntoView === 'function') {
+                last.scrollIntoView({ block: 'end', inline: 'nearest' });
+            } else {
+                el.scrollTop = el.scrollHeight;
+            }
+        });
     }catch(e){ /* ignore */ }
+};
+
+ // Simple scroll-to-top helper for console windows
+window.psScrollToTop = function(elementId){
+    try{
+        const el = document.getElementById(elementId);
+        if(!el) return;
+        requestAnimationFrame(() => {
+            const first = el.firstElementChild;
+            if (first && typeof first.scrollIntoView === 'function') {
+                first.scrollIntoView({ block: 'start', inline: 'nearest' });
+            } else {
+                el.scrollTop = 0;
+            }
+        });
+    }catch(e){ /* ignore */ }
+};
+
+ // Scroll to position with retries to handle asynchronous DOM updates
+window.psScrollToPositionWithRetry = function(elementId, position, attempts = 6, delay = 50){
+    try{
+        console.debug('[psScroll] called', { elementId, position, attempts, delay });
+        const el = document.getElementById(elementId);
+        if(!el){
+            console.warn('[psScroll] element not found', elementId);
+            return;
+        }
+        const doScroll = () => {
+            try {
+                const info = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, children: el.children.length };
+                console.debug('[psScroll] doScroll', position, info);
+                if (position === 'top') {
+                    const first = el.firstElementChild;
+                    if (first && typeof first.scrollIntoView === 'function') {
+                        first.scrollIntoView({ block: 'start', inline: 'nearest' });
+                        console.debug('[psScroll] scrolled first child into view');
+                    } else {
+                        el.scrollTop = 0;
+                        console.debug('[psScroll] set scrollTop=0');
+                    }
+                } else {
+                    const last = el.lastElementChild;
+                    if (last && typeof last.scrollIntoView === 'function') {
+                        last.scrollIntoView({ block: 'end', inline: 'nearest' });
+                        console.debug('[psScroll] scrolled last child into view');
+                    } else {
+                        el.scrollTop = el.scrollHeight;
+                        console.debug('[psScroll] set scrollTop=scrollHeight');
+                    }
+                }
+            } catch (e) { console.error('[psScroll] doScroll error', e); }
+        };
+
+        // Initial attempt on next frame
+        requestAnimationFrame(doScroll);
+
+        // Retry a few times spaced out to cover Blazor render timing
+        let tries = 1;
+        const iv = setInterval(() => {
+            tries++;
+            requestAnimationFrame(doScroll);
+            if (tries >= attempts) {
+                clearInterval(iv);
+                console.debug('[psScroll] retries finished');
+            }
+        }, delay);
+    }catch(e){ console.error('[psScroll] outer error', e); }
+};
+
+ // Force a hard scroll after a short delay (useful when Blazor reorders DOM)
+window.psForceScroll = function(elementId, position, delayMs = 100){
+    try{
+        setTimeout(() => {
+            try {
+                const el = document.getElementById(elementId);
+                if(!el) return;
+                if(position === 'top'){
+                    if (typeof el.scrollTo === 'function') {
+                        el.scrollTo({ top: 0, behavior: 'auto' });
+                    } else {
+                        el.scrollTop = 0;
+                    }
+                    console.debug('[psForceScroll] scrolled top', elementId);
+                } else {
+                    if (typeof el.scrollTo === 'function') {
+                        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+                    } else {
+                        el.scrollTop = el.scrollHeight;
+                    }
+                    console.debug('[psForceScroll] scrolled bottom', elementId, { scrollHeight: el.scrollHeight });
+                }
+            } catch (e) { console.error('[psForceScroll] inner error', e); }
+        }, delayMs);
+    }catch(e){ console.error('[psForceScroll] outer error', e); }
 };
 
 // Scroll element reference to bottom
@@ -87,7 +190,7 @@ window.scrollToBottom = function(elementRef){
     }catch(e){ /* ignore */ }
 };
 
-// Scroll element reference to specific position (top or bottom)
+ // Scroll element reference to specific position (top or bottom)
 window.scrollToPosition = function(elementRef, position){
     try{
         // For Blazor element references, we need to get the actual DOM element
@@ -102,6 +205,111 @@ window.scrollToPosition = function(elementRef, position){
             }
         }
     }catch(e){ /* ignore */ }
+};
+
+ // Scroll to specific position by element id (string)
+window.scrollToPositionById = function(elementId, position){
+    try{
+        const el = document.getElementById(elementId);
+        if(!el) return;
+        if(position === 'top'){
+            el.scrollTop = 0;
+        } else if(position === 'bottom'){
+            el.scrollTop = el.scrollHeight;
+        }
+    }catch(e){ /* ignore */ }
+};
+
+ // Return scrollHeight for an element id (used to wait until content is rendered)
+window.getScrollHeightById = function(elementId){
+    try{
+        const el = document.getElementById(elementId);
+        if(!el) return 0;
+        return el.scrollHeight || 0;
+    }catch(e){ return 0; }
+};
+
+// Watch a console element with a MutationObserver to perform reliable auto-scrolling.
+// Stores per-element watcher state in window._psWatchers.
+window._psWatchers = window._psWatchers || {};
+
+window.psWatchConsole = function(elementId, autoScroll = true, flipLayout = false){
+    try {
+        console.debug('[psWatch] register', { elementId, autoScroll, flipLayout });
+        const el = document.getElementById(elementId);
+        if(!el){
+            console.warn('[psWatch] element not found', elementId);
+            return;
+        }
+
+        // If already watching, disconnect first
+        if(window._psWatchers[elementId] && window._psWatchers[elementId].observer){
+            try { window._psWatchers[elementId].observer.disconnect(); } catch {}
+        }
+
+        const state = {
+            autoScroll: !!autoScroll,
+            flipLayout: !!flipLayout,
+            observer: null
+        };
+
+        const callback = function(mutationsList){
+            try {
+                if(!state.autoScroll) return;
+                // When content changes, scroll to the appropriate end.
+                const pos = state.flipLayout ? 'top' : 'bottom';
+                // Use the robust retry scroller
+                window.psScrollToPositionWithRetry(elementId, pos, 6, 40);
+            } catch (e) { console.error('[psWatch] mutation handler error', e); }
+        };
+
+        const observer = new MutationObserver(callback);
+        observer.observe(el, { childList: true, subtree: false, characterData: false });
+
+        state.observer = observer;
+        window._psWatchers[elementId] = state;
+
+        // Do an initial sync scroll
+        const initialPos = state.flipLayout ? 'top' : 'bottom';
+        window.psScrollToPositionWithRetry(elementId, initialPos, 6, 40);
+
+        console.debug('[psWatch] watching', { elementId, children: el.children.length });
+    } catch (e) {
+        console.error('[psWatch] error', e);
+    }
+};
+
+window.psUpdateWatch = function(elementId, autoScroll = true, flipLayout = false){
+    try {
+        console.debug('[psWatch] update', { elementId, autoScroll, flipLayout });
+        const w = window._psWatchers[elementId];
+        if(!w) {
+            // Not registered yet — try to register
+            return window.psWatchConsole(elementId, autoScroll, flipLayout);
+        }
+        w.autoScroll = !!autoScroll;
+        w.flipLayout = !!flipLayout;
+        // If autoScroll enabled, perform an immediate scroll to sync state
+        if(w.autoScroll){
+            const pos = w.flipLayout ? 'top' : 'bottom';
+            window.psScrollToPositionWithRetry(elementId, pos, 6, 30);
+        }
+    } catch (e) {
+        console.error('[psWatch] update error', e);
+    }
+};
+
+// Unregister a console watcher (disconnect observer) to avoid race conditions while flipping
+window.psUnwatchConsole = function(elementId){
+    try {
+        console.debug('[psWatch] unwatch', elementId);
+        const w = window._psWatchers[elementId];
+        if(!w) return;
+        try { if (w.observer) w.observer.disconnect(); } catch(e) { /* ignore */ }
+        delete window._psWatchers[elementId];
+    } catch (e) {
+        console.error('[psWatch] unwatch error', e);
+    }
 };
 
 // Player control helpers exposed for Blazor UI

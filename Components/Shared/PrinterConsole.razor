@@ -43,16 +43,16 @@
         }
         catch { }
 
-        // Load quick-action presets from configuration under Stream:Console:Presets
-        // Expected config shape (array):
-        // Stream:Console:Presets:
-        //  - Name: "PLA"
-        //    ToolTemp: 200
-        //    BedTemp: 60
-        // If not present, fallback to the previous hard-coded defaults.
+        // Load quick-action presets from configuration.
+        // Prefer Macros:Temperature:Presets (new), fallback to Stream:Console:Presets for compatibility.
         try
         {
-            var section = Cfg.GetSection("Stream:Console:Presets");
+            var section = Cfg.GetSection("Macros:Temperature:Presets");
+            if (!section.Exists())
+            {
+                section = Cfg.GetSection("Stream:Console:Presets");
+            }
+
             if (section.Exists())
             {
                 foreach (var child in section.GetChildren())
@@ -69,6 +69,21 @@
         PrinterConsoleService.OnNewLine += HandleNewLine;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (firstRender)
+        {
+            try { await JS.InvokeVoidAsync("psWatchConsole", _containerId, _autoScroll, _flipLayout); } catch { }
+        }
+    }
+
+    private async Task OnAutoScrollChanged()
+    {
+        StateHasChanged();
+        try { await JS.InvokeVoidAsync("psUpdateWatch", _containerId, _autoScroll, _flipLayout); } catch { }
+    }
+
     private void HandleNewLine(ConsoleLine l)
     {
         // Update copy and trim - make a new list to avoid collection modified exceptions
@@ -82,9 +97,63 @@
             StateHasChanged();
             if (_autoScroll)
             {
-                try { await JS.InvokeVoidAsync("psScrollToBottom", _containerId); } catch { }
+                try
+                {
+                if (_flipLayout)
+                {
+                    // Match popout behavior: small delay then call the simple scroll helper
+                    await Task.Delay(10);
+                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "top"); } catch { }
+                }
+                else
+                {
+                    await Task.Delay(10);
+                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "bottom"); } catch { }
+                }
+                }
+                catch { }
             }
         });
+    }
+
+    private async Task OnFlipChanged()
+    {
+        // Unregister watcher temporarily to avoid race where observer scrolls during DOM reorder
+        try { await JS.InvokeVoidAsync("psUnwatchConsole", _containerId); } catch { }
+
+        // Update watcher state immediately (kept for compatibility but observer is currently removed)
+        try { await JS.InvokeVoidAsync("psUpdateWatch", _containerId, _autoScroll, _flipLayout); } catch { }
+
+        // Request a render first so the DOM order updates
+        await InvokeAsync(StateHasChanged);
+
+        // Small delay to ensure DOM is updated before measuring/scrolling.
+        // Use the retry JS helper to handle asynchronous DOM updates and ensure correct end is visible.
+        if (_autoScroll)
+        {
+            try
+            {
+                await Task.Delay(40);
+                if (_flipLayout)
+                {
+                    await Task.Delay(10);
+                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "top"); } catch { }
+                }
+                else
+                {
+                    await Task.Delay(10);
+                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "bottom"); } catch { }
+                }
+                // Re-register watcher with correct settings so future mutations are observed
+                try { await JS.InvokeVoidAsync("psWatchConsole", _containerId, _autoScroll, _flipLayout); } catch { }
+            }
+            catch { }
+        }
+        else
+        {
+            // Re-register watcher even when auto-scroll is disabled so flip toggles remain consistent
+            try { await JS.InvokeVoidAsync("psWatchConsole", _containerId, _autoScroll, _flipLayout); } catch { }
+        }
     }
 
     public void Dispose()
@@ -106,16 +175,16 @@
     <div style="display:flex;align-items:center;gap:8px;">
         <h4 style="margin:0;">@Title</h4>
         <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#888;">
-            <input type="checkbox" @bind="_autoScroll" /> auto-scroll
+            <input type="checkbox" @bind="_autoScroll" @bind:after="OnAutoScrollChanged" /> auto-scroll
         </label>
         <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#888;">
-            <input type="checkbox" @bind="_flipLayout" @bind:after="StateHasChanged" /> flip layout
+            <input type="checkbox" @bind="_flipLayout" @bind:after="OnFlipChanged" /> flip layout
         </label>
     </div>
     @if (!Collapsed)
     {
-        <div id="@_containerId" class="console-window" style="height:200px;overflow:auto;background:#000;color:#fff;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;">
-            @foreach (var line in _flipLayout ? _lines.AsEnumerable().Reverse() : _lines)
+        <div id="@_containerId" data-flip="@(_flipLayout ? "true" : "false")" class="console-window @( _flipLayout ? "flipped" : "")" style="height:200px;overflow:auto;display:flex;flex-direction:column;background:#000;color:#fff;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;">
+            @foreach (var line in _lines)
             {
                 var color = line.Level switch
                 {

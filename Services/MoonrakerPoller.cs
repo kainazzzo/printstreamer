@@ -9,11 +9,17 @@ using System.Collections.Generic;
 
 namespace PrintStreamer.Services
 {
-    internal static class MoonrakerPoller
-    {
-#pragma warning disable CS0649 // Field 'MoonrakerPoller._moonrakerClient' is never assigned to, and will always have its default value null
+internal static class MoonrakerPoller
+{
         private static MoonrakerClient? _moonrakerClient;
-#pragma warning restore CS0649
+        /// <summary>
+        /// Register a shared MoonrakerClient instance (from DI). The poller is static so it
+        /// cannot use constructor injection; callers should set the client at startup.
+        /// </summary>
+        public static void SetMoonrakerClient(MoonrakerClient client)
+        {
+            _moonrakerClient = client;
+        }
 
     // Shared runtime state for broadcast coordination. The actual encoder
     // (IStreamer) is owned and managed by the StreamOrchestrator; the poller
@@ -468,9 +474,9 @@ namespace PrintStreamer.Services
                                 watcherLogger.LogDebug("[Watcher] Holding timelapse open (state={State}, progress={Progress}%, idleFor={Idle}, jobMissingFor={JobMissing}, offlineFor={Offline}).",
                                     state ?? "n/a",
                                     progressPct?.ToString("F1") ?? "n/a",
-                                    idleStateSince.HasValue ? (now - idleStateSince.Value).ToString(@"hh\\:mm\\:ss") : "n/a",
-                                    jobMissingSince.HasValue ? (now - jobMissingSince.Value).ToString(@"hh\\:mm\\:ss") : "n/a",
-                                    lastPrintingSeenAt.HasValue ? (now - lastPrintingSeenAt.Value).ToString(@"hh\\:mm\\:ss") : "n/a");
+                                    idleStateSince.HasValue ? FormatTimeSpan(now - idleStateSince.Value) : "n/a",
+                                    jobMissingSince.HasValue ? FormatTimeSpan(now - jobMissingSince.Value) : "n/a",
+                                    lastPrintingSeenAt.HasValue ? FormatTimeSpan(now - lastPrintingSeenAt.Value) : "n/a");
                                 waitingForResumeLogged = true;
                             }
                         }
@@ -1116,6 +1122,19 @@ namespace PrintStreamer.Services
             
             // Ensure we have a valid result
             return string.IsNullOrWhiteSpace(result) ? "unknown" : result;
+        }
+
+        private static string FormatTimeSpan(TimeSpan ts)
+        {
+            try
+            {
+                // Use a safe TimeSpan format and fall back to default if something unexpected occurs
+                return ts.ToString(@"hh\:mm\:ss");
+            }
+            catch
+            {
+                return ts.ToString();
+            }
         }
 
         /// <summary>

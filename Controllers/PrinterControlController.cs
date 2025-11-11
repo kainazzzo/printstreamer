@@ -34,18 +34,25 @@ namespace PrintStreamer.Controllers
         {
             try
             {
-                var toolMaxTemp = _config.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
-                var bedMaxTemp = _config.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
-                
-                return Ok(new
+                // Prefer new Macros:Temperature config, fallback to legacy Stream:Console values for compatibility
+                var toolMaxTemp = _config.GetValue<int?>("Macros:Temperature:ToolMaxTemp")
+                    ?? _config.GetValue<int?>("Stream:Console:ToolMaxTemp") ?? 350;
+                var bedMaxTemp = _config.GetValue<int?>("Macros:Temperature:BedMaxTemp")
+                    ?? _config.GetValue<int?>("Stream:Console:BedMaxTemp") ?? 120;
+
+                var rateLimit = new RateLimitInfo
                 {
-                    toolMaxTemp,
-                    bedMaxTemp,
-                    rateLimit = new
-                    {
-                        commandsPerMinute = _config.GetValue<int?>("Stream:Console:RateLimit:CommandsPerMinute") ?? 0
-                    }
-                });
+                    CommandsPerMinute = _config.GetValue<int?>("Stream:Console:RateLimit:CommandsPerMinute") ?? 0
+                };
+
+                var resp = new PrinterConfigResponse
+                {
+                    ToolMaxTemp = toolMaxTemp,
+                    BedMaxTemp = bedMaxTemp,
+                    RateLimit = rateLimit
+                };
+
+                return Ok(resp);
             }
             catch (Exception ex)
             {
@@ -140,16 +147,37 @@ namespace PrintStreamer.Controllers
         {
             try
             {
-                var (toolTemp, bedTemp) = preset.ToLowerInvariant() switch
+                int toolTemp = 0, bedTemp = 0;
+                // First attempt to load presets from configuration
+                try
                 {
-                    "pla" => (200, 60),
-                    "petg" => (240, 70),
-                    "abs" => (250, 100),
-                    "tpu" => (220, 60),
-                    "nylon" => (250, 85),
-                    "cooldown" => (0, 0),
-                    _ => (0, 0)
-                };
+                    var presets = _config.GetSection("Macros:Temperature:Presets").Get<List<TemperaturePreset>>();
+                    if (presets != null)
+                    {
+                        var match = presets.FirstOrDefault(p => string.Equals(p.Name, preset, StringComparison.OrdinalIgnoreCase));
+                        if (match != null)
+                        {
+                            toolTemp = match.ToolTemp;
+                            bedTemp = match.BedTemp;
+                        }
+                    }
+                }
+                catch { /* ignore config parsing errors and fallback to built-in mapping */ }
+
+                // Fallback to built-in mapping when no configured preset found
+                if (toolTemp == 0 && bedTemp == 0)
+                {
+                    (toolTemp, bedTemp) = preset.ToLowerInvariant() switch
+                    {
+                        "pla" => (200, 60),
+                        "petg" => (240, 70),
+                        "abs" => (250, 100),
+                        "tpu" => (220, 60),
+                        "nylon" => (250, 85),
+                        "cooldown" => (0, 0),
+                        _ => (0, 0)
+                    };
+                }
 
                 var result = await _console.SetTemperaturesAsync(toolTemp, bedTemp);
                 
