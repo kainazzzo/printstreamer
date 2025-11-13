@@ -8,7 +8,7 @@ using PrintStreamer.Services;
 
 namespace PrintStreamer.Timelapse
 {
-    public class TimelapseManager : IDisposable, PrintStreamer.Overlay.ITimelapseMetadataProvider
+    public class TimelapseManager : IDisposable, PrintStreamer.Overlay.ITimelapseMetadataProvider, ITimelapseManager
     {
     private readonly IConfiguration _config;
     private readonly ILogger<TimelapseManager> _logger;
