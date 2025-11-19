@@ -27,6 +27,30 @@
             }
         </button>
 
+        <!-- Audio Toggle Button -->
+        <button class="btn @(AudioEnabled ? "btn-danger" : "btn-success")"
+                @onclick="ToggleAudio"
+                title="@(AudioEnabled ? "Disable audio feed" : "Enable audio feed")"
+                @onmouseover="OnAudioMouseOver"
+                @onmouseout="OnAudioMouseOut">
+            @if (AudioHover)
+            {
+                <span class="icon">🔊</span>
+                <span class="btn-label">
+                    <span class="btn-title">Audio Feed</span>
+                    <span class="btn-status">@(AudioEnabled ? "Disable" : "Enable")</span>
+                </span>
+            }
+            else
+            {
+                <span class="icon">🔊</span>
+                <span class="btn-label">
+                    <span class="btn-title">Audio Feed</span>
+                    <span class="btn-status">@(AudioEnabled ? "ON" : "OFF")</span>
+                </span>
+            }
+        </button>
+
         <!-- Go Live / Stop Live Button -->
         <button class="btn @(IsLive ? "btn-danger" : "btn-success")" 
                 @onclick="@(IsLive ? OnStopLive : OnGoLive)" 
@@ -426,6 +450,7 @@
     [Parameter] public bool AutoUploadEnabled { get; set; }
     [Parameter] public bool EndStreamAfterPrintEnabled { get; set; }
     [Parameter] public bool EndStreamAfterSongEnabled { get; set; }
+    [Parameter] public bool AudioEnabled { get; set; }
     [Parameter] public string? BroadcastId { get; set; }
     [Parameter] public string? StatusMessage { get; set; }
     [Parameter] public string? CurrentPrivacy { get; set; }
@@ -437,6 +462,7 @@
     [Parameter] public EventCallback<bool> OnAutoBroadcastChanged { get; set; }
     [Parameter] public EventCallback<bool> OnEndStreamAfterPrintChanged { get; set; }
     [Parameter] public EventCallback<bool> OnEndStreamAfterSongChanged { get; set; }
+    [Parameter] public EventCallback<bool> OnAudioChanged { get; set; }
     
     private bool CameraHover = false;
     private bool LiveHover = false;
@@ -444,6 +470,7 @@
     private bool AutoUploadHover = false;
     private bool EndStreamAfterPrintHover = false;
     private bool EndStreamAfterSongHover = false;
+    private bool AudioHover = false;
     
     private string SelectedPrivacy = "unlisted";
     private bool IsUpdatingPrivacy = false;
@@ -461,6 +488,8 @@
     private void OnEndStreamAfterPrintMouseOut() => EndStreamAfterPrintHover = false;
     private void OnEndStreamAfterSongMouseOver() => EndStreamAfterSongHover = true;
     private void OnEndStreamAfterSongMouseOut() => EndStreamAfterSongHover = false;
+    private void OnAudioMouseOver() => AudioHover = true;
+    private void OnAudioMouseOut() => AudioHover = false;
     
     protected override void OnParametersSet()
     {
@@ -587,6 +616,24 @@
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error toggling end-stream-after-song: {Message}", ex.Message);
+        }
+    }
+
+    private async Task ToggleAudio()
+    {
+        try
+        {
+            var newValue = !AudioEnabled;
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/audio/enabled?enabled={newValue}", null);
+            if (response.IsSuccessStatusCode)
+            {
+                await OnAudioChanged.InvokeAsync(newValue);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error toggling audio feed: {Message}", ex.Message);
         }
     }
 }

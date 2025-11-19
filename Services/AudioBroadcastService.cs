@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.IO;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
 
 namespace PrintStreamer.Services
 {
@@ -347,9 +348,9 @@ namespace PrintStreamer.Services
                         _ffmpegConsecutiveFailures++;
                         _logger.LogError(ex, "[AudioBroadcast] ffmpeg supervisor error");
                         // backoff
-                        var backoff = Math.Min(_ffmpegBaseBackoffMs * (1 << Math.Max(0, _ffmpegConsecutiveFailures - 1)), _ffmpegMaxBackoffMs);
-                        var jitter = new Random().Next(0, 200);
-                        await Task.Delay(backoff + jitter, appToken).ConfigureAwait(false);
+var backoff = Math.Min(_ffmpegBaseBackoffMs * (1 << Math.Max(0, _ffmpegConsecutiveFailures - 1)), _ffmpegMaxBackoffMs);
+var jitter = RandomNumberGenerator.GetInt32(0, 200);
+await Task.Delay(backoff + jitter, appToken).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -464,17 +465,75 @@ namespace PrintStreamer.Services
             }
         }
 
-        public void Dispose()
+public void Dispose()
+{
+    if (_disposed) return;
+    _disposed = true;
+
+    // Signal cancellation to background loops
+    try { _cts.Cancel(); } catch { }
+
+    // Stop internal feed listener
+    try
+    {
+        if (_feedListener != null)
         {
-            if (_disposed) return;
-            _disposed = true;
-            try { _cts.Cancel(); } catch { }
-            lock (_lock)
-            {
-                foreach (var ch in _subscribers) { try { ch.Writer.TryComplete(); } catch { } }
-                _subscribers.Clear();
-            }
+            try { _feedListener.Stop(); } catch { }
+            try { _feedListener.Close(); } catch { }
         }
+    }
+    catch (Exception ex)
+    {
+        try { _logger.LogDebug(ex, "[AudioBroadcast] Error stopping internal feed listener"); } catch { }
+    }
+
+    // Kill ffmpeg process if running
+    try
+    {
+        lock (_lock)
+        {
+            if (_ffmpegProc != null && !_ffmpegProc.HasExited)
+            {
+                try { _logger.LogInformation("[AudioBroadcast] Killing ffmpeg process (dispose)"); } catch { }
+                try { _ffmpegProc.Kill(true); } catch { }
+                try { _ffmpegProc.WaitForExit(3000); } catch { }
+            }
+            _ffmpegProc = null;
+        }
+    }
+    catch (Exception ex)
+    {
+        try { _logger.LogDebug(ex, "[AudioBroadcast] Error killing ffmpeg in Dispose"); } catch { }
+    }
+
+    // Wait for background tasks to finish (with timeout)
+    try
+    {
+        if (_feedTask != null && !_feedTask.IsCompleted)
+        {
+            try { _feedTask.Wait(5000); } catch { }
+        }
+    }
+    catch { }
+
+    try
+    {
+        if (_loopTask != null && !_loopTask.IsCompleted)
+        {
+            try { _loopTask.Wait(5000); } catch { }
+        }
+    }
+    catch { }
+
+    // Complete and clear subscribers
+    lock (_lock)
+    {
+        foreach (var ch in _subscribers) { try { ch.Writer.TryComplete(); } catch { } }
+        _subscribers.Clear();
+    }
+
+    try { _cts.Dispose(); } catch { }
+}
 
         /// <summary>
         /// Forcefully interrupt the current ffmpeg process so the supervisor will restart

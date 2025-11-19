@@ -132,6 +132,7 @@ if (!File.Exists(fallbackImagePath))
 // Register application services
 webBuilder.Services.AddSingleton<MoonrakerClient>();
 webBuilder.Services.AddSingleton<TimelapseManager>();
+webBuilder.Services.AddSingleton<PrintStreamer.Timelapse.ITimelapseManager>(sp => sp.GetRequiredService<TimelapseManager>());
 // Expose TimelapseManager as ITimelapseMetadataProvider for overlay text enrichment
 webBuilder.Services.AddSingleton<PrintStreamer.Overlay.ITimelapseMetadataProvider>(sp => sp.GetRequiredService<TimelapseManager>());
 // YouTube API polling manager with configuration
@@ -579,28 +580,62 @@ if (serveEnabled)
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-	app.MapPost("/api/camera/toggle", async (HttpContext ctx, ILogger<Program> logger) =>
-	{
-		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
-		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
-		webcamManager.Toggle();
-		var newVal = webcamManager.IsDisabled;
-		logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
-		// Restart stream if one is active
-		if (streamService.IsStreaming)
-		{
-			try
-			{
-				await streamService.StopStreamAsync();
-				await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
-			}
-			catch (Exception ex)
-			{
-				logger.LogError(ex, "Failed to restart stream");
-			}
-		}
-		return Results.Json(new { disabled = newVal });
-	});
+app.MapPost("/api/camera/toggle", async (HttpContext ctx, ILogger<Program> logger) =>
+{
+var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
+var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
+webcamManager.Toggle();
+var newVal = webcamManager.IsDisabled;
+logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
+// Restart stream if one is active
+if (streamService.IsStreaming)
+{
+try
+{
+await streamService.StopStreamAsync();
+await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
+}
+catch (Exception ex)
+{
+logger.LogError(ex, "Failed to restart stream");
+}
+}
+return Results.Json(new { disabled = newVal });
+});
+
+app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logger) =>
+{
+    // Toggle persistent configuration flag for audio availability used by /stream/audio and internal streamers.
+    var raw = ctx.Request.Query["enabled"].ToString();
+    bool enabled;
+    if (!bool.TryParse(raw, out enabled))
+    {
+        // Accept "1"/"0" and case-insensitive "true"/"false"
+        enabled = raw == "1" || string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Update in-memory configuration so subsequent requests read the new setting.
+    config["Audio:Enabled"] = enabled.ToString();
+    logger.LogInformation("Audio stream: {State}", enabled ? "enabled" : "disabled");
+
+    // If a ffmpeg streamer is active, restart it so it re-reads the audio availability.
+    try
+    {
+        var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
+        if (streamService.IsStreaming)
+        {
+            logger.LogInformation("Restarting active stream to pick up audio setting change");
+            await streamService.StopStreamAsync();
+            await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to restart stream after audio toggle");
+    }
+
+    return Results.Json(new { success = true, enabled });
+});
 
 	// Reverse proxy for Mainsail/Fluidd to bypass X-Frame-Options and same-origin issues
 	app.MapGet("/proxy/mainsail/{**path}", async (HttpContext ctx, string? path, ILogger<Program> logger) =>
