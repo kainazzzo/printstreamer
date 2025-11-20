@@ -13,4 +13,4 @@ overlay/overlay.txt
 appsettings.Custom.json
 hls/
 data/
-
+*.trx

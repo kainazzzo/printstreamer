@@ -292,6 +292,13 @@ namespace PrintStreamer.Services
                         // read until exit or cancellation
                         while (!appToken.IsCancellationRequested && !proc.HasExited)
                         {
+                                // If audio feature disabled while ffmpeg is running, stop the process and break
+                                var nowEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
+                                if (!nowEnabled)
+                                {
+                                    try { if (!proc.HasExited) proc.Kill(true); } catch { }
+                                    break;
+                                }
                             var read = await outStream.ReadAsync(buf.AsMemory(0, buf.Length), appToken).ConfigureAwait(false);
                             if (read <= 0) break;
                             var chunk = new byte[read];
@@ -413,6 +420,13 @@ await Task.Delay(backoff + jitter, appToken).ConfigureAwait(false);
                 var outStream = proc.StandardOutput.BaseStream;
                 while (!appToken.IsCancellationRequested && !proc.HasExited)
                 {
+                        // If audio feature disabled while ffmpeg is running, stop the process and break
+                        var nowEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
+                        if (!nowEnabled)
+                        {
+                            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+                            break;
+                        }
                     var read = await outStream.ReadAsync(buf.AsMemory(0, buf.Length), appToken).ConfigureAwait(false);
                     if (read <= 0) break;
                     var chunk = new byte[read];

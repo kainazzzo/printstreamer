@@ -655,6 +655,20 @@ if (serveEnabled)
 			logger.LogError(ex, "Failed to restart stream after audio toggle");
 		}
 
+		// Interrupt and restart/stop the internal audio broadcaster ffmpeg process so live audio
+		// stops (or restarts) immediately; AudioBroadcastService supervises its own state and will
+		// not restart ffmpeg if the audio-enabled flag is false.
+		try
+		{
+			var broadcaster = ctx.RequestServices.GetService<AudioBroadcastService>();
+			if (broadcaster != null)
+			{
+				// Interrupt to force a restart/stop as per the new enabled setting.
+				broadcaster.InterruptFfmpeg();
+			}
+		}
+		catch { }
+
 		return Results.Json(new { success = true, enabled });
 	});
 

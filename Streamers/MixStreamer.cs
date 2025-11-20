@@ -95,7 +95,21 @@ namespace PrintStreamer.Streamers
                 });
 
                 // Stream ffmpeg output to HTTP response
-                await _proc.StandardOutput.BaseStream.CopyToAsync(_ctx.Response.Body, 64 * 1024, cancellationToken);
+                var outStream = _proc.StandardOutput.BaseStream;
+                var buf = new byte[64 * 1024];
+                while (!cancellationToken.IsCancellationRequested && !_proc.HasExited)
+                {
+                    // If audio disabled while mix is running, restart/stop the ffmpeg mix so new args will apply
+                    var nowEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
+                    if (!nowEnabled)
+                    {
+                        try { if (!_proc.HasExited) _proc.Kill(entireProcessTree: true); } catch { }
+                        break;
+                    }
+                    var read = await outStream.ReadAsync(buf.AsMemory(0, buf.Length), cancellationToken);
+                    if (read <= 0) break;
+                    await _ctx.Response.Body.WriteAsync(buf.AsMemory(0, read), cancellationToken);
+                }
 
                 try { await _ctx.Response.Body.FlushAsync(cancellationToken); } catch { }
 
