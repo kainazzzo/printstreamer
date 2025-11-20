@@ -1009,7 +1009,9 @@ if (serveEnabled)
 		var autoBroadcastEnabled = config.GetValue<bool>("YouTube:LiveBroadcast:Enabled");
 		var autoUploadEnabled = config.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
 		var endStreamAfterPrintEnabled = config.GetValue<bool?>("YouTube:LiveBroadcast:EndStreamAfterPrint") ?? false;
-		return Results.Json(new { autoBroadcastEnabled, autoUploadEnabled, endStreamAfterPrintEnabled });
+		// Audio feature flag controls whether /api/audio/stream serves audio and is used by internal streamers
+		var audioEnabled = config.GetValue<bool?>("Audio:Enabled") ?? true;
+		return Results.Json(new { autoBroadcastEnabled, autoUploadEnabled, endStreamAfterPrintEnabled, audioEnabled });
 	});
 
 	app.MapPost("/api/config/auto-broadcast", (HttpContext ctx, ILogger<Program> logger) =>

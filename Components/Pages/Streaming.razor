@@ -17,6 +17,7 @@
         AutoBroadcastEnabled="@autoBroadcastEnabled" AutoUploadEnabled="@autoUploadEnabled" EndStreamAfterPrintEnabled="@endStreamAfterPrintEnabled" 
         EndStreamAfterSongEnabled="@endStreamAfterSongEnabled" BroadcastId="@(isLive ? broadcastId : null)"
         StatusMessage="@statusMessage" CurrentPrivacy="@currentPrivacy" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
+        AudioEnabled="@audioEnabled" OnAudioChanged="@OnAudioChanged"
         OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" 
         OnEndStreamAfterPrintChanged="@OnEndStreamAfterPrintChanged" OnEndStreamAfterSongChanged="@OnEndStreamAfterSongChanged" />
 
@@ -63,6 +64,7 @@
     private bool autoUploadEnabled = false;
     private bool endStreamAfterPrintEnabled = true;
     private bool endStreamAfterSongEnabled = false;
+    private bool audioEnabled = false;
     private List<TimelapseInfo>? timelapses = null;
     private HashSet<string> processingTimelapses = new();
     private Timer? refreshTimer;
@@ -377,6 +379,8 @@
                 autoBroadcastEnabled = configResponse.AutoBroadcastEnabled;
                 autoUploadEnabled = configResponse.AutoUploadEnabled;
                 endStreamAfterPrintEnabled = configResponse.EndStreamAfterPrintEnabled;
+                // New: read audio feature flag so UI can reflect persistent setting
+                try { audioEnabled = configResponse.AudioEnabled; } catch { audioEnabled = false; }
             }
         }
         catch (HttpRequestException)
@@ -398,6 +402,16 @@
         autoBroadcastEnabled = enabled;
         StateHasChanged();
         await SafeToast($"Auto-broadcast {(enabled ? "enabled" : "disabled")}", "success");
+        await RefreshConfigState();
+    }
+
+    private async Task OnAudioChanged(bool enabled)
+    {
+        // Respond to the child component toggling audio; update UI and show a toast
+        audioEnabled = enabled;
+        StateHasChanged();
+        await SafeToast($"Audio feed {(enabled ? "enabled" : "disabled")}", "success");
+        // Make sure the backend config is refreshed
         await RefreshConfigState();
     }
 
@@ -676,6 +690,7 @@
         public bool AutoBroadcastEnabled { get; set; }
         public bool AutoUploadEnabled { get; set; }
         public bool EndStreamAfterPrintEnabled { get; set; }
+        public bool AudioEnabled { get; set; }
     }
 
     // Adjust live-status polling frequency: fast while going live, slow when stable
