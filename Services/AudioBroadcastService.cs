@@ -25,6 +25,7 @@ namespace PrintStreamer.Services
         private Task? _loopTask;
         private bool _disposed;
         private DateTime _lastBroadcastAt = DateTime.MinValue;
+        private volatile bool _featureEnabled = true;
 
         // Track completion callback
         private Func<Task>? _onTrackFinished;
@@ -45,6 +46,7 @@ namespace PrintStreamer.Services
             _audio = audio;
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _config = config;
+            _featureEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
             // Start the internal feed and ffmpeg supervisor so live position is continuous
             EnsureFeedStarted();
             EnsureFfmpegSupervisorStarted();
@@ -71,6 +73,36 @@ namespace PrintStreamer.Services
             lock (_lock)
             {
                 _onTrackFinished = callback;
+            }
+        }
+
+        /// <summary>
+        /// Apply a new Audio:Enabled state immediately. When disabled, existing ffmpeg processes and
+        /// subscribers are stopped so clients hear silence right away; when enabled, the supervisor
+        /// resumes normal operation.
+        /// </summary>
+        public void ApplyAudioEnabledState(bool enabled)
+        {
+            _featureEnabled = enabled;
+            if (!enabled)
+            {
+                try { InterruptFfmpeg(); } catch { }
+
+                // Complete and drop all subscribers so any connected clients stop receiving audio
+                lock (_lock)
+                {
+                    foreach (var ch in _subscribers)
+                    {
+                        try { ch.Writer.TryComplete(); } catch { }
+                    }
+                    _subscribers.Clear();
+                }
+            }
+            else
+            {
+                // Ensure pipelines are running when audio comes back on
+                EnsureFeedStarted();
+                EnsureFfmpegSupervisorStarted();
             }
         }
 
@@ -108,6 +140,13 @@ namespace PrintStreamer.Services
                 SingleReader = false,
                 FullMode = BoundedChannelFullMode.DropOldest
             });
+
+                // If audio feature is disabled, complete the channel immediately so callers exit
+                if (!_featureEnabled)
+                {
+                    try { ch.Writer.TryComplete(); } catch { }
+                    return ch.Reader;
+                }
 
                 lock (_lock)
                 {
@@ -241,9 +280,8 @@ namespace PrintStreamer.Services
             {
                 while (!appToken.IsCancellationRequested)
                 {
-                    // Only run when audio feature enabled
-                    var enabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
-                    if (!enabled)
+                        // Only run when audio feature enabled
+                        if (!_featureEnabled)
                     {
                         await Task.Delay(1000, appToken).ConfigureAwait(false);
                         continue;
@@ -290,11 +328,10 @@ namespace PrintStreamer.Services
                         var buf = new byte[8192];
                         var outStream = proc.StandardOutput.BaseStream;
                         // read until exit or cancellation
-                        while (!appToken.IsCancellationRequested && !proc.HasExited)
+                            while (!appToken.IsCancellationRequested && !proc.HasExited)
                         {
                                 // If audio feature disabled while ffmpeg is running, stop the process and break
-                                var nowEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
-                                if (!nowEnabled)
+                                if (!_featureEnabled)
                                 {
                                     try { if (!proc.HasExited) proc.Kill(true); } catch { }
                                     break;
@@ -418,11 +455,10 @@ await Task.Delay(backoff + jitter, appToken).ConfigureAwait(false);
             try
             {
                 var outStream = proc.StandardOutput.BaseStream;
-                while (!appToken.IsCancellationRequested && !proc.HasExited)
+                    while (!appToken.IsCancellationRequested && !proc.HasExited)
                 {
                         // If audio feature disabled while ffmpeg is running, stop the process and break
-                        var nowEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
-                        if (!nowEnabled)
+                        if (!_featureEnabled)
                         {
                             try { if (!proc.HasExited) proc.Kill(true); } catch { }
                             break;
