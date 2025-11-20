@@ -38,8 +38,12 @@ namespace PrintStreamer.Streamers
 
             // Use local /stream/source endpoint instead of raw camera URL
             // This allows the data flow pipeline to work correctly with stage isolation
-            var source = _config.GetValue<string>("Overlay:StreamSource") ?? 
-                        "http://127.0.0.1:8080/stream/source";
+            var source = _config.GetValue<string>("Overlay:StreamSource");
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                // Fall back to the global Stream:Source config (legacy behavior)
+                source = _config.GetValue<string>("Stream:Source") ?? "http://127.0.0.1:8080/stream/source";
+            }
 
             if (string.IsNullOrWhiteSpace(source))
             {
@@ -75,73 +79,26 @@ namespace PrintStreamer.Streamers
             // MJPEG output quality (lower is better quality). Clamp to a reasonable range for balance
             var mjpegQ = _config.GetValue<int?>("Overlay:Quality") ?? 5; // 1(best)-31(worst) but we keep 2..10 for balance
             if (mjpegQ < 2) mjpegQ = 2; if (mjpegQ > 10) mjpegQ = 10;
-            // X/Y from config (optional). We'll override to place inside the banner when not supplied.
-            var xConfig = _config.GetValue<string>("Overlay:X");
-            var yConfig = _config.GetValue<string>("Overlay:Y");
-            				var x = "0";
-            // Keep the raw overlay.Y value (don't default to 20 here) so we can decide
-            // whether to honor an explicit config or compute a bottom-anchored value.
-            var y = yConfig;
-
             // Build filter chain: upscale/pad to 1080p first for sharp text, then draw overlays
             var filters = new List<string>();
-            filters.Add("scale=1920:1080:flags=lanczos:force_original_aspect_ratio=decrease");
-            filters.Add("pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black");
+            // filters.Add("scale=1920:1080:flags=lanczos:force_original_aspect_ratio=decrease");
+            // filters.Add("pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black");
             filters.Add("format=yuv420p");
 
-            // Drawbox: allow explicit pixel height via Overlay:BoxHeight (px). If not supplied, fall back to BannerFraction.
-            var boxHeightConfig = _config.GetValue<int?>("Overlay:BoxHeight");
-
-            // Keep the working drawbox (do not touch as requested)
-            string drawbox;
-
-            if (boxHeightConfig != null && boxHeightConfig > 0)
-            {
-                // Explicit pixel height provided: position box anchored to bottom
-                var bh = boxHeightConfig.Value;
-                drawbox = $"drawbox=x=0:y=ih-{bh}:w=iw:h={bh}:color={boxColor}:t=fill";
-            }
-            else
-            {
-                var bannerFraction = _config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2;
-                if (bannerFraction < 0) bannerFraction = 0; if (bannerFraction > 0.6) bannerFraction = 0.6;
-                var bf = bannerFraction.ToString(CultureInfo.InvariantCulture);
-                drawbox = $"drawbox=x=0:y=ih*(1-{bf}):w=iw:h=ih*{bf}:color={boxColor}:t=fill";
-            }
-
+            var boxHeightConfig = _config.GetValue<int?>("Overlay:BoxHeight") ?? 75;
+            // X/Y from config (optional). We'll override to place inside the banner when not supplied.
+            var layout = OverlayLayout.Calculate(_config, textFile, fontSize, boxHeightConfig);
+            // Use OverlayFilterUtil for escaping and drawbox building
+            var bannerFraction = OverlayFilterUtil.ClampBannerFraction(_config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2);
+            var drawbox = OverlayFilterUtil.BuildDrawbox(layout.DrawboxX, layout.DrawboxY, boxHeightConfig, boxColor);
             filters.Add(drawbox);
 
-            // Estimate text banner height similar to FfmpegStreamer so we can place text inside the box when X/Y not provided
-            int lineCount = 1;
-            try
-            {
-                var initialText = System.IO.File.Exists(_overlayText.TextFilePath) ? System.IO.File.ReadAllText(_overlayText.TextFilePath) : string.Empty;
-                if (!string.IsNullOrEmpty(initialText)) lineCount = initialText.Split('\n').Length;
-            }
-            catch { }
-            var approxTextHeight = Math.Max(fontSize, 12) * Math.Max(1, lineCount);
-            var padding = 32; // top+bottom padding approx
-            var extra = 6; // small fudge for ascent/descent
-            int boxH;
-            int boxHpx;
-            if (boxHeightConfig != null && boxHeightConfig > 0)
-            {
-                // Use explicit configured box height (pixels)
-                boxH = boxHeightConfig.Value;
-                boxHpx = boxHeightConfig.Value;
-            }
-            else
-            {
-                boxH = padding + approxTextHeight + boxBorderW + extra;
-                boxHpx = padding + approxTextHeight + boxBorderW + extra; // pixel estimate used only for text placement when X/Y missing
-            }
-            var textY = $"h-({boxH})+{padding / 2}";
-            var textX = $"{x} + {padding / 2}";
-            var draw = $"drawtext=fontfile='{fontFile}':textfile='{textFile}':reload=1:expansion=none:fontsize={fontSize}:fontcolor={fontColor}:x={textX}:y={textY}";
+            var draw = $"drawtext=fontfile='{OverlayFilterUtil.Esc(fontFile)}':textfile='{OverlayFilterUtil.Esc(textFile)}':reload=1:expansion=none:fontsize={fontSize}:fontcolor={fontColor}:x={layout.TextX}:y={layout.TextY}";
 
             filters.Add(draw);
 
-            var vf = string.Join(",", filters);
+var vf = string.Join(",", filters);
+_logger.LogInformation("[{ContextLabel}] FFmpeg vf: {Vf}", contextLabel, vf);
 
             // Input args for HTTP MJPEG source
             var inputArgs = source.StartsWith("http", StringComparison.OrdinalIgnoreCase)
@@ -178,6 +135,9 @@ namespace PrintStreamer.Streamers
             {
                 _proc.Start();
                 var copyTask = _proc.StandardOutput.BaseStream.CopyToAsync(_ctx.Response.Body, 64 * 1024, _ctx.RequestAborted);
+                // Monitor stderr for critical errors (suppress benign warnings)
+                var errorCount = 0;
+                var lastErrorTime = DateTime.UtcNow;
                 _ = Task.Run(async () =>
                 {
                     var buf = new char[1024];
@@ -189,10 +149,26 @@ namespace PrintStreamer.Streamers
                             if (n > 0)
                             {
                                 var s = new string(buf, 0, n).Trim();
-                                if (!string.IsNullOrWhiteSpace(s) && 
-                                    !s.Contains("unable to decode APP fields", StringComparison.OrdinalIgnoreCase))
+                                if (!string.IsNullOrWhiteSpace(s))
                                 {
-                                    _logger.LogWarning("[{ContextLabel}] [ffmpeg stderr] {Output}", contextLabel, s);
+                                    // Suppress repetitive "unable to decode APP fields" errors which are common
+                                    // with MJPEG streams and don't indicate fatal problems
+                                    if (s.Contains("unable to decode APP fields", StringComparison.OrdinalIgnoreCase) || 
+                                        s.Contains("Last message repeated", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        // Only log these occasionally to avoid spam
+                                        var now = DateTime.UtcNow;
+                                        if ((now - lastErrorTime).TotalSeconds > 10)
+                                        {
+                                            _logger.LogInformation("[{ContextLabel}] Suppressing benign decode warnings (last 10s)", contextLabel);
+                                            lastErrorTime = now;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        _logger.LogWarning("[{ContextLabel}] [ffmpeg stderr] {Output}", contextLabel, s);
+                                        errorCount++;
+                                    }
                                 }
                             }
                         }

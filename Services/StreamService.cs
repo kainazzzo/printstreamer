@@ -130,9 +130,9 @@ namespace PrintStreamer.Services
                         FontColor = _config.GetValue<string>("Overlay:FontColor") ?? "white",
                         Box = _config.GetValue<bool?>("Overlay:Box") ?? true,
                         BoxColor = _config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
-                        BoxBorderW = _config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
-                        X = _config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
-                        Y = _config.GetValue<string>("Overlay:Y") ?? string.Empty,
+                        BoxBorderW = _config.GetValue<int?>("Overlay:BoxBorderW") ?? 2,
+                        X = _config.GetValue<string>("Overlay:X") ?? "0",
+                        Y = _config.GetValue<string>("Overlay:Y") ?? "40",
                         BannerFraction = _config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2
                     };
                     _logger.LogInformation("[StreamService] Overlay enabled (ffmpeg): {TextFile}", overlayOptions.TextFile);

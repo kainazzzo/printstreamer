@@ -1,8 +1,10 @@
 ﻿using PrintStreamer.Timelapse;
 using PrintStreamer.Services;
+using PrintStreamer.Streamers;
 using System.Diagnostics;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Antiforgery;
+using PrintStreamer.Overlay;
 
 // Moonraker polling and streaming helpers moved to Services/MoonrakerPoller.cs
 
@@ -39,7 +41,7 @@ if (!string.IsNullOrWhiteSpace(customConfigFile))
 {
 	var customConfigPath = Path.Combine(Directory.GetCurrentDirectory(), customConfigFile);
 	startupLogger.LogInformation("Loading custom configuration from: {ConfigFile}", customConfigFile);
-	
+
 	// Add the custom config file to the configuration builder
 	// It will override values from appsettings.json if they exist
 	webBuilder.Configuration.AddJsonFile(customConfigFile, optional: true, reloadOnChange: true);
@@ -132,12 +134,12 @@ if (!File.Exists(fallbackImagePath))
 // Register application services
 webBuilder.Services.AddSingleton<MoonrakerClient>();
 webBuilder.Services.AddSingleton<TimelapseManager>();
-webBuilder.Services.AddSingleton<ITimelapseManager>(sp => sp.GetRequiredService<TimelapseManager>());
+webBuilder.Services.AddSingleton<ITimelapseManager, TimelapseManager>();
 // Expose TimelapseManager as ITimelapseMetadataProvider for overlay text enrichment
-webBuilder.Services.AddSingleton<PrintStreamer.Overlay.ITimelapseMetadataProvider>(sp => sp.GetRequiredService<TimelapseManager>());
+webBuilder.Services.AddSingleton<ITimelapseMetadataProvider, TimelapseManager>();
 // YouTube API polling manager with configuration
 webBuilder.Services.Configure<YouTubePollingOptions>(
-    webBuilder.Configuration.GetSection(PrintStreamer.Services.YouTubePollingOptions.SectionName));
+	webBuilder.Configuration.GetSection(YouTubePollingOptions.SectionName));
 webBuilder.Services.AddSingleton<YouTubePollingManager>();
 // YouTube API client (singleton to avoid repeated authentication and instance creation)
 webBuilder.Services.AddSingleton<YouTubeControlService>();
@@ -157,11 +159,11 @@ webBuilder.Services.AddHostedService(sp => sp.GetRequiredService<PrinterConsoleS
 webBuilder.Services.AddSingleton(sp =>
 {
 	var cfg = sp.GetRequiredService<IConfiguration>();
-	var tl = sp.GetService<PrintStreamer.Overlay.ITimelapseMetadataProvider>();
+	var tl = sp.GetService<ITimelapseMetadataProvider>();
 	var audio = sp.GetRequiredService<AudioService>();
-	var overlayLogger = sp.GetRequiredService<ILogger<PrintStreamer.Overlay.OverlayTextService>>();
+	var overlayLogger = sp.GetRequiredService<ILogger<OverlayTextService>>();
 	var moonrakerClient = sp.GetRequiredService<MoonrakerClient>();
-	return new PrintStreamer.Overlay.OverlayTextService(cfg, tl, () => audio.Current, overlayLogger, moonrakerClient);
+	return new OverlayTextService(cfg, tl, () => audio.Current, overlayLogger, moonrakerClient);
 });
 
 // Add Blazor Server services
@@ -195,12 +197,12 @@ Console.CancelKeyPress += (s, e) =>
 {
 	startupLogger.LogInformation("Stopping (Ctrl+C)...");
 	e.Cancel = true; // Prevent immediate termination
-	try 
-	{ 
-		appCts.Cancel(); 
-	} 
-	catch (Exception ex) 
-	{ 
+	try
+	{
+		appCts.Cancel();
+	}
+	catch (Exception ex)
+	{
 		startupLogger.LogError(ex, "Error during cancellation");
 	}
 };
@@ -229,12 +231,12 @@ ProxyUtil.Logger = app.Services.GetRequiredService<ILogger<Program>>();
 // Provide DI-created MoonrakerClient to the static poller so it can query printer state
 try
 {
-    MoonrakerPoller.SetMoonrakerClient(app.Services.GetRequiredService<MoonrakerClient>());
+	MoonrakerPoller.SetMoonrakerClient(app.Services.GetRequiredService<MoonrakerClient>());
 }
 catch
 {
-    // If registration fails for any reason, continue startup but log via proxy logger
-    ProxyUtil.Logger?.LogWarning("Failed to register MoonrakerClient with MoonrakerPoller");
+	// If registration fails for any reason, continue startup but log via proxy logger
+	ProxyUtil.Logger?.LogWarning("Failed to register MoonrakerClient with MoonrakerPoller");
 }
 
 // Wire up audio track completion callback to orchestrator
@@ -247,7 +249,7 @@ catch
 // Wire up PrintStreamOrchestrator to subscribe to PrinterState events from MoonrakerPoller
 {
 	var printStreamOrchestrator = app.Services.GetRequiredService<PrintStreamOrchestrator>();
-	PrintStreamer.Services.MoonrakerPoller.PrintStateChanged += (prev, curr) => 
+	PrintStreamer.Services.MoonrakerPoller.PrintStateChanged += (prev, curr) =>
 		_ = printStreamOrchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
 }
 
@@ -301,7 +303,7 @@ if (serveEnabled)
 	}
 
 	var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-    
+
 	// Resolve managers from DI
 	var webcamManager = app.Services.GetRequiredService<WebCamManager>();
 	// Resolve timelapse manager from DI (registered earlier)
@@ -364,6 +366,25 @@ if (serveEnabled)
 	});
 
 	// Helper function to capture single JPEG from a stream URL
+
+	app.MapGet("/stream/overlay/coords", async (HttpContext ctx) =>
+	{
+		var config = ctx.RequestServices.GetRequiredService<IConfiguration>();
+		var overlayText = ctx.RequestServices.GetRequiredService<PrintStreamer.Overlay.OverlayTextService>();
+		var fontSize = config.GetValue<int?>("Overlay:FontSize") ?? 16;
+		var boxHeight = config.GetValue<int?>("Overlay:BoxHeight") ?? 75;
+		var layout = OverlayLayout.Calculate(config, overlayText.TextFilePath, fontSize, boxHeight);
+		var result = new
+		{
+			drawbox = new { x = layout.DrawboxX, y = layout.DrawboxY },
+			text = new { x = layout.TextX, y = layout.TextY },
+			layout.HasCustomX,
+			layout.HasCustomY,
+			layout.ApproxTextHeight,
+			raw = new { x = layout.RawX, y = layout.RawY }
+		};
+		await ctx.Response.WriteAsJsonAsync(result);
+	});
 	async Task<bool> CaptureJpegFromStreamAsync(HttpContext ctx, string streamUrl, string name)
 	{
 		if (string.IsNullOrWhiteSpace(streamUrl))
@@ -374,7 +395,7 @@ if (serveEnabled)
 		}
 
 		using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-		
+
 		try
 		{
 			// Try snapshot action first if it's an HTTP URL
@@ -384,7 +405,7 @@ if (serveEnabled)
 				var query = System.Web.HttpUtility.ParseQueryString(ub.Query);
 				query.Set("action", "snapshot");
 				ub.Query = query.ToString();
-				
+
 				try
 				{
 					using var req = new HttpRequestMessage(System.Net.Http.HttpMethod.Get, ub.Uri);
@@ -414,14 +435,14 @@ if (serveEnabled)
 			{
 				resp.EnsureSuccessStatusCode();
 				using var s = await resp.Content.ReadAsStreamAsync(cts.Token);
-				
+
 				// Read JPEG from MJPEG stream by finding SOI (FFD8) and EOI (FFD9) markers
 				var buffer = new byte[64 * 1024];
 				using var ms = new MemoryStream();
 				int bytesRead;
 				bool foundSoi = false;
 				int prev = -1;
-				
+
 				while ((bytesRead = await s.ReadAsync(buffer, 0, buffer.Length, cts.Token)) > 0)
 				{
 					for (int i = 0; i < bytesRead; i++)
@@ -580,62 +601,62 @@ if (serveEnabled)
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
-app.MapPost("/api/camera/toggle", async (HttpContext ctx, ILogger<Program> logger) =>
-{
-var webcamManager = ctx.RequestServices.GetRequiredService<WebCamManager>();
-var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
-webcamManager.Toggle();
-var newVal = webcamManager.IsDisabled;
-logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
-// Restart stream if one is active
-if (streamService.IsStreaming)
-{
-try
-{
-await streamService.StopStreamAsync();
-await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
-}
-catch (Exception ex)
-{
-logger.LogError(ex, "Failed to restart stream");
-}
-}
-return Results.Json(new { disabled = newVal });
-});
+	app.MapPost("/api/camera/toggle", async (HttpContext ctx, ILogger<Program> logger) =>
+	{
+		var webcamManager = ctx.RequestServices.GetRequiredService<WebCamManager>();
+		var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
+		webcamManager.Toggle();
+		var newVal = webcamManager.IsDisabled;
+		logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
+		// Restart stream if one is active
+		if (streamService.IsStreaming)
+		{
+			try
+			{
+				await streamService.StopStreamAsync();
+				await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
+			}
+			catch (Exception ex)
+			{
+				logger.LogError(ex, "Failed to restart stream");
+			}
+		}
+		return Results.Json(new { disabled = newVal });
+	});
 
-app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logger) =>
-{
-    // Toggle persistent configuration flag for audio availability used by /stream/audio and internal streamers.
-    var raw = ctx.Request.Query["enabled"].ToString();
-    bool enabled;
-    if (!bool.TryParse(raw, out enabled))
-    {
-        // Accept "1"/"0" and case-insensitive "true"/"false"
-        enabled = raw == "1" || string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase);
-    }
+	app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logger) =>
+	{
+		// Toggle persistent configuration flag for audio availability used by /stream/audio and internal streamers.
+		var raw = ctx.Request.Query["enabled"].ToString();
+		bool enabled;
+		if (!bool.TryParse(raw, out enabled))
+		{
+			// Accept "1"/"0" and case-insensitive "true"/"false"
+			enabled = raw == "1" || string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase);
+		}
 
-    // Update in-memory configuration so subsequent requests read the new setting.
-    config["Audio:Enabled"] = enabled.ToString();
-    logger.LogInformation("Audio stream: {State}", enabled ? "enabled" : "disabled");
+		// Update in-memory configuration so subsequent requests read the new setting.
+		config["Audio:Enabled"] = enabled.ToString();
+		logger.LogInformation("Audio stream: {State}", enabled ? "enabled" : "disabled");
 
-    // If a ffmpeg streamer is active, restart it so it re-reads the audio availability.
-    try
-    {
-        var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
-        if (streamService.IsStreaming)
-        {
-            logger.LogInformation("Restarting active stream to pick up audio setting change");
-            await streamService.StopStreamAsync();
-            await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
-        }
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to restart stream after audio toggle");
-    }
+		// If a ffmpeg streamer is active, restart it so it re-reads the audio availability.
+		try
+		{
+			var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
+			if (streamService.IsStreaming)
+			{
+				logger.LogInformation("Restarting active stream to pick up audio setting change");
+				await streamService.StopStreamAsync();
+				await streamService.StartStreamAsync(null, null, ctx.RequestAborted);
+			}
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "Failed to restart stream after audio toggle");
+		}
 
-    return Results.Json(new { success = true, enabled });
-});
+		return Results.Json(new { success = true, enabled });
+	});
 
 	// Reverse proxy for Mainsail/Fluidd to bypass X-Frame-Options and same-origin issues
 	app.MapGet("/proxy/mainsail/{**path}", async (HttpContext ctx, string? path, ILogger<Program> logger) =>
@@ -1065,7 +1086,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config, 
+			using var yt = new YouTubeControlService(config,
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
 				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
@@ -1092,7 +1113,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config, 
+			using var yt = new YouTubeControlService(config,
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
 				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
@@ -1124,7 +1145,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			{
 				try
 				{
-					using var yt = new YouTubeControlService(config, 
+					using var yt = new YouTubeControlService(config,
 						ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
 						ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 					if (await yt.AuthenticateAsync(ctx.RequestAborted))
@@ -1179,7 +1200,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			}
 
 			var broadcastId = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config, 
+			using var yt = new YouTubeControlService(config,
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
 				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
@@ -1245,7 +1266,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
 			var enabledStr = ctx.Request.Query["enabled"].ToString();
 			var enabled = string.Equals(enabledStr, "true", StringComparison.OrdinalIgnoreCase) || enabledStr == "1";
-			
+
 			orchestrator.SetEndStreamAfterSong(enabled);
 			return Results.Json(new { success = true, enabled });
 		}
@@ -1306,15 +1327,15 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		{
 			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
 			var filePath = Path.Combine(timelapseDir, filename);
-            
+
 			// Security check: ensure the file is within the timelapse directory
 			if (!filePath.StartsWith(timelapseDir) || !File.Exists(filePath))
 			{
 				return Results.NotFound();
 			}
 
-			var contentType = filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg" : 
-							 filename.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? "video/mp4" : 
+			var contentType = filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg" :
+							 filename.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? "video/mp4" :
 							 "application/octet-stream";
 
 			return Results.File(filePath, contentType);
@@ -1344,12 +1365,12 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			// Generate video directly using ffmpeg
 			var folderName = Path.GetFileName(timelapseDir);
 			var videoPath = Path.Combine(timelapseDir, $"{folderName}.mp4");
-			
+
 			logger.LogInformation("Generating video from {FrameCount} frames: {VideoPath}", frameFiles.Length, videoPath);
-			
+
 			// Use ffmpeg to create video
 			var arguments = $"-y -framerate 30 -start_number 0 -i \"{timelapseDir}/frame_%06d.jpg\" -vf \"tpad=stop_mode=clone:stop_duration=5\" -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p -movflags +faststart \"{videoPath}\"";
-			
+
 			var psi = new ProcessStartInfo
 			{
 				FileName = "ffmpeg",
@@ -1359,16 +1380,16 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 				RedirectStandardOutput = true,
 				CreateNoWindow = true
 			};
-			
+
 			using var proc = Process.Start(psi);
 			if (proc == null)
 			{
 				return Results.Json(new { success = false, error = "Failed to start ffmpeg" });
 			}
-			
+
 			var output = await proc.StandardError.ReadToEndAsync(ctx.RequestAborted);
 			await proc.WaitForExitAsync(ctx.RequestAborted);
-			
+
 			if (proc.ExitCode == 0 && File.Exists(videoPath))
 			{
 				logger.LogInformation("Video created successfully: {VideoPath}", videoPath);
@@ -1407,7 +1428,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			var videoPath = videoFiles[0]; // Use first mp4 found
 
 			// Use YouTubeControlService to upload
-			using var ytService = new YouTubeControlService(config, 
+			using var ytService = new YouTubeControlService(config,
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
 				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await ytService.AuthenticateAsync(ctx.RequestAborted))
@@ -1421,26 +1442,26 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			if (!string.IsNullOrEmpty(videoId))
 			{
 				var url = $"https://www.youtube.com/watch?v={videoId}";
-				
+
 				// Save YouTube URL to metadata
 				try
 				{
 					var metadataPath = Path.Combine(timelapseDir, ".metadata");
 					var existingLines = File.Exists(metadataPath) ? File.ReadAllLines(metadataPath).ToList() : new List<string>();
-					
+
 					// Remove old YouTubeUrl if exists
 					existingLines.RemoveAll(line => line.StartsWith("YouTubeUrl="));
-					
+
 					// Add new YouTubeUrl
 					existingLines.Add($"YouTubeUrl={url}");
-					
+
 					File.WriteAllLines(metadataPath, existingLines);
 				}
 				catch (Exception ex)
 				{
 					logger.LogWarning(ex, "Failed to save YouTube URL to metadata: {Message}", ex.Message);
 				}
-				
+
 				return Results.Json(new { success = true, videoId, url });
 			}
 			return Results.Json(new { success = false, error = "Upload failed" });
@@ -1539,7 +1560,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 
 	// Enhanced test page with timelapse management
 	// Blazor pages are now served via MapRazorComponents below
-	
+
 	// Map API controllers (printer control API, etc.)
 	app.MapControllers();
 
@@ -1553,11 +1574,11 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		{
 			var currentConfig = new
 			{
-			Stream = new
-			{
-				Source = config.GetValue<string>("Stream:Source"),
-				TargetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6,
-				BitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800,
+				Stream = new
+				{
+					Source = config.GetValue<string>("Stream:Source"),
+					TargetFps = config.GetValue<int?>("Stream:TargetFps") ?? 6,
+					BitrateKbps = config.GetValue<int?>("Stream:BitrateKbps") ?? 800,
 					Local = new
 					{
 						Enabled = config.GetValue<bool?>("Stream:Local:Enabled") ?? false
@@ -1589,9 +1610,9 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 					FontColor = config.GetValue<string>("Overlay:FontColor") ?? "white",
 					Box = config.GetValue<bool?>("Overlay:Box") ?? true,
 					BoxColor = config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
-					BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
-					X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
-					Y = config.GetValue<string>("Overlay:Y") ?? string.Empty,
+					BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 2,
+					X = config.GetValue<string>("Overlay:X") ?? "0",
+					Y = config.GetValue<string>("Overlay:Y") ?? "40",
 					BannerFraction = config.GetValue<double?>("Overlay:BannerFraction") ?? 0.2,
 					ShowFilamentInOverlay = config.GetValue<bool?>("Overlay:ShowFilamentInOverlay") ?? true,
 					FilamentCacheSeconds = config.GetValue<int?>("Overlay:FilamentCacheSeconds") ?? 60
@@ -1705,7 +1726,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		{
 			using var reader = new StreamReader(ctx.Request.Body);
 			var body = await reader.ReadToEndAsync();
-			
+
 			if (string.IsNullOrWhiteSpace(body))
 			{
 				return Results.Json(new { success = false, error = "Invalid configuration data" });
@@ -1724,9 +1745,9 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			// Get the custom config file path from configuration
 			var customConfigFile = config.GetValue<string>("CustomConfigFile") ?? "appsettings.Local.json";
 			var configPath = Path.Combine(Directory.GetCurrentDirectory(), customConfigFile);
-			
+
 			logger.LogInformation("Saving configuration to: {ConfigFile}", customConfigFile);
-			
+
 			// Parse and re-serialize with indentation for pretty formatting
 			var jsonDoc = System.Text.Json.JsonDocument.Parse(body);
 			var options = new System.Text.Json.JsonSerializerOptions
@@ -1734,10 +1755,10 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 				WriteIndented = true,
 				PropertyNamingPolicy = null
 			};
-			
+
 			var jsonString = System.Text.Json.JsonSerializer.Serialize(jsonDoc.RootElement, options);
 			await File.WriteAllTextAsync(configPath, jsonString);
-			
+
 			logger.LogInformation("Configuration saved to {ConfigFile}", customConfigFile);
 			return Results.Json(new { success = true, message = "Configuration saved. Restart required for changes to take effect." });
 		}
@@ -1827,10 +1848,10 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 				WriteIndented = true,
 				PropertyNamingPolicy = null
 			};
-			
+
 			var jsonString = System.Text.Json.JsonSerializer.Serialize(defaultConfig, options);
 			await File.WriteAllTextAsync(appSettingsPath, jsonString);
-			
+
 			logger.LogInformation("Configuration reset to defaults");
 			return Results.Json(new { success = true, message = "Configuration reset to defaults" });
 		}
@@ -1973,7 +1994,8 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 	app.MapPost("/api/audio/play", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); a.Play(); return Results.Json(new { success = true }); });
 	app.MapPost("/api/audio/pause", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); a.Pause(); return Results.Json(new { success = true }); });
 	app.MapPost("/api/audio/toggle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); a.Toggle(); return Results.Json(new { success = true }); });
-	app.MapPost("/api/audio/next", (HttpContext ctx) => {
+	app.MapPost("/api/audio/next", (HttpContext ctx) =>
+	{
 		var a = ctx.RequestServices.GetRequiredService<AudioService>();
 		a.Next();
 		try
@@ -1984,7 +2006,8 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		catch { }
 		return Results.Json(new { success = true });
 	});
-	app.MapPost("/api/audio/prev", (HttpContext ctx) => {
+	app.MapPost("/api/audio/prev", (HttpContext ctx) =>
+	{
 		var a = ctx.RequestServices.GetRequiredService<AudioService>();
 		a.Prev();
 		try
@@ -2068,14 +2091,14 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		ctx.Response.Headers["Pragma"] = "no-cache";
 		await ctx.Response.Body.FlushAsync();
 
-			var broadcaster = ctx.RequestServices.GetRequiredService<AudioBroadcastService>();
-			try
+		var broadcaster = ctx.RequestServices.GetRequiredService<AudioBroadcastService>();
+		try
+		{
+			await foreach (var chunk in broadcaster.Stream(ctx.RequestAborted))
 			{
-				await foreach (var chunk in broadcaster.Stream(ctx.RequestAborted))
-				{
-					await ctx.Response.Body.WriteAsync(chunk, 0, chunk.Length, ctx.RequestAborted);
-				}
+				await ctx.Response.Body.WriteAsync(chunk, 0, chunk.Length, ctx.RequestAborted);
 			}
+		}
 		catch (OperationCanceledException) { }
 		catch (Exception ex)
 		{
@@ -2126,32 +2149,32 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		}
 	});
 
-		// YouTube polling manager diagnostics
-		app.MapGet("/api/youtube/polling/status", (HttpContext ctx) =>
-		{
-			var pm = ctx.RequestServices.GetRequiredService<YouTubePollingManager>();
-			var stats = pm.GetStats();
-			return Results.Json(stats);
-		});
+	// YouTube polling manager diagnostics
+	app.MapGet("/api/youtube/polling/status", (HttpContext ctx) =>
+	{
+		var pm = ctx.RequestServices.GetRequiredService<YouTubePollingManager>();
+		var stats = pm.GetStats();
+		return Results.Json(stats);
+	});
 
-		app.MapPost("/api/youtube/polling/clear-cache", (HttpContext ctx) =>
-		{
-			var pm = ctx.RequestServices.GetRequiredService<YouTubePollingManager>();
-			pm.ClearCache();
-			return Results.Json(new { success = true, message = "Cache cleared" });
-		});
+	app.MapPost("/api/youtube/polling/clear-cache", (HttpContext ctx) =>
+	{
+		var pm = ctx.RequestServices.GetRequiredService<YouTubePollingManager>();
+		pm.ClearCache();
+		return Results.Json(new { success = true, message = "Cache cleared" });
+	});
 
-    app.Logger.LogInformation("Starting proxy server on http://0.0.0.0:8080/stream");
+	app.Logger.LogInformation("Starting proxy server on http://0.0.0.0:8080/stream");
 
-    // Handle graceful shutdown - this will run regardless of mode since the host is started below
-    var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
-    lifetime.ApplicationStopping.Register(() =>
-    {
-        var logger = app.Services.GetRequiredService<ILogger<Program>>();
-        logger.LogInformation("Shutting down...");
-        streamCts?.Cancel();
-        timelapseManager?.Dispose();
-    });
+	// Handle graceful shutdown - this will run regardless of mode since the host is started below
+	var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+	lifetime.ApplicationStopping.Register(() =>
+	{
+		var logger = app.Services.GetRequiredService<ILogger<Program>>();
+		logger.LogInformation("Shutting down...");
+		streamCts?.Cancel();
+		timelapseManager?.Dispose();
+	});
 
 	// Start local stream AFTER the web server is listening (to avoid race condition)
 	lifetime.ApplicationStarted.Register(() =>
@@ -2225,18 +2248,18 @@ await app.RunAsync();
 // If serve UI was enabled, wait for the background stream task (if any) to complete and clean up
 if (serveEnabled)
 {
-    if (streamTask != null)
-    {
-        await streamTask;
-    }
-    timelapseManager?.Dispose();
+	if (streamTask != null)
+	{
+		await streamTask;
+	}
+	timelapseManager?.Dispose();
 }
 // Poll/stream behavior is handled by MoonrakerHostedService when configured
 
 // Note: test-mode helper removed. The app now always runs the host and poller.
 
 static void PrintHelp()
-{ 
+{
 	Console.WriteLine("PrintStreamer - Stream 3D printer webcam to YouTube Live");
 	Console.WriteLine();
 	Console.WriteLine("Architecture:");
@@ -2289,7 +2312,7 @@ internal static class ProxyUtil
 		// Use a SocketsHttpHandler so we can set a short connect timeout but keep the overall
 		// HttpClient timeout infinite (we rely on downstream cancellation tokens).
 		var handler = new SocketsHttpHandler
-        {
+		{
 			// Fail fast when upstream is unreachable (reduced to 5s for better responsiveness)
 			ConnectTimeout = TimeSpan.FromSeconds(5),
 			// Allow connection pooling and keep-alive for better performance
@@ -2312,7 +2335,7 @@ internal static class ProxyUtil
 			{
 				targetUrl += ctx.Request.QueryString.Value;
 			}
-			
+
 			// Log Moonraker API calls for debugging
 			if (path.StartsWith("printer/") || path.StartsWith("api/") || path.StartsWith("server/") || path.StartsWith("machine/") || path.StartsWith("access/"))
 			{
@@ -2348,13 +2371,13 @@ internal static class ProxyUtil
 
 			// Copy response headers, removing frame-blocking ones
 			ctx.Response.StatusCode = (int)response.StatusCode;
-			
+
 			// Log errors for debugging  
 			if ((int)response.StatusCode >= 400)
 			{
 				Logger?.LogWarning("Proxy {StatusCode} from {TargetUrl}", response.StatusCode, targetUrl);
 			}
-			
+
 			foreach (var header in response.Headers)
 			{
 				if (header.Key.Equals("X-Frame-Options", StringComparison.OrdinalIgnoreCase)) continue;
@@ -2369,7 +2392,7 @@ internal static class ProxyUtil
 				if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
 				try { ctx.Response.Headers[header.Key] = header.Value.ToArray(); } catch { }
 			}
-			
+
 			// Add CORS headers for Mainsail/Fluidd API calls
 			ctx.Response.Headers["Access-Control-Allow-Origin"] = "*";
 			ctx.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
@@ -2390,7 +2413,7 @@ internal static class ProxyUtil
 				bool smallEnough = contentLength < 1024 * 1024 && contentLength != -1; // <1MB
 				bool shouldBuffer = (path.StartsWith("access/") || path.StartsWith("api/") || (int)response.StatusCode >= 400 || likelyText) && (smallEnough || contentLength == -1 && likelyText);
 
-				Logger?.LogDebug("Proxy {Path}: contentType={ContentType}, contentLength={ContentLength}, likelyText={LikelyText}, smallEnough={SmallEnough}, shouldBuffer={ShouldBuffer}", 
+				Logger?.LogDebug("Proxy {Path}: contentType={ContentType}, contentLength={ContentLength}, likelyText={LikelyText}, smallEnough={SmallEnough}, shouldBuffer={ShouldBuffer}",
 					path, contentType, contentLength, likelyText, smallEnough, shouldBuffer);
 
 				if (shouldBuffer)
@@ -2405,7 +2428,7 @@ internal static class ProxyUtil
 					if ((int)response.StatusCode == 200 && !string.IsNullOrWhiteSpace(contentType) && contentType.IndexOf("text/html", StringComparison.OrdinalIgnoreCase) >= 0)
 					{
 						Logger?.LogDebug("Processing HTML for path: {Path}, contentType: {ContentType}", path, contentType);
-						
+
 						// Determine the proxy prefix (mainsail or fluidd) from the original request path
 						string proxyPrefix = "";
 						var requestPath = ctx.Request.Path.Value ?? "";
@@ -2425,15 +2448,15 @@ internal static class ProxyUtil
 						{
 							proxyPrefix = "/fluidd";
 						}
-						
+
 						Logger?.LogDebug("Determined proxy prefix: '{ProxyPrefix}' from request path: {RequestPath}", proxyPrefix, requestPath);
 
 						var safeBody = (body ?? string.Empty);
-						
+
 						// Check if this is a simple redirect page (no <head> tag)
-						var isRedirectPage = !safeBody.Contains("<head", StringComparison.OrdinalIgnoreCase) && 
-						                     safeBody.Contains("window.location", StringComparison.OrdinalIgnoreCase);
-						
+						var isRedirectPage = !safeBody.Contains("<head", StringComparison.OrdinalIgnoreCase) &&
+											 safeBody.Contains("window.location", StringComparison.OrdinalIgnoreCase);
+
 						if (isRedirectPage && !string.IsNullOrEmpty(proxyPrefix))
 						{
 							// Rewrite relative redirects to use the proxy prefix
@@ -2444,7 +2467,7 @@ internal static class ProxyUtil
 							safeBody = safeBody.Replace("\"./mainsail\"", "\"/mainsail/\"");
 							safeBody = safeBody.Replace("href=\"./fluidd\"", "href=\"/fluidd/\"");
 							safeBody = safeBody.Replace("href=\"./mainsail\"", "href=\"/mainsail/\"");
-							
+
 							var redirectBytes = System.Text.Encoding.UTF8.GetBytes(safeBody);
 							await ctx.Response.Body.WriteAsync(redirectBytes, 0, redirectBytes.Length, ctx.RequestAborted);
 						}
@@ -2501,7 +2524,7 @@ try{
 								var match = System.Text.RegularExpressions.Regex.Match(safeBody, "<head[\\s>]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 								if (match.Success) headOpenIdx = match.Index;
 							}
-							
+
 							if (headOpenIdx >= 0 && !string.IsNullOrEmpty(baseTag))
 							{
 								// Find the end of the <head> tag (after '>')
@@ -2516,7 +2539,7 @@ try{
 							else if (!string.IsNullOrEmpty(baseTag) && safeBody.Length > 100)
 							{
 								// Only warn if this looks like actual HTML content (not tiny responses)
-								Logger?.LogWarning("Could not find <head> tag to inject base tag for {Path} (content length: {Length}, starts with: {Preview})", 
+								Logger?.LogWarning("Could not find <head> tag to inject base tag for {Path} (content length: {Length}, starts with: {Preview})",
 									path, safeBody.Length, safeBody.Substring(0, Math.Min(200, safeBody.Length)).Replace("\n", " ").Replace("\r", ""));
 							}
 
@@ -2533,11 +2556,11 @@ try{
 								{
 									uiPath = "/fluidd/";
 								}
-								
+
 								if (!string.IsNullOrEmpty(uiPath))
 								{
 									Logger?.LogDebug("Rewriting URLs: {UiPath} -> {ProxyPrefix}/", uiPath, proxyPrefix);
-									
+
 									// Rewrite absolute paths to use the proxy prefix
 									// href="/mainsail/..." -> href="/proxy/mainsail/..."
 									// src="/mainsail/..." -> src="/proxy/mainsail/..."

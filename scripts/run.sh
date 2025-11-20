@@ -95,6 +95,7 @@ DOCKER_CMD=(docker run ${DOCKER_DETACH_FLAG} ${DOCKER_INTERACTIVE_FLAGS} \
   --label "environment=Home" \
   -p "${HOST_PORT}:8080" \
   -e "ASPNETCORE_ENVIRONMENT=Home" \
+  -v "$REPO_ROOT/appsettings.json:/app/appsettings.json:ro" \
   -v "$REPO_ROOT/appsettings.Home.json:/app/appsettings.Home.json:ro" \
   -v "$PRINTSTREAMER_HOME:/app/data")
 

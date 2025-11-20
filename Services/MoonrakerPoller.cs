@@ -178,8 +178,8 @@ internal static class MoonrakerPoller
                         Box = config.GetValue<bool?>("Overlay:Box") ?? true,
                         BoxColor = config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
                         BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
-                        X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
-                        Y = config.GetValue<string>("Overlay:Y") ?? "20"
+                        X = config.GetValue<string>("Overlay:X") ?? "0",
+                        Y = config.GetValue<string>("Overlay:Y") ?? "40"
                     };
                 }
 
@@ -610,9 +610,9 @@ internal static class MoonrakerPoller
                             FontColor = config.GetValue<string>("Overlay:FontColor") ?? "white",
                             Box = config.GetValue<bool?>("Overlay:Box") ?? true,
                             BoxColor = config.GetValue<string>("Overlay:BoxColor") ?? "black@0.4",
-                            BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 8,
-                            X = config.GetValue<string>("Overlay:X") ?? "(w-tw)-20",
-                            Y = config.GetValue<string>("Overlay:Y") ?? "20"
+                            BoxBorderW = config.GetValue<int?>("Overlay:BoxBorderW") ?? 2,
+                            X = config.GetValue<string>("Overlay:X") ?? "0",
+                            Y = config.GetValue<string>("Overlay:Y") ?? "40"
                         };
                         streamLogger.LogInformation("[Overlay] Enabled drawtext overlay from {TextFile}", overlayOptions.TextFile);
                     }
