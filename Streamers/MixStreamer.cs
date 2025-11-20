@@ -36,10 +36,9 @@ namespace PrintStreamer.Streamers
             {
                 var overlaySource = "http://127.0.0.1:8080/stream/overlay";
                 var audioSource = "http://127.0.0.1:8080/stream/audio";
-                var audioEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
 
                 _logger.LogInformation("[{ContextLabel}] Starting mix: video={Video} audio={Audio}",
-                    contextLabel, overlaySource, audioEnabled ? audioSource : "disabled");
+                    contextLabel, overlaySource, audioSource);
 
                 // Set HTTP response headers
                 if (!_ctx.Response.HasStarted)
@@ -51,9 +50,9 @@ namespace PrintStreamer.Streamers
                 }
 
                 // Build ffmpeg command
-                var args = BuildFfmpegArgs(overlaySource, audioSource, audioEnabled);
+                var args = BuildFfmpegArgs(overlaySource, audioSource);
 
-                _logger.LogInformation("[{ContextLabel}] Starting ffmpeg with video and {AudioMode}", contextLabel, audioEnabled ? "audio" : "no audio");
+                _logger.LogInformation("[{ContextLabel}] Starting ffmpeg with video+audio pipeline", contextLabel);
 
                 _proc = new Process
                 {
@@ -99,13 +98,6 @@ namespace PrintStreamer.Streamers
                 var buf = new byte[64 * 1024];
                 while (!cancellationToken.IsCancellationRequested && !_proc.HasExited)
                 {
-                    // If audio disabled while mix is running, restart/stop the ffmpeg mix so new args will apply
-                    var nowEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
-                    if (!nowEnabled)
-                    {
-                        try { if (!_proc.HasExited) _proc.Kill(entireProcessTree: true); } catch { }
-                        break;
-                    }
                     var read = await outStream.ReadAsync(buf.AsMemory(0, buf.Length), cancellationToken);
                     if (read <= 0) break;
                     await _ctx.Response.Body.WriteAsync(buf.AsMemory(0, read), cancellationToken);
@@ -180,7 +172,7 @@ namespace PrintStreamer.Streamers
             try { _proc?.Dispose(); } catch { }
         }
 
-        private static string BuildFfmpegArgs(string videoSource, string audioSource, bool audioEnabled)
+        private static string BuildFfmpegArgs(string videoSource, string audioSource)
         {
             var args = new List<string>
             {
@@ -197,13 +189,10 @@ namespace PrintStreamer.Streamers
                 $"-i \"{videoSource}\""
             };
 
-            // Audio input (if enabled)
-            if (audioEnabled)
-            {
-                args.Add("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2");
-                args.Add("-fflags +genpts+discardcorrupt");
-                args.Add($"-i \"{audioSource}\"");
-            }
+            // Audio input (always include; the /stream/audio endpoint supplies silence when disabled)
+            args.Add("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2");
+            args.Add("-fflags +genpts+discardcorrupt");
+            args.Add($"-i \"{audioSource}\"");
 
             // Video encoding - H.264 with ultrafast preset for low latency
             args.Add("-c:v libx264");
@@ -214,17 +203,10 @@ namespace PrintStreamer.Streamers
             args.Add("-pix_fmt yuv420p");
             args.Add("-g 60");  // GOP size (keyframe interval)
 
-            // Audio encoding (if enabled) - AAC
-            if (audioEnabled)
-            {
-                args.Add("-c:a aac");
-                args.Add("-b:a 128k");
-                args.Add("-ar 44100");
-            }
-            else
-            {
-                args.Add("-an");  // No audio
-            }
+            // Audio encoding - AAC (input may be silence when disabled)
+            args.Add("-c:a aac");
+            args.Add("-b:a 128k");
+            args.Add("-ar 44100");
 
             // Output format - MP4 with fragmentation for HTTP streaming
             args.Add("-f mp4");
