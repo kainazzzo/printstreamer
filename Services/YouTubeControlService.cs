@@ -21,7 +21,7 @@ namespace PrintStreamer.Services
     private readonly ILogger<YouTubeControlService> _logger;
     private readonly YouTubePollingManager? _pollingManager;
     private readonly MoonrakerClient _moonrakerClient;
-    private Google.Apis.YouTube.v3.YouTubeService? _youtubeService;
+    private YouTubeService? _youtubeService;
     private UserCredential? _credential; // Used for user OAuth flow
     private readonly string _tokenPath;
     private readonly InMemoryDataStore _inMemoryStore = new InMemoryDataStore();
@@ -164,7 +164,7 @@ namespace PrintStreamer.Services
                     var info = await _moonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, cancellationToken);
                     if (info != null)
                     {
-                        var detailsList = new System.Collections.Generic.List<string>();
+                        var detailsList = new List<string>();
                         if (info.BedTempActual.HasValue || info.BedTempTarget.HasValue)
                         {
                             detailsList.Add($"Bed: {info.BedTempActual?.ToString("F1") ?? "n/a"}°C / {info.BedTempTarget?.ToString("F1") ?? "n/a"}°C");
@@ -289,14 +289,14 @@ namespace PrintStreamer.Services
             }
 
             // Create new playlist
-            var playlist = new Google.Apis.YouTube.v3.Data.Playlist
+            var playlist = new Playlist
             {
-                Snippet = new Google.Apis.YouTube.v3.Data.PlaylistSnippet
+                Snippet = new PlaylistSnippet
                 {
                     Title = name,
                     Description = $"Auto-managed by PrintStreamer: {name}"
                 },
-                Status = new Google.Apis.YouTube.v3.Data.PlaylistStatus
+                Status = new PlaylistStatus
                 {
                     PrivacyStatus = privacy
                 }
@@ -345,12 +345,12 @@ namespace PrintStreamer.Services
                 pageToken = listResp.NextPageToken;
             } while (!string.IsNullOrEmpty(pageToken));
 
-            var item = new Google.Apis.YouTube.v3.Data.PlaylistItem
+            var item = new PlaylistItem
             {
-                Snippet = new Google.Apis.YouTube.v3.Data.PlaylistItemSnippet
+                Snippet = new PlaylistItemSnippet
                 {
                     PlaylistId = playlistId,
-                    ResourceId = new Google.Apis.YouTube.v3.Data.ResourceId
+                    ResourceId = new ResourceId
                     {
                         Kind = "youtube#video",
                         VideoId = videoId
@@ -701,7 +701,7 @@ namespace PrintStreamer.Services
                     _logger.LogError("[YouTube] Failed to obtain access token.");
                     return false;
                 }
-                _youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
+                _youtubeService = new YouTubeService(new BaseClientService.Initializer
                 {
                     HttpClientInitializer = _credential,
                     ApplicationName = "PrintStreamer"
@@ -710,7 +710,7 @@ namespace PrintStreamer.Services
                 StartTokenRefreshLoop();
                 return true;
             }
-            catch (Google.Apis.Auth.OAuth2.Responses.TokenResponseException trex)
+            catch (TokenResponseException trex)
             {
                 // If refresh was rejected due to unauthorized_client, but we have an access token available
                 // in the stored TokenResponse, use it directly via GoogleCredential.FromAccessToken so we
@@ -720,7 +720,7 @@ namespace PrintStreamer.Services
                 {
                     _logger.LogWarning("[YouTube] Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
                     var accessOnly = Google.Apis.Auth.OAuth2.GoogleCredential.FromAccessToken(_credential.Token.AccessToken);
-                    _youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
+                    _youtubeService = new YouTubeService(new BaseClientService.Initializer
                     {
                         HttpClientInitializer = accessOnly,
                         ApplicationName = "PrintStreamer"
@@ -960,7 +960,7 @@ namespace PrintStreamer.Services
                     // Verify file was written
                     if (File.Exists(_filePath))
                     {
-                        var fileInfo = new System.IO.FileInfo(_filePath);
+                        var fileInfo = new FileInfo(_filePath);
                         System.Console.WriteLine($"[YouTubeTokenFileDataStore] StoreAsync: Verified token file exists, size: {fileInfo.Length} bytes");
                     }
                     else
@@ -1159,7 +1159,7 @@ namespace PrintStreamer.Services
                     // Append details (temps + filament) into the description, if available
                     if (info != null)
                     {
-                        var detailsList = new System.Collections.Generic.List<string>();
+                        var detailsList = new List<string>();
                         if (info.BedTempActual.HasValue || info.BedTempTarget.HasValue)
                             detailsList.Add($"Bed: {info.BedTempActual?.ToString("F1") ?? "n/a"}°C / {info.BedTempTarget?.ToString("F1") ?? "n/a"}°C");
                         if (info.Tool0Temp.HasValue)

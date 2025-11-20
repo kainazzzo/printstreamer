@@ -8,7 +8,7 @@ using PrintStreamer.Services;
 
 namespace PrintStreamer.Timelapse
 {
-    public class TimelapseManager : IDisposable, PrintStreamer.Overlay.ITimelapseMetadataProvider, ITimelapseManager
+    public class TimelapseManager : IDisposable, Overlay.ITimelapseMetadataProvider, ITimelapseManager
     {
     private readonly IConfiguration _config;
     private readonly ILogger<TimelapseManager> _logger;
@@ -382,7 +382,7 @@ namespace PrintStreamer.Timelapse
     public IEnumerable<string> GetActiveSessionNames() => _activeSessions.Keys;
 
     // Provide a thread-safe accessor for overlay/other services to read cached metadata for a given printer filename
-    public PrintStreamer.Overlay.TimelapseSessionMetadata? GetMetadataForFilename(string filename)
+    public Overlay.TimelapseSessionMetadata? GetMetadataForFilename(string filename)
     {
         if (string.IsNullOrWhiteSpace(filename)) return null;
 
@@ -390,7 +390,7 @@ namespace PrintStreamer.Timelapse
         var sanitized = SanitizeFilename(filename);
         if (_activeSessions.TryGetValue(sanitized, out var session))
         {
-            return new PrintStreamer.Overlay.TimelapseSessionMetadata
+            return new Overlay.TimelapseSessionMetadata
             {
                 TotalLayersFromMetadata = session.TotalLayersFromMetadata,
                 RawMetadata = session.MetadataRaw,
@@ -406,7 +406,7 @@ namespace PrintStreamer.Timelapse
             if (kv.Key.Equals(sanitized, StringComparison.OrdinalIgnoreCase) || kv.Key.Contains(sanitized, StringComparison.OrdinalIgnoreCase))
             {
                 var s = kv.Value;
-                return new PrintStreamer.Overlay.TimelapseSessionMetadata
+                return new Overlay.TimelapseSessionMetadata
                 {
                     TotalLayersFromMetadata = s.TotalLayersFromMetadata,
                     RawMetadata = s.MetadataRaw,

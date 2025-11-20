@@ -40,7 +40,7 @@ public class MoonrakerClient
         public double? FilamentTotalMm { get; set; }
 
         // Sensors and their measurements (friendly name + measurements map)
-        public System.Collections.Generic.List<SensorInfo>? Sensors { get; set; }
+        public List<SensorInfo>? Sensors { get; set; }
 
         public struct ToolTemp
         {
@@ -52,7 +52,7 @@ public class MoonrakerClient
         {
             public string? Name { get; set; }
             public string? FriendlyName { get; set; }
-            public System.Collections.Generic.Dictionary<string, object?> Measurements { get; set; } = new System.Collections.Generic.Dictionary<string, object?>();
+            public Dictionary<string, object?> Measurements { get; set; } = new Dictionary<string, object?>();
         }
     }
 

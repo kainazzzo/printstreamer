@@ -18,7 +18,7 @@ namespace PrintStreamer.Services
 	{
 	private readonly IConfiguration _config;
 	private readonly ILogger<YouTubeBroadcastService> _logger;
-		private Google.Apis.YouTube.v3.YouTubeService? _youtubeService;
+		private YouTubeService? _youtubeService;
 		private UserCredential? _credential; // Used for user OAuth flow
 		private readonly string _tokenPath;
 		private readonly InMemoryDataStore _inMemoryStore = new InMemoryDataStore();
@@ -166,7 +166,7 @@ namespace PrintStreamer.Services
 						_logger.LogError("[YouTube] Failed to obtain access token.");
 						return false;
 					}
-					_youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
+					_youtubeService = new YouTubeService(new BaseClientService.Initializer
 					{
 						HttpClientInitializer = _credential,
 						ApplicationName = "PrintStreamer"
@@ -175,7 +175,7 @@ namespace PrintStreamer.Services
 					StartTokenRefreshLoop();
 					return true;
 				}
-				catch (Google.Apis.Auth.OAuth2.Responses.TokenResponseException trex)
+				catch (TokenResponseException trex)
 				{
 					// If refresh was rejected due to unauthorized_client, but we have an access token available
 					// in the stored TokenResponse, use it directly via GoogleCredential.FromAccessToken so we
@@ -185,7 +185,7 @@ namespace PrintStreamer.Services
 					{
 						_logger.LogWarning("[YouTube] Refresh rejected (unauthorized_client). Using provided access_token without refresh.");
 						var accessOnly = Google.Apis.Auth.OAuth2.GoogleCredential.FromAccessToken(_credential.Token.AccessToken);
-						_youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
+						_youtubeService = new YouTubeService(new BaseClientService.Initializer
 						{
 							HttpClientInitializer = accessOnly,
 							ApplicationName = "PrintStreamer"

@@ -14,10 +14,10 @@ namespace PrintStreamer.Services
     public sealed class OverlayMjpegService
     {
         private readonly IConfiguration _config;
-        private readonly PrintStreamer.Overlay.OverlayTextService _overlayText;
+        private readonly Overlay.OverlayTextService _overlayText;
         private readonly ILogger<OverlayMjpegService> _logger;
 
-        public OverlayMjpegService(IConfiguration config, PrintStreamer.Overlay.OverlayTextService overlayText, ILogger<OverlayMjpegService> logger)
+        public OverlayMjpegService(IConfiguration config, Overlay.OverlayTextService overlayText, ILogger<OverlayMjpegService> logger)
         {
             _config = config;
             _overlayText = overlayText;

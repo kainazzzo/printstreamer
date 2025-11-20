@@ -132,33 +132,33 @@ if (!File.Exists(fallbackImagePath))
 // Register application services
 webBuilder.Services.AddSingleton<MoonrakerClient>();
 webBuilder.Services.AddSingleton<TimelapseManager>();
-webBuilder.Services.AddSingleton<PrintStreamer.Timelapse.ITimelapseManager>(sp => sp.GetRequiredService<TimelapseManager>());
+webBuilder.Services.AddSingleton<ITimelapseManager>(sp => sp.GetRequiredService<TimelapseManager>());
 // Expose TimelapseManager as ITimelapseMetadataProvider for overlay text enrichment
 webBuilder.Services.AddSingleton<PrintStreamer.Overlay.ITimelapseMetadataProvider>(sp => sp.GetRequiredService<TimelapseManager>());
 // YouTube API polling manager with configuration
-webBuilder.Services.Configure<PrintStreamer.Services.YouTubePollingOptions>(
+webBuilder.Services.Configure<YouTubePollingOptions>(
     webBuilder.Configuration.GetSection(PrintStreamer.Services.YouTubePollingOptions.SectionName));
-webBuilder.Services.AddSingleton<PrintStreamer.Services.YouTubePollingManager>();
+webBuilder.Services.AddSingleton<YouTubePollingManager>();
 // YouTube API client (singleton to avoid repeated authentication and instance creation)
-webBuilder.Services.AddSingleton<PrintStreamer.Services.YouTubeControlService>();
-webBuilder.Services.AddSingleton<PrintStreamer.Services.WebCamManager>();
-webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamService>();
-webBuilder.Services.AddSingleton<PrintStreamer.Services.StreamOrchestrator>();
-webBuilder.Services.AddSingleton<PrintStreamer.Services.PrintStreamOrchestrator>();
-webBuilder.Services.AddSingleton<PrintStreamer.Services.MoonrakerPollerService>();
-webBuilder.Services.AddHostedService<PrintStreamer.Services.MoonrakerHostedService>();
-webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioService>();
-webBuilder.Services.AddSingleton<PrintStreamer.Services.AudioBroadcastService>();
+webBuilder.Services.AddSingleton<YouTubeControlService>();
+webBuilder.Services.AddSingleton<WebCamManager>();
+webBuilder.Services.AddSingleton<StreamService>();
+webBuilder.Services.AddSingleton<StreamOrchestrator>();
+webBuilder.Services.AddSingleton<PrintStreamOrchestrator>();
+webBuilder.Services.AddSingleton<MoonrakerPollerService>();
+webBuilder.Services.AddHostedService<MoonrakerHostedService>();
+webBuilder.Services.AddSingleton<AudioService>();
+webBuilder.Services.AddSingleton<AudioBroadcastService>();
 // Printer console service (skeleton)
-webBuilder.Services.AddSingleton<PrintStreamer.Services.PrinterConsoleService>();
+webBuilder.Services.AddSingleton<PrinterConsoleService>();
 // Start the same singleton as a hosted service
-webBuilder.Services.AddHostedService(sp => sp.GetRequiredService<PrintStreamer.Services.PrinterConsoleService>());
+webBuilder.Services.AddHostedService(sp => sp.GetRequiredService<PrinterConsoleService>());
 // Overlay text generator (reads Moonraker, writes text for ffmpeg drawtext)
-webBuilder.Services.AddSingleton<PrintStreamer.Overlay.OverlayTextService>(sp =>
+webBuilder.Services.AddSingleton(sp =>
 {
 	var cfg = sp.GetRequiredService<IConfiguration>();
 	var tl = sp.GetService<PrintStreamer.Overlay.ITimelapseMetadataProvider>();
-	var audio = sp.GetRequiredService<PrintStreamer.Services.AudioService>();
+	var audio = sp.GetRequiredService<AudioService>();
 	var overlayLogger = sp.GetRequiredService<ILogger<PrintStreamer.Overlay.OverlayTextService>>();
 	var moonrakerClient = sp.GetRequiredService<MoonrakerClient>();
 	return new PrintStreamer.Overlay.OverlayTextService(cfg, tl, () => audio.Current, overlayLogger, moonrakerClient);
@@ -169,7 +169,7 @@ webBuilder.Services.AddRazorComponents()
 	.AddInteractiveServerComponents();
 
 // Register HttpClient with base address for API calls
-webBuilder.Services.AddHttpClient<PrintStreamer.Services.PrinterControlApiService>(client =>
+webBuilder.Services.AddHttpClient<PrinterControlApiService>(client =>
 {
 	client.BaseAddress = new Uri("http://localhost:8080");
 });
@@ -239,14 +239,14 @@ catch
 
 // Wire up audio track completion callback to orchestrator
 {
-	var orchestrator = app.Services.GetRequiredService<PrintStreamer.Services.StreamOrchestrator>();
-	var audioBroadcast = app.Services.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+	var orchestrator = app.Services.GetRequiredService<StreamOrchestrator>();
+	var audioBroadcast = app.Services.GetRequiredService<AudioBroadcastService>();
 	audioBroadcast.SetTrackFinishedCallback(() => orchestrator.OnAudioTrackFinishedAsync());
 }
 
 // Wire up PrintStreamOrchestrator to subscribe to PrinterState events from MoonrakerPoller
 {
-	var printStreamOrchestrator = app.Services.GetRequiredService<PrintStreamer.Services.PrintStreamOrchestrator>();
+	var printStreamOrchestrator = app.Services.GetRequiredService<PrintStreamOrchestrator>();
 	PrintStreamer.Services.MoonrakerPoller.PrintStateChanged += (prev, curr) => 
 		_ = printStreamOrchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
 }
@@ -303,7 +303,7 @@ if (serveEnabled)
 	var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
     
 	// Resolve managers from DI
-	var webcamManager = app.Services.GetRequiredService<PrintStreamer.Services.WebCamManager>();
+	var webcamManager = app.Services.GetRequiredService<WebCamManager>();
 	// Resolve timelapse manager from DI (registered earlier)
 	timelapseManager = app.Services.GetRequiredService<TimelapseManager>();
 
@@ -373,7 +373,7 @@ if (serveEnabled)
 			return false;
 		}
 
-		using var httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+		using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 		
 		try
 		{
@@ -387,7 +387,7 @@ if (serveEnabled)
 				
 				try
 				{
-					using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, ub.Uri);
+					using var req = new HttpRequestMessage(System.Net.Http.HttpMethod.Get, ub.Uri);
 					using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 					using var resp = await httpClient.SendAsync(req, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token);
 					if (resp.IsSuccessStatusCode)
@@ -408,7 +408,7 @@ if (serveEnabled)
 			}
 
 			// Fallback: parse JPEG from MJPEG stream
-			using (var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, streamUrl))
+			using (var req = new HttpRequestMessage(System.Net.Http.HttpMethod.Get, streamUrl))
 			using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6)))
 			using (var resp = await httpClient.SendAsync(req, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token))
 			{
@@ -417,7 +417,7 @@ if (serveEnabled)
 				
 				// Read JPEG from MJPEG stream by finding SOI (FFD8) and EOI (FFD9) markers
 				var buffer = new byte[64 * 1024];
-				using var ms = new System.IO.MemoryStream();
+				using var ms = new MemoryStream();
 				int bytesRead;
 				bool foundSoi = false;
 				int prev = -1;
@@ -532,14 +532,14 @@ if (serveEnabled)
 	// Camera simulation control endpoints (use WebCamManager as the canonical state)
 	app.MapGet("/api/camera", (HttpContext ctx) =>
 	{
-		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
+		var webcamManager = ctx.RequestServices.GetRequiredService<WebCamManager>();
 		return Results.Json(new { disabled = webcamManager.IsDisabled });
 	});
 
 	app.MapPost("/api/camera/on", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
-		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
-		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
+		var webcamManager = ctx.RequestServices.GetRequiredService<WebCamManager>();
+		var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
 		webcamManager.SetDisabled(false);
 		logger.LogInformation("Camera simulation: enabled (camera on)");
 		// Restart stream if one is active so ffmpeg picks up the new upstream availability
@@ -560,8 +560,8 @@ if (serveEnabled)
 
 	app.MapPost("/api/camera/off", async (HttpContext ctx, ILogger<Program> logger) =>
 	{
-		var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
-		var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
+		var webcamManager = ctx.RequestServices.GetRequiredService<WebCamManager>();
+		var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
 		webcamManager.SetDisabled(true);
 		logger.LogInformation("Camera simulation: disabled (camera off)");
 		// Restart stream if one is active so ffmpeg will read from the local proxy and therefore see the fallback frames
@@ -582,8 +582,8 @@ if (serveEnabled)
 
 app.MapPost("/api/camera/toggle", async (HttpContext ctx, ILogger<Program> logger) =>
 {
-var webcamManager = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.WebCamManager>();
-var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
+var webcamManager = ctx.RequestServices.GetRequiredService<WebCamManager>();
+var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
 webcamManager.Toggle();
 var newVal = webcamManager.IsDisabled;
 logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
@@ -621,7 +621,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
     // If a ffmpeg streamer is active, restart it so it re-reads the audio availability.
     try
     {
-        var streamService = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.StreamService>();
+        var streamService = ctx.RequestServices.GetRequiredService<StreamService>();
         if (streamService.IsStreaming)
         {
             logger.LogInformation("Restarting active stream to pick up audio setting change");
@@ -1067,7 +1067,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			var bid = orchestrator.CurrentBroadcastId!;
 			using var yt = new YouTubeControlService(config, 
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
+				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -1094,7 +1094,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			var bid = orchestrator.CurrentBroadcastId!;
 			using var yt = new YouTubeControlService(config, 
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
+				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -1126,7 +1126,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 				{
 					using var yt = new YouTubeControlService(config, 
 						ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-						ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
+						ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 					if (await yt.AuthenticateAsync(ctx.RequestAborted))
 					{
 						privacy = await yt.GetBroadcastPrivacyAsync(broadcastId, ctx.RequestAborted);
@@ -1181,7 +1181,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			var broadcastId = orchestrator.CurrentBroadcastId!;
 			using var yt = new YouTubeControlService(config, 
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
+				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -1409,7 +1409,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			// Use YouTubeControlService to upload
 			using var ytService = new YouTubeControlService(config, 
 				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>());
+				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
 			if (!await ytService.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -1844,14 +1844,14 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 	// Audio API
 	app.MapGet("/api/audio/tracks", (HttpContext ctx) =>
 	{
-		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 		var tracks = audio.Library.Select(t => new { t.Name }).ToArray();
 		return Results.Json(tracks);
 	});
 
 	app.MapGet("/api/audio/state", (HttpContext ctx) =>
 	{
-		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 		var st = audio.GetState();
 		// Normalize enums to strings for UI consumption
 		return Results.Json(new
@@ -1868,14 +1868,14 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 	{
 		var path = ctx.Request.Query["path"].ToString();
 		if (string.IsNullOrWhiteSpace(path)) return Results.BadRequest(new { error = "Missing 'path'" });
-		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 		audio.SetFolder(path);
 		return Results.Json(new { success = true, folder = audio.Folder });
 	});
 
 	app.MapPost("/api/audio/scan", (HttpContext ctx) =>
 	{
-		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 		audio.Rescan();
 		return Results.Json(new { success = true });
 	});
@@ -1910,7 +1910,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			}
 			names.AddRange(ctx.Request.Query["name"].Where(s => !string.IsNullOrEmpty(s))!);
 
-			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+			var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 			audio.Enqueue(names.ToArray());
 			return Results.Json(new { success = true, queued = names.Count });
 		}
@@ -1923,7 +1923,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 
 	app.MapPost("/api/audio/clear", (HttpContext ctx) =>
 	{
-		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 		audio.ClearQueue();
 		return Results.Json(new { success = true });
 	});
@@ -1960,7 +1960,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 
 			if (names.Count == 0) return Results.BadRequest(new { error = "Missing 'name'" });
 
-			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+			var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 			var removed = audio.RemoveFromQueue(names.ToArray());
 			return Results.Json(new { success = true, removed });
 		}
@@ -1970,33 +1970,33 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		}
 	});
 
-	app.MapPost("/api/audio/play", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Play(); return Results.Json(new { success = true }); });
-	app.MapPost("/api/audio/pause", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Pause(); return Results.Json(new { success = true }); });
-	app.MapPost("/api/audio/toggle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); a.Toggle(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/play", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); a.Play(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/pause", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); a.Pause(); return Results.Json(new { success = true }); });
+	app.MapPost("/api/audio/toggle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); a.Toggle(); return Results.Json(new { success = true }); });
 	app.MapPost("/api/audio/next", (HttpContext ctx) => {
-		var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var a = ctx.RequestServices.GetRequiredService<AudioService>();
 		a.Next();
 		try
 		{
-			var b = ctx.RequestServices.GetService<PrintStreamer.Services.AudioBroadcastService>();
+			var b = ctx.RequestServices.GetService<AudioBroadcastService>();
 			b?.InterruptFfmpeg();
 		}
 		catch { }
 		return Results.Json(new { success = true });
 	});
 	app.MapPost("/api/audio/prev", (HttpContext ctx) => {
-		var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var a = ctx.RequestServices.GetRequiredService<AudioService>();
 		a.Prev();
 		try
 		{
-			var b = ctx.RequestServices.GetService<PrintStreamer.Services.AudioBroadcastService>();
+			var b = ctx.RequestServices.GetService<AudioBroadcastService>();
 			b?.InterruptFfmpeg();
 		}
 		catch { }
 		return Results.Json(new { success = true });
 	});
-	app.MapPost("/api/audio/shuffle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var raw = ctx.Request.Query["enabled"].ToString(); bool enabled = string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) || raw == "1"; a.SetShuffle(enabled); return Results.Json(new { success = true, enabled }); });
-	app.MapPost("/api/audio/repeat", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>(); var m = ctx.Request.Query["mode"].ToString(); var mode = m?.ToLowerInvariant() switch { "one" => PrintStreamer.Services.RepeatMode.One, "all" => PrintStreamer.Services.RepeatMode.All, _ => PrintStreamer.Services.RepeatMode.None }; a.SetRepeat(mode); return Results.Json(new { success = true, mode = mode.ToString() }); });
+	app.MapPost("/api/audio/shuffle", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); var raw = ctx.Request.Query["enabled"].ToString(); bool enabled = string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) || raw == "1"; a.SetShuffle(enabled); return Results.Json(new { success = true, enabled }); });
+	app.MapPost("/api/audio/repeat", (HttpContext ctx) => { var a = ctx.RequestServices.GetRequiredService<AudioService>(); var m = ctx.Request.Query["mode"].ToString(); var mode = m?.ToLowerInvariant() switch { "one" => PrintStreamer.Services.RepeatMode.One, "all" => PrintStreamer.Services.RepeatMode.All, _ => PrintStreamer.Services.RepeatMode.None }; a.SetRepeat(mode); return Results.Json(new { success = true, mode = mode.ToString() }); });
 
 	// Preview a specific audio file directly (browser-only). Streams the raw file with best-effort MIME type.
 	app.MapGet("/api/audio/preview", (HttpContext ctx) =>
@@ -2005,7 +2005,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		{
 			var name = ctx.Request.Query["name"].ToString();
 			if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest(new { error = "Missing 'name'" });
-			var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+			var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 			var path = audio.GetPathForName(name);
 			if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) return Results.NotFound();
 
@@ -2034,7 +2034,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 	{
 		var name = ctx.Request.Query["name"].ToString();
 		if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest(new { error = "Missing 'name'" });
-		var audio = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioService>();
+		var audio = ctx.RequestServices.GetRequiredService<AudioService>();
 		if (!audio.TrySelectByName(name, out var selected))
 		{
 			return Results.Json(new { success = false, error = "Track not found" });
@@ -2042,7 +2042,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		// Interrupt ffmpeg so the broadcast switches to the selected file
 		try
 		{
-			var b = ctx.RequestServices.GetService<PrintStreamer.Services.AudioBroadcastService>();
+			var b = ctx.RequestServices.GetService<AudioBroadcastService>();
 			b?.InterruptFfmpeg();
 		}
 		catch { }
@@ -2068,7 +2068,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		ctx.Response.Headers["Pragma"] = "no-cache";
 		await ctx.Response.Body.FlushAsync();
 
-			var broadcaster = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+			var broadcaster = ctx.RequestServices.GetRequiredService<AudioBroadcastService>();
 			try
 			{
 				await foreach (var chunk in broadcaster.Stream(ctx.RequestAborted))
@@ -2087,7 +2087,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 	// Audio broadcast diagnostics
 	app.MapGet("/api/audio/broadcast/status", (HttpContext ctx) =>
 	{
-		var b = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+		var b = ctx.RequestServices.GetRequiredService<AudioBroadcastService>();
 		return Results.Json(b.GetStatus());
 	});
 
@@ -2110,7 +2110,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		ctx.Response.Headers["Pragma"] = "no-cache";
 		await ctx.Response.Body.FlushAsync();
 
-		var broadcaster = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+		var broadcaster = ctx.RequestServices.GetRequiredService<AudioBroadcastService>();
 		try
 		{
 			await foreach (var chunk in broadcaster.Stream(ctx.RequestAborted))
@@ -2129,14 +2129,14 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 		// YouTube polling manager diagnostics
 		app.MapGet("/api/youtube/polling/status", (HttpContext ctx) =>
 		{
-			var pm = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>();
+			var pm = ctx.RequestServices.GetRequiredService<YouTubePollingManager>();
 			var stats = pm.GetStats();
 			return Results.Json(stats);
 		});
 
 		app.MapPost("/api/youtube/polling/clear-cache", (HttpContext ctx) =>
 		{
-			var pm = ctx.RequestServices.GetRequiredService<PrintStreamer.Services.YouTubePollingManager>();
+			var pm = ctx.RequestServices.GetRequiredService<YouTubePollingManager>();
 			pm.ClearCache();
 			return Results.Json(new { success = true, message = "Cache cleared" });
 		});
@@ -2165,7 +2165,7 @@ app.MapPost("/api/audio/enabled", async (HttpContext ctx, ILogger<Program> logge
 			try
 			{
 				// Resolve the AudioBroadcastService (constructor will start its internal feed/supervisor)
-				var _ = app.Services.GetRequiredService<PrintStreamer.Services.AudioBroadcastService>();
+				var _ = app.Services.GetRequiredService<AudioBroadcastService>();
 			}
 			catch { }
 
@@ -2288,8 +2288,8 @@ internal static class ProxyUtil
 	{
 		// Use a SocketsHttpHandler so we can set a short connect timeout but keep the overall
 		// HttpClient timeout infinite (we rely on downstream cancellation tokens).
-		var handler = new System.Net.Http.SocketsHttpHandler
-		{
+		var handler = new SocketsHttpHandler
+        {
 			// Fail fast when upstream is unreachable (reduced to 5s for better responsiveness)
 			ConnectTimeout = TimeSpan.FromSeconds(5),
 			// Allow connection pooling and keep-alive for better performance
