@@ -117,6 +117,72 @@ GET {{baseUrl}}/printer/info
 {{authHeader}}: {{apiKey}}
 
 ###############################################################################
+# 9. LIST FILES - List G-code files on the server so you can pick an exact file
+# Endpoint: /server/files/list?path=gcodes
+###############################################################################
+
+### List G-codes on the server
+GET {{baseUrl}}/server/files/list?path=gcodes
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# 10. METADATA PRESENCE CHECK - Confirm file metadata exists for a given file
+# Use 'server/files/metadata' to inspect 'result.metadata' which TimelapseManager
+# will read (slicer, layer_count, filament_total_mm, etc.)
+###############################################################################
+
+### Get G-code metadata (recommended)
+GET {{baseUrl}}/server/files/metadata?filename={{currentFilenameEncoded}}
+{{authHeader}}: {{apiKey}}
+
+### If the filename listed in print_stats has a 'gcodes/' prefix, try this variant
+GET {{baseUrl}}/server/files/metadata?filename=gcodes/{{currentFilenameEncoded}}
+{{authHeader}}: {{apiKey}}
+
+### Expectation (example):
+# {
+#   "result": {
+#     "metadata": {
+#       "slicer": "Cura",
+#       "slicer_version": "5.2",
+#       "layer_count": 123,
+#       "estimated_time": 3600,
+#       "filament_total_mm": 1234.5
+#     }
+#   }
+# }
+
+###############################################################################
+# 11. PRINT STATS / JOB DETAILS - Use the poller endpoint to validate metadata is
+# surfaced in the printer objects (e.g., via SET_PRINT_STATS_INFO or firmware)
+###############################################################################
+
+### Get print_stats and verify filename, current layer, and embedded job metadata
+GET {{baseUrl}}/printer/objects/query?print_stats
+{{authHeader}}: {{apiKey}}
+
+### Get display_status (note: present when firmware reports fewer fields)
+GET {{baseUrl}}/printer/objects/query?display_status
+{{authHeader}}: {{apiKey}}
+
+###############################################################################
+# Example CURL commands (for terminal testing)
+# 1) List files
+# curl -s -H "X-Api-Key: $MOONRAKER_KEY" "{{baseUrl}}/server/files/list?path=gcodes" | jq
+# 2) Get metadata for current file
+# curl -s -H "X-Api-Key: $MOONRAKER_KEY" "{{baseUrl}}/server/files/metadata?filename={{currentFilenameEncoded}}" | jq
+# 3) Get printer print_stats
+# curl -s -H "X-Api-Key: $MOONRAKER_KEY" "{{baseUrl}}/printer/objects/query?print_stats" | jq
+
+###############################################################################
+## Helpful notes
+# - Make sure your Moonraker API has the proper whitelist/permissions if API key is used
+# - TimelapseManager reads file metadata via this endpoint; if metadata is missing,
+#   inspect the actual uploaded G-code. Some slicers (or upload paths) omit detailed
+#   metadata; alternatively, slicer-provided SET_PRINT_STATS_INFO (or OctoPrint/Prusa
+#   plugin metadata) is required for runtime metadata exposure.
+
+###############################################################################
 # NOTES FOR TESTING:
 # 
 # 1. Update @baseUrl with your printer's IP address

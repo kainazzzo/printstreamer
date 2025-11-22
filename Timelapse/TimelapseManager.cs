@@ -42,11 +42,49 @@ namespace PrintStreamer.Timelapse
         if (string.IsNullOrWhiteSpace(sessionName))
             return null;
 
+
         var sanitizedBase = SanitizeFilename(moonrakerFilename ?? sessionName);
 
+        // If a matching folder already exists (from a previous run) and looks like an active timelapse
+        // (contains frame_*.jpg and doesn't yet have an mp4 file), prefer reusing that folder instead
+        // of creating a new folder with a numeric suffix.
+        string? existingFolderName = null;
+        try
+        {
+            if (Directory.Exists(_mainTimelapseDir))
+            {
+                var rx = new Regex($"^{Regex.Escape(sanitizedBase)}(?:_(\\d+))?$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                var candidates = Directory.GetDirectories(_mainTimelapseDir)
+                    .Where(d => rx.IsMatch(Path.GetFileName(d)))
+                    .OrderByDescending(d => Directory.GetCreationTime(d));
+                foreach (var dir in candidates)
+                {
+                    var frames = Directory.GetFiles(dir, "frame_*.jpg");
+                    var videos = Directory.GetFiles(dir, "*.mp4");
+                    if (frames.Length > 0 && videos.Length == 0)
+                    {
+                        existingFolderName = Path.GetFileName(dir);
+                        break;
+                    }
+                }
+            }
+        }
+        catch { /* ignore filesystem errors and fall back to default behavior */ }
+
         // Create the service first so it can create an output folder and possibly append a suffix
-        var service = new TimelapseService(_mainTimelapseDir, sanitizedBase, _loggerFactory.CreateLogger<TimelapseService>());
-        var actualFolderName = Path.GetFileName(service.OutputDir) ?? sanitizedBase;
+        TimelapseService service;
+        string actualFolderName;
+        if (!string.IsNullOrWhiteSpace(existingFolderName))
+        {
+            // Reuse existing folder explicitly
+            service = new TimelapseService(_mainTimelapseDir, existingFolderName, _loggerFactory.CreateLogger<TimelapseService>(), reuseExisting: true);
+            actualFolderName = existingFolderName;
+        }
+        else
+        {
+            service = new TimelapseService(_mainTimelapseDir, sanitizedBase, _loggerFactory.CreateLogger<TimelapseService>());
+            actualFolderName = Path.GetFileName(service.OutputDir) ?? sanitizedBase;
+        }
 
         // Config: gate start until layer 1 by default
         var startAfterLayer1 = _config.GetValue<bool?>("Timelapse:StartAfterLayer1") ?? true;

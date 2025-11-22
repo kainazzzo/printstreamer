@@ -140,12 +140,20 @@ namespace PrintStreamer.Services
         private async Task RunAsync(CancellationToken ct)
         {
             // Minimal resilient websocket subscription to display_status for message updates
+            int failureCount = 0;
+            var initialReconnectDelayMs = _cfg.GetValue<int?>("Stream:Console:ReconnectInitialDelayMs") ?? 3000;
+            var maxReconnectDelayMs = _cfg.GetValue<int?>("Stream:Console:ReconnectMaxDelayMs") ?? 60000;
+            var enablePollingFallback = _cfg.GetValue<bool?>("Stream:Console:EnablePollingFallback") ?? true;
+            var pollingIntervalSec = _cfg.GetValue<int?>("Stream:Console:PollingIntervalSec") ?? 10;
+
             while (!ct.IsCancellationRequested)
             {
                 ClientWebSocket? ws = null;
+                Uri? wsUri = null;
+                string? baseUrl = null;
                 try
                 {
-                    var baseUrl = _cfg.GetValue<string>("Moonraker:BaseUrl");
+                    baseUrl = _cfg.GetValue<string>("Moonraker:BaseUrl");
                     if (string.IsNullOrWhiteSpace(baseUrl))
                     {
                         await Task.Delay(2000, ct);
@@ -155,7 +163,7 @@ namespace PrintStreamer.Services
                     if (string.Equals(ub.Scheme, "http", StringComparison.OrdinalIgnoreCase)) ub.Scheme = "ws";
                     else if (string.Equals(ub.Scheme, "https", StringComparison.OrdinalIgnoreCase)) ub.Scheme = "wss";
                     ub.Path = ub.Path.TrimEnd('/') + "/websocket";
-                    var wsUri = ub.Uri;
+                    wsUri = ub.Uri;
 
                     ws = new ClientWebSocket();
                     ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
@@ -210,8 +218,19 @@ namespace PrintStreamer.Services
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
+                    // If we failed to connect at all, we should backoff and optionally switch to HTTP polling.
                     _log.LogWarning(ex, "[Console] WS loop error");
                     AddLine(new ConsoleLine { Text = "Console WS error: " + ex.Message, Level = "warn", FromLocal = true });
+                    failureCount++;
+                    // If WS connect failed and polling fallback is enabled, start polling until connection resumes
+                    if (enablePollingFallback && (ex is WebSocketException || ex is HttpRequestException || ex.InnerException is System.Net.Sockets.SocketException))
+                    {
+                        _log.LogInformation("[Console] Starting HTTP polling fallback (interval {Interval}s) because WS failed.", pollingIntervalSec);
+                        // Poll display_status and gcode_store via MoonrakerClient until WS is healthy again
+                        var pollUri = wsUri;
+                        if (pollUri == null && !string.IsNullOrWhiteSpace(baseUrl)) pollUri = new Uri(baseUrl);
+                        if (pollUri != null) await PollingFallbackLoop(pollUri, pollingIntervalSec, ct);
+                    }
                 }
                 finally
                 {
@@ -233,8 +252,85 @@ namespace PrintStreamer.Services
 
                 if (!ct.IsCancellationRequested)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(3), ct); // backoff
+                    // Exponential backoff on repeated failures so we don't spam connect attempts
+                    var delayMs = Math.Min(maxReconnectDelayMs, (int)(initialReconnectDelayMs * Math.Pow(2, Math.Max(0, failureCount - 1))));
+                    // Add slight jitter
+                    var jitter = new Random().Next(0, (int)Math.Min(2000, delayMs / 5));
+                    var totalMs = Math.Max(500, delayMs + jitter);
+                    _log.LogDebug("[Console] Waiting {DelayMs}ms before reconnect attempt (failureCount={FailureCount})", totalMs, failureCount);
+                    await Task.Delay(TimeSpan.FromMilliseconds(totalMs), ct); // backoff
                 }
+            }
+        }
+
+        private async Task PollingFallbackLoop(Uri wsUri, int intervalSec, CancellationToken ct)
+        {
+            // Maintain periodic HTTP polling for essential status info and gcode store when WS is down
+            try
+            {
+                var baseUri = new UriBuilder(wsUri) { Scheme = wsUri.Scheme == "wss" ? "https" : "http", Path = string.Empty }.Uri;
+                var apiKey = _cfg.GetValue<string>("Moonraker:ApiKey");
+                var authHeader = _cfg.GetValue<string>("Moonraker:AuthHeader") ?? "X-Api-Key";
+                while (!ct.IsCancellationRequested)
+                {
+                    var hadInfo = false;
+                    try
+                    {
+                        // Update simple status/temperatures via GetPrintInfo
+                        var info = await _moonrakerClient.GetPrintInfoAsync(baseUri, apiKey, authHeader, ct);
+                        hadInfo = info != null;
+                        // If we can successfully GET display_status, that means the printer is reachable.
+                        // Let the calling loop try to re-establish WebSocket when it sees the server is back.
+                        if (info != null)
+                        {
+                            if (info.Tool0Temp.HasValue)
+                            {
+                                lock (_lock) { _lastToolTemp = info.Tool0Temp.Value.Actual; }
+                            }
+                            if (info.BedTempActual.HasValue)
+                            {
+                                lock (_lock) { _lastBedTemp = info.BedTempActual.Value; }
+                            }
+                            // Emit a simple message showing state change
+                            if (!string.IsNullOrWhiteSpace(info.State) && !string.Equals(_lastDisplayMessage, info.State, StringComparison.Ordinal))
+                            {
+                                _lastDisplayMessage = info.State;
+                                AddLine(new ConsoleLine { Text = $"Printer state (poll): {info.State}", Level = "info", FromLocal = true });
+                            }
+                        }
+
+                        // Try retrieving console messages via HTTP fallback
+                        var gcodeStore = await _moonrakerClient.GetGcodeStoreAsync(baseUri, apiKey, authHeader, 50, ct);
+                        if (gcodeStore != null)
+                        {
+                            // Build an artificial JSON structure to reuse the existing parsing logic
+                            var wrapped = new JsonObject { ["result"] = new JsonObject { ["gcode_store"] = gcodeStore } };
+                            TryHandleWsMessage(wrapped.ToJsonString());
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (Exception ex)
+                    {
+                        _log.LogDebug(ex, "[Console] Polling fallback read error: {Message}", ex.Message);
+                    }
+                    await Task.Delay(TimeSpan.FromSeconds(intervalSec), ct);
+                    // If we've seen a successful HTTP status read for this cycle, break and allow WS reconnect logic to run
+                    if (hadInfo)
+                        {
+                            // Exit polling - allow RunAsync to try to reconnect.
+                            _log.LogInformation("[Console] Moonraker responsive via HTTP; exiting polling fallback to allow WS reconnect.");
+                            return;
+                        }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "[Console] Polling fallback terminated unexpectedly: {Message}", ex.Message);
+            }
+            finally
+            {
+                _log.LogInformation("[Console] Polling fallback stopped");
             }
         }
 

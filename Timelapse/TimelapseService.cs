@@ -62,6 +62,19 @@ public class TimelapseService : IDisposable
         Directory.CreateDirectory(OutputDir);
     }
 
+    /// <summary>
+    /// Create a TimelapseService that purposely reuses an existing folder name (no numeric suffixing).
+    /// This is useful for resuming timelapse capture into an existing folder on restart.
+    /// </summary>
+    public TimelapseService(string mainFolder, string streamId, ILogger<TimelapseService> logger, bool reuseExisting)
+    {
+        _logger = logger;
+        Directory.CreateDirectory(mainFolder);
+        var candidate = Path.Combine(mainFolder, streamId);
+        OutputDir = candidate;
+        Directory.CreateDirectory(OutputDir);
+    }
+
     public async Task SaveFrameAsync(byte[] imageBytes, CancellationToken cancellationToken = default)
     {
         if (imageBytes == null) return;

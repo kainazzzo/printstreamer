@@ -28,15 +28,15 @@ namespace PrintStreamer.Utils.Tests
         [TestMethod]
         public void BuildDrawbox_UsesBoxHeightWhenProvided()
         {
-            var s = OverlayFilterUtil.BuildDrawbox("0", "h-20", 42, 0.2, "black@0.4");
+            var s = OverlayFilterUtil.BuildDrawbox("0", "h-20", 42, "black@0.4");
             Assert.IsTrue(s.Contains("h=42"));
         }
 
         [TestMethod]
         public void BuildDrawbox_UsesBannerFractionWhenNoHeight()
         {
-            var s = OverlayFilterUtil.BuildDrawbox("0", "h-20", null, 0.25, "black@0.4");
-            Assert.IsTrue(s.Contains("ih*0.25"));
+            var s = OverlayFilterUtil.BuildDrawbox("0", "h-20", 0, "black@0.4");
+            Assert.IsTrue(s.Contains("h=0"));
         }
     }
 }

@@ -292,5 +292,54 @@ namespace PrintStreamer.Utils.Tests
             Assert.IsTrue(activeNames.Contains(result1));
             Assert.IsTrue(activeNames.Contains(result2));
         }
+
+        [TestMethod]
+        public void StartTimelapse_AfterRestart_ResumesSameTimelapseForSameJob()
+        {
+            // Arrange
+            var jobFilename = "resume_test.gcode";
+            var jobSafe = Path.GetFileNameWithoutExtension(jobFilename);
+
+            // Start initial session (no moonraker filename in tests to avoid NRE)
+            var startedSession = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+            Assert.IsNotNull(startedSession);
+
+            var outputDir = Path.Combine(_tempTimelapseDir, startedSession);
+            Assert.IsTrue(Directory.Exists(outputDir));
+
+            // Simulate a captured frame by creating a frame file on disk
+            var sampleFrame = Path.Combine(outputDir, "frame_000000.jpg");
+            File.WriteAllBytes(sampleFrame, new byte[] { 1, 2, 3 });
+
+            // Simulate app restart by disposing current manager and creating a new one with same configuration
+            _sut.Dispose();
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string>
+                {
+                    ["Timelapse:MainFolder"] = _tempTimelapseDir,
+                    ["Stream:Source"] = "http://localhost:8080/stream.mjpeg"
+                })
+                .Build();
+            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+
+            // Act - start timelapse again for same job name (representing a restart)
+            var resumed = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+
+            // Assert - we expect the restarted manager to resume the same folder for the continuing print
+            Assert.AreEqual(startedSession, resumed, "Timelapse manager should resume writing to same folder after restart (same job)");
+
+            // Simulate print reaching last layer (trigger finalization)
+            var finalized = _sut.NotifyPrintProgressAsync(resumed, 10, 10).GetAwaiter().GetResult();
+            Assert.IsNull(finalized, "CreateVideoAsync may be null in unit test environment (ffmpeg not available), but notify should succeed and stop session");
+
+            // Since ffmpeg isn't available in unit tests, simulate a created mp4 to indicate finalization
+            var dummyVideo = Path.Combine(outputDir, $"{resumed}.mp4");
+            File.WriteAllBytes(dummyVideo, new byte[] { 0 });
+
+            // After finalization, starting a new print with the same file name should create a new directory (suffix appended)
+            var secondSession = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+            Assert.IsNotNull(secondSession);
+            Assert.AreNotEqual(resumed, secondSession, "A new print with the same file name should result in a new timelapse folder (numeric suffix appended)");
+        }
     }
 }

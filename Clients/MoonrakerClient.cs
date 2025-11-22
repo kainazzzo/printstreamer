@@ -171,6 +171,43 @@ public class MoonrakerClient
     }
 
     /// <summary>
+    /// HTTP fallback to fetch a recent slice of the gcode_store (console output) from Moonraker
+    /// Returns null if it could not be fetched or parsed.
+    /// </summary>
+    public async Task<JsonArray?> GetGcodeStoreAsync(Uri baseUri, string? apiKey = null, string? authHeader = null, int count = 50, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(5) };
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
+                try { http.DefaultRequestHeaders.Remove(header); } catch { }
+                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
+            }
+
+            var endpoints = new[] { $"/server/gcode_store?count={count}", $"/printer/gcode_store?count={count}" };
+            foreach (var ep in endpoints)
+            {
+                try
+                {
+                    var resp = await http.GetAsync(ep, cancellationToken);
+                    if (!resp.IsSuccessStatusCode) continue;
+                    var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    var node = JsonNode.Parse(txt);
+                    if (node == null) continue;
+                    // Expecting structure { result: { gcode_store: [ ... ] } }
+                    var arr = node["result"]? ["gcode_store"] as JsonArray;
+                    if (arr != null) return arr;
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>
     /// Helper to merge filament metadata from file metadata endpoint into MoonrakerPrintInfo.
     /// Only updates fields that are currently missing (null/empty).
     /// </summary>
