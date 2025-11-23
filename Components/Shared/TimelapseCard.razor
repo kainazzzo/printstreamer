@@ -9,6 +9,11 @@
             {
                 <button @onclick="HandleRegenerate" class="icon-btn" title="Regenerate video">🔄</button>
             }
+            @* Edit timelapse frames & regenerate video *@
+            @if (!Timelapse.IsActive)
+            {
+                <button @onclick="HandleEdit" class="icon-btn" title="Edit timelapse">✏️</button>
+            }
             @if (!Timelapse.IsActive)
             {
                 <button @onclick="HandleDelete" class="icon-btn delete" title="Delete timelapse">🗑</button>
@@ -358,11 +363,15 @@
     [Parameter]
     public EventCallback<string> OnDelete { get; set; }
 
+    [Parameter]
+    public EventCallback<string> OnEdit { get; set; }
+
     private Task HandleStop() => OnStop.InvokeAsync(Timelapse.Name);
     private Task HandleGenerate() => OnGenerate.InvokeAsync(Timelapse.Name);
     private Task HandleRegenerate() => OnRegenerate.InvokeAsync(Timelapse.Name);
     private Task HandleUpload() => OnUpload.InvokeAsync(Timelapse.Name);
     private Task HandleDelete() => OnDelete.InvokeAsync(Timelapse.Name);
+    private Task HandleEdit() => OnEdit.InvokeAsync(Timelapse.Name);
 
     // UI state for media tab selection (video | youtube)
     private string selectedTab = "video";

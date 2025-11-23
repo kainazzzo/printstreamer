@@ -24,10 +24,16 @@
                     OnGenerate="@GenerateTimelapse"
                     OnRegenerate="@RegenerateTimelapse"
                     OnUpload="@UploadTimelapse"
-                    OnDelete="@DeleteTimelapse" />
+                        OnDelete="@DeleteTimelapse"
+                        OnEdit="@OpenEditor" />
             }
         }
     </TimelapseContainer>
+
+    @if (!string.IsNullOrEmpty(editingTimelapseName))
+    {
+        <TimelapseEditor Name="@editingTimelapseName" OnClose="CloseEditor" OnUpdated="RefreshTimelapses" />
+    }
 </div>
 
 @code {
@@ -273,6 +279,20 @@
     public void Dispose()
     {
         refreshTimer?.Dispose();
+    }
+
+    // Editor state
+    private string? editingTimelapseName = null;
+
+    private async Task OpenEditor(string name)
+    {
+        editingTimelapseName = name;
+    }
+
+    private async Task CloseEditor()
+    {
+        editingTimelapseName = null;
+        await RefreshTimelapses();
     }
 
     private class ApiResponse

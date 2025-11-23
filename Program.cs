@@ -344,6 +344,69 @@ if (serveEnabled)
 		}
 	});
 
+	// List frames for a timelapse - returns JSON array of frame filenames in order
+	app.MapGet("/api/timelapses/{name}/frames", (string name) =>
+	{
+		try
+		{
+			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+			if (!Directory.Exists(timelapseDir)) return Results.Json(new { success = false, error = "Timelapse not found" });
+
+			var frames = Directory.GetFiles(timelapseDir, "frame_*.jpg").OrderBy(f => f).Select(Path.GetFileName).ToArray();
+			return Results.Json(new { success = true, frames });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
+	// Delete a single frame from a timelapse
+	app.MapDelete("/api/timelapses/{name}/frames/{filename}", (string name, string filename, HttpContext ctx) =>
+	{
+		try
+		{
+			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+			if (!Directory.Exists(timelapseDir)) return Results.Json(new { success = false, error = "Timelapse not found" });
+
+			// Simple validation - disallow path separators
+			if (filename.IndexOfAny(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }) >= 0) return Results.Json(new { success = false, error = "Invalid filename" });
+
+			var filePath = Path.Combine(timelapseDir, filename);
+			if (!File.Exists(filePath)) return Results.Json(new { success = false, error = "File not found" });
+
+			if (!filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)) return Results.Json(new { success = false, error = "Only frame .jpg files can be deleted" });
+
+			// Prevent deletion while timelapse active
+			if (timelapseManager.GetActiveSessionNames().Contains(name)) return Results.Json(new { success = false, error = "Cannot delete frames while timelapse is active" });
+
+			File.Delete(filePath);
+
+			// Reindex remaining frames to maintain contiguous numbering required by ffmpeg pattern
+			var remaining = Directory.GetFiles(timelapseDir, "frame_*.jpg").OrderBy(f => f).ToArray();
+			for (int i = 0; i < remaining.Length; i++)
+			{
+				var dst = Path.Combine(timelapseDir, $"frame_{i:D6}.jpg");
+				var src = remaining[i];
+				// If the filename already matches the desired index, skip
+				if (string.Equals(Path.GetFileName(src), Path.GetFileName(dst), StringComparison.OrdinalIgnoreCase)) continue;
+				// Overwrite destination if necessary
+				try
+				{
+					if (File.Exists(dst)) File.Delete(dst);
+					File.Move(src, dst);
+				}
+				catch { /* best-effort; ignore failures */ }
+			}
+
+			return Results.Json(new { success = true });
+		}
+		catch (Exception ex)
+		{
+			return Results.Json(new { success = false, error = ex.Message });
+		}
+	});
+
 	// Mix video and audio streams into a single H.264+AAC output
 	app.MapGet("/stream/mix", async (HttpContext ctx) =>
 	{

@@ -1,0 +1,224 @@
+@using System.Net.Http.Json
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject HttpClient Http
+
+<div class="tl-editor-backdrop" @onclick="HandleBackdropClick">
+    <div class="tl-editor-modal" @onclick:stopPropagation>
+        <div class="tl-editor-header">
+            <h2>Editing Timelapse: @Name</h2>
+            <div class="tl-editor-actions">
+                <button class="btn btn-secondary" @onclick="Refresh">Refresh</button>
+                <button class="btn btn-primary" @onclick="GenerateVideo" disabled="@isGenerating">@(isGenerating ? "Generating..." : "Regenerate MP4")</button>
+                <button class="btn" @onclick="Close">Close</button>
+            </div>
+        </div>
+
+        <div class="tl-editor-body">
+            <div class="tl-editor-stats">
+                <div><strong>Frames:</strong> @frames?.Count()</div>
+                @if (!string.IsNullOrWhiteSpace(statusMessage))
+                {
+                    <div class="tl-editor-status">@statusMessage</div>
+                }
+                <div class="tl-editor-debug-links">
+                    <a href="@(new Uri(new Uri(Http.BaseAddress?.ToString() ?? Nav.BaseUri), $"api/timelapses/{Uri.EscapeDataString(Name)}/frames"))" target="_blank">Open frames JSON</a>
+                </div>
+            </div>
+
+            <div class="tl-frame-grid">
+                @if (frames == null)
+                {
+                    <div>Loading frames…</div>
+                }
+                else if (!frames.Any())
+                {
+                    <div>No frames found.</div>
+                }
+                else
+                {
+                    @foreach (var f in frames.Select((name, idx) => new { name, idx }))
+                    {
+                        <div class="tl-frame-item">
+                            <img src="@($"/api/timelapses/{Uri.EscapeDataString(Name)}/frames/{Uri.EscapeDataString(f.name)}")" alt="frame-@f.idx" />
+                            <div class="tl-frame-meta">
+                                <span>@f.name</span>
+                                <div class="tl-frame-controls">
+                                    <button class="icon-btn delete" title="Delete frame" @onclick="() => DeleteFrame(f.name)">🗑</button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .tl-editor-backdrop {
+        position: fixed;
+        left: 0; top: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.6);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 2000;
+    }
+    .tl-editor-modal { width: 90%; max-width: 1100px; background: #111; border-radius: 8px; padding: 16px; border: 1px solid #444; color: #fff; }
+    .tl-editor-header { display:flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .tl-editor-actions { display:flex; gap: 8px; }
+    .tl-editor-body { margin-top: 12px; }
+    .tl-editor-debug-links { margin-top: 6px; }
+    .tl-editor-debug-links a { color: #66ccff; text-decoration: none; font-size: 0.9em; }
+    .tl-editor-stats { color: #ccc; margin-bottom: 8px; }
+    .tl-editor-status { color: #ffaa00; font-size: 0.9em; margin-top: 4px; }
+    .tl-frame-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+    .tl-frame-item { background:#1a1a1a; border:1px solid #333; border-radius:6px; overflow: hidden; display:flex; flex-direction: column; }
+    .tl-frame-item img { width:100%; height:110px; object-fit:cover; background:#000; }
+    .tl-frame-meta { padding: 8px; display:flex; align-items:center; justify-content: space-between; gap:8px; font-size: 0.85em; color: #ddd; }
+    .tl-frame-controls { display:flex; gap:6px; }
+    .icon-btn { background: #333; color: #fff; border: none; padding: 6px 10px; border-radius: 4px; cursor:pointer; }
+    .icon-btn.delete { background: #8b0000; }
+    .icon-btn.delete:hover { filter: brightness(1.2); }
+    .btn { padding: 8px 10px; border-radius:6px; border: none; cursor:pointer; }
+    .btn-primary { background: #007bff; color: #fff; }
+    .btn-secondary { background: #444; color: #fff; }
+</style>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Name { get; set; } = string.Empty;
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback OnUpdated { get; set; }
+
+    private List<string>? frames;
+    private bool isGenerating = false;
+    private string? statusMessage = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Refresh();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Ensure we refresh when the Name parameter changes
+        await Refresh();
+    }
+
+    private async Task Refresh()
+    {
+        try
+        {
+            var baseAddress = Http.BaseAddress?.ToString() ?? Nav.BaseUri;
+            var framesUrl = new Uri(new Uri(baseAddress), $"api/timelapses/{Uri.EscapeDataString(Name)}/frames");
+            var resp = await Http.GetFromJsonAsync<FramesResponse>(framesUrl);
+            if (resp != null && resp.Success)
+            {
+                frames = resp.Frames?.ToList() ?? new List<string>();
+                statusMessage = $"{frames.Count} frame(s) found";
+            }
+            else
+            {
+                frames = new List<string>();
+                statusMessage = resp?.Frames == null ? $"No frames returned" : $"No frames";
+            }
+        }
+        catch (Exception ex)
+        {
+            frames = new List<string>();
+            statusMessage = $"Error fetching frames: {ex.Message}";
+        }
+        StateHasChanged();
+    }
+
+    private async Task DeleteFrame(string filename)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete frame {filename}? This cannot be undone.");
+        if (!confirmed) return;
+        try
+        {
+            var baseAddress = Http.BaseAddress?.ToString() ?? Nav.BaseUri;
+            var framesDeleteUrl = new Uri(new Uri(baseAddress), $"api/timelapses/{Uri.EscapeDataString(Name)}/frames/{Uri.EscapeDataString(filename)}");
+            var response = await Http.DeleteAsync(framesDeleteUrl);
+            var respObj = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            if (respObj?.Success == true)
+            {
+                frames?.Remove(filename);
+                await SafeToast("Frame deleted", "success");
+                await OnUpdated.InvokeAsync();
+            }
+            else
+            {
+                await SafeToast($"Failed to delete frame: {respObj?.Error ?? "unknown"}", "error");
+                statusMessage = respObj?.Error ?? "Failed to delete frame";
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error deleting frame: {ex.Message}", "error");
+        }
+    }
+
+    private async Task GenerateVideo()
+    {
+        isGenerating = true;
+        try
+        {
+            var baseAddress = Http.BaseAddress?.ToString() ?? Nav.BaseUri;
+            var generateUrl = new Uri(new Uri(baseAddress), $"api/timelapses/{Uri.EscapeDataString(Name)}/generate");
+            var response = await Http.PostAsync(generateUrl, null);
+            var respObj = await response.Content.ReadFromJsonAsync<ApiResponse>();
+            if (respObj?.Success == true)
+            {
+                await SafeToast("Video generated successfully", "success");
+                await OnUpdated.InvokeAsync();
+            }
+            else
+            {
+                await SafeToast($"Failed to generate video: {respObj?.Error ?? "unknown"}", "error");
+                statusMessage = respObj?.Error ?? "Failed to generate video";
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error generating video: {ex.Message}", "error");
+        }
+        finally
+        {
+            isGenerating = false;
+            await Refresh();
+            StateHasChanged();
+        }
+    }
+
+    private async Task Close()
+    {
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task SafeToast(string msg, string type = "info")
+    {
+        try { await JS.InvokeVoidAsync("showToast", msg, type); } catch { }
+    }
+
+    private Task HandleBackdropClick()
+    {
+        return Close();
+    }
+
+    private class FramesResponse
+    {
+        public bool Success { get; set; }
+        public string[]? Frames { get; set; }
+    }
+
+    private class ApiResponse
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+    }
+}
