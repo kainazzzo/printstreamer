@@ -238,6 +238,15 @@ catch
 	// If registration fails for any reason, continue startup but log via proxy logger
 	ProxyUtil.Logger?.LogWarning("Failed to register MoonrakerClient with MoonrakerPoller");
 }
+// Register DI-provided YouTubeControlService for use in the static poller helpers.
+try
+{
+	MoonrakerPoller.SetYouTubeControlService(app.Services.GetRequiredService<YouTubeControlService>());
+}
+catch
+{
+	ProxyUtil.Logger?.LogWarning("Failed to register YouTubeControlService with MoonrakerPoller");
+}
 
 // Wire up audio track completion callback to orchestrator
 {
@@ -1162,9 +1171,8 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config,
-				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
+			var yt = ctx.RequestServices.GetRequiredService<YouTubeControlService>();
+			logger.LogInformation("HTTP /api/live/force-go-live request received");
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -1189,9 +1197,8 @@ if (serveEnabled)
 				return Results.Json(new { success = false, error = "No active broadcast" });
 			}
 			var bid = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config,
-				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
+			var yt = ctx.RequestServices.GetRequiredService<YouTubeControlService>();
+			logger.LogInformation("HTTP /api/live/debug request received");
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
@@ -1221,9 +1228,8 @@ if (serveEnabled)
 			{
 				try
 				{
-					using var yt = new YouTubeControlService(config,
-						ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-						ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
+					var yt = ctx.RequestServices.GetRequiredService<YouTubeControlService>();
+					logger.LogInformation("HTTP /api/live/status request received");
 					if (await yt.AuthenticateAsync(ctx.RequestAborted))
 					{
 						privacy = await yt.GetBroadcastPrivacyAsync(broadcastId, ctx.RequestAborted);
@@ -1276,15 +1282,14 @@ if (serveEnabled)
 			}
 
 			var broadcastId = orchestrator.CurrentBroadcastId!;
-			using var yt = new YouTubeControlService(config,
-				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
+			var yt = ctx.RequestServices.GetRequiredService<YouTubeControlService>();
+			logger.LogInformation("HTTP /api/live/privacy request received: {Privacy}", body?.Privacy);
 			if (!await yt.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
 			}
 
-			var ok = await yt.UpdateBroadcastPrivacyAsync(broadcastId, body.Privacy, ctx.RequestAborted);
+			var ok = await yt.UpdateBroadcastPrivacyAsync(broadcastId, body!.Privacy!, ctx.RequestAborted);
 			return Results.Json(new { success = ok });
 		}
 		catch (Exception ex)
@@ -1503,17 +1508,20 @@ if (serveEnabled)
 
 			var videoPath = videoFiles[0]; // Use first mp4 found
 
-			// Use YouTubeControlService to upload
-			using var ytService = new YouTubeControlService(config,
-				ctx.RequestServices.GetRequiredService<ILogger<YouTubeControlService>>(),
-				ctx.RequestServices.GetRequiredService<YouTubePollingManager>());
+				    // Resolve the YouTubeControlService from DI and use it for the upload
+				    // Note: we don't create/dispose a new instance here because the service is registered as a singleton
+					var ytService = ctx.RequestServices.GetRequiredService<YouTubeControlService>();
+					logger.LogInformation("HTTP /api/timelapses/{Name}/upload request received", name);
+					logger.LogDebug("Timelapse dir: {TimelapseDir}; video: {VideoPath}", timelapseDir, videoPath);
 			if (!await ytService.AuthenticateAsync(ctx.RequestAborted))
 			{
 				return Results.Json(new { success = false, error = "YouTube authentication failed" });
 			}
 
 			// Bypass upload config for manual UI uploads
+			logger.LogInformation("Starting YouTube upload for timelapse {Name}", name);
 			var videoId = await ytService.UploadTimelapseVideoAsync(videoPath, name, ctx.RequestAborted, true);
+			logger.LogInformation("YouTube upload result videoId={VideoId}", videoId);
 
 			if (!string.IsNullOrEmpty(videoId))
 			{
@@ -1544,6 +1552,7 @@ if (serveEnabled)
 		}
 		catch (Exception ex)
 		{
+			logger.LogError(ex, "Error uploading timelapse: {Message}", ex.Message);
 			return Results.Json(new { success = false, error = ex.Message });
 		}
 	});

@@ -12,6 +12,7 @@ namespace PrintStreamer.Services
 internal static class MoonrakerPoller
 {
         private static MoonrakerClient? _moonrakerClient;
+        private static YouTubeControlService? _youTubeService;
         /// <summary>
         /// Register a shared MoonrakerClient instance (from DI). The poller is static so it
         /// cannot use constructor injection; callers should set the client at startup.
@@ -19,6 +20,15 @@ internal static class MoonrakerPoller
         public static void SetMoonrakerClient(MoonrakerClient client)
         {
             _moonrakerClient = client;
+        }
+
+        /// <summary>
+        /// Register a shared YouTubeControlService instance (from DI). The poller is static so it
+        /// cannot use constructor injection; callers should set the client at startup.
+        /// </summary>
+        public static void SetYouTubeControlService(YouTubeControlService youTubeService)
+        {
+            _youTubeService = youTubeService;
         }
 
     // Shared runtime state for broadcast coordination. The actual encoder
@@ -126,18 +136,17 @@ internal static class MoonrakerPoller
             // react if necessary. Do not wait on a poller-owned streamer.
 
             // Authenticate and create broadcast
-            var logger = loggerFactory.CreateLogger<YouTubeControlService>();
-            var yt = new YouTubeControlService(config, logger);
+            var yt = _youTubeService ?? throw new InvalidOperationException("YouTubeControlService not set on MoonrakerPoller. Ensure Program.cs calls MoonrakerPoller.SetYouTubeControlService(...)");
             if (!await yt.AuthenticateAsync(cancellationToken))
             {
-                yt.Dispose();
+                // Do not dispose DI-provided singleton
                 return (false, "YouTube authentication failed", null);
             }
 
             var res = await yt.CreateLiveBroadcastAsync(cancellationToken);
             if (res.rtmpUrl == null || res.streamKey == null)
             {
-                yt.Dispose();
+                // Do not dispose DI-provided singleton
                 return (false, "Failed to create YouTube broadcast", null);
             }
 
@@ -198,7 +207,7 @@ internal static class MoonrakerPoller
                 }
                 if (string.IsNullOrWhiteSpace(source))
                 {
-                    yt.Dispose();
+                    // Do not dispose DI-provided singleton
                     return (false, "Stream:Source is not configured", null);
                 }
                 // Record the broadcast id so status endpoints reflect a live/broadcasting state.
@@ -209,12 +218,12 @@ internal static class MoonrakerPoller
 
                 // The poller does not start encoder processes; the StreamOrchestrator
                 // should start/attach the encoder to the RTMP endpoint returned above.
-                yt.Dispose();
+                // Do not dispose DI-provided singleton
                 return (true, null, newBroadcastId);
             }
             catch (Exception ex)
             {
-                yt.Dispose();
+                // Do not dispose DI-provided singleton
                 return (false, ex.Message, null);
             }
         }
@@ -262,7 +271,7 @@ internal static class MoonrakerPoller
                 {
                     try
                     {
-                        var ytLocal = new YouTubeControlService(config, loggerFactory.CreateLogger<YouTubeControlService>());
+                            var ytLocal = _youTubeService ?? throw new InvalidOperationException("YouTubeControlService not set on MoonrakerPoller. Ensure Program.cs calls MoonrakerPoller.SetYouTubeControlService(...)");
                         if (await ytLocal.AuthenticateAsync(cancellationToken))
                         {
                             try
@@ -300,7 +309,6 @@ internal static class MoonrakerPoller
                                 logger.LogError(ex, "[YouTube] Error ending broadcast");
                             }
                         }
-                        ytLocal.Dispose();
                     }
                     catch (Exception ex)
                     {
@@ -661,13 +669,13 @@ internal static class MoonrakerPoller
                             {
                                 streamLogger.LogInformation("[YouTube] Creating live broadcast via OAuth...");
                                 var ytLogger = loggerFactory.CreateLogger<YouTubeControlService>();
-                    ytService = new YouTubeControlService(config, ytLogger);
+                    ytService = _youTubeService ?? throw new InvalidOperationException("YouTubeControlService not set on MoonrakerPoller. Ensure Program.cs calls MoonrakerPoller.SetYouTubeControlService(...)");
 
                     // Authenticate
                     if (!await ytService.AuthenticateAsync(cancellationToken))
                     {
                         streamLogger.LogWarning("[YouTube] Authentication failed. Starting local stream only.");
-                        ytService?.Dispose();
+                        // Do not dispose DI-provided singleton
                         ytService = null;
                         rtmpUrl = null;
                         streamKey = null;
@@ -679,7 +687,7 @@ internal static class MoonrakerPoller
                         if (result.rtmpUrl == null || result.streamKey == null)
                         {
                             streamLogger.LogWarning("[YouTube] Failed to create broadcast. Starting local stream only.");
-                            ytService?.Dispose();
+                            // Do not dispose DI-provided singleton
                             ytService = null;
                             rtmpUrl = null;
                             streamKey = null;
@@ -1062,7 +1070,7 @@ internal static class MoonrakerPoller
                     }
                 }
 
-                ytService?.Dispose();
+                            // Do not dispose DI-provided singleton
             }
         }
 
