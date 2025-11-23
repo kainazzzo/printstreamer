@@ -22,6 +22,7 @@ namespace PrintStreamer.Services
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<PrintStreamOrchestrator> _logger;
         private readonly ITimelapseManager _timelapseManager;
+        private readonly StreamOrchestrator? _streamOrchestrator;
         private readonly Dictionary<string, string?> _sessionJobMap = new();
         
         // State tracking
@@ -54,12 +55,13 @@ namespace PrintStreamer.Services
             "idle", "complete", "stopped", "error", "standby"
         };
 
-        public PrintStreamOrchestrator(IConfiguration config, ILoggerFactory loggerFactory, ITimelapseManager timelapseManager)
+        public PrintStreamOrchestrator(IConfiguration config, ILoggerFactory loggerFactory, ITimelapseManager timelapseManager, StreamOrchestrator? streamOrchestrator = null)
         {
             _config = config;
             _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<PrintStreamOrchestrator>();
             _timelapseManager = timelapseManager;
+            _streamOrchestrator = streamOrchestrator;
             
             // Read grace period configuration
             _offlineGrace = _config.GetValue<TimeSpan?>("Timelapse:OfflineGracePeriod") ?? TimeSpan.FromMinutes(10);
@@ -225,13 +227,39 @@ else
 
                 // Start YouTube broadcast if enabled
                 bool autoBroadcastEnabled = _config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
-                if (autoBroadcastEnabled && !MoonrakerPoller.IsBroadcastActive)
+                if (autoBroadcastEnabled && !(_streamOrchestrator?.IsBroadcastActive ?? MoonrakerPoller.IsBroadcastActive))
                 {
                     try
                     {
-                        _logger.LogInformation("[PrintStreamOrchestrator] Starting YouTube broadcast...");
-                        var (success, message, broadcastId) = await MoonrakerPoller.StartBroadcastAsync(_config, _loggerFactory, cancellationToken);
-                        if (success)
+                        bool created = false;
+                        string? message = null;
+                        string? broadcastId = null;
+
+                        if (_streamOrchestrator != null)
+                        {
+                            _logger.LogInformation("[PrintStreamOrchestrator] Starting YouTube broadcast via StreamOrchestrator...");
+                            var (success, m, b) = await _streamOrchestrator.StartBroadcastAsync(cancellationToken);
+                            created = success;
+                            message = m;
+                            broadcastId = b;
+                            if (created)
+                            {
+                                _logger.LogInformation("[PrintStreamOrchestrator] Broadcast started: {BroadcastId}", broadcastId);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogInformation("[PrintStreamOrchestrator] Starting YouTube broadcast via MoonrakerPoller (fallback)...");
+                            var (success, m, b) = await MoonrakerPoller.StartBroadcastAsync(_config, _loggerFactory, cancellationToken);
+                            created = success;
+                            message = m;
+                            broadcastId = b;
+                            if (created)
+                            {
+                                _logger.LogInformation("[PrintStreamOrchestrator] Broadcast started: {BroadcastId}", broadcastId);
+                            }
+                        }
+                        if (created)
                         {
                             _logger.LogInformation("[PrintStreamOrchestrator] Broadcast started: {BroadcastId}", broadcastId);
                         }
@@ -333,18 +361,34 @@ _activeTimelapseJobFilename = null;
             if (!forceFinalizeActiveSession)
             {
                 bool endStreamAfterPrint = _config.GetValue<bool?>("YouTube:LiveBroadcast:EndStreamAfterPrint") ?? true;
-                if (endStreamAfterPrint && MoonrakerPoller.IsBroadcastActive)
+                if (endStreamAfterPrint && (_streamOrchestrator?.IsBroadcastActive ?? MoonrakerPoller.IsBroadcastActive))
                 {
                     try
                     {
-                        var (ok, msg) = await MoonrakerPoller.StopBroadcastAsync(_config, cancellationToken, _loggerFactory);
-                        if (ok)
+                        bool stopped = false;
+                        string? stopMessage = null;
+
+                        if (_streamOrchestrator != null)
+                        {
+                            var (ok, msg) = await _streamOrchestrator.StopBroadcastAsync(cancellationToken);
+                            stopped = ok;
+                            stopMessage = msg;
+                            if (stopped) _logger.LogInformation("[PrintStreamOrchestrator] Broadcast stopped");
+                        }
+                        else
+                        {
+                            var (ok, msg) = await MoonrakerPoller.StopBroadcastAsync(_config, cancellationToken, _loggerFactory);
+                            stopped = ok;
+                            stopMessage = msg;
+                            if (stopped) _logger.LogInformation("[PrintStreamOrchestrator] Broadcast stopped (via MoonrakerPoller)");
+                        }
+                        if (stopped)
                         {
                             _logger.LogInformation("[PrintStreamOrchestrator] Broadcast stopped");
                         }
                         else
                         {
-                            _logger.LogWarning("[PrintStreamOrchestrator] Error stopping broadcast: {Message}", msg);
+                            _logger.LogWarning("[PrintStreamOrchestrator] Error stopping broadcast: {Message}", stopMessage);
                         }
                     }
                     catch (Exception ex)
@@ -352,7 +396,7 @@ _activeTimelapseJobFilename = null;
                         _logger.LogError(ex, "[PrintStreamOrchestrator] Error stopping broadcast");
                     }
                 }
-                else if (MoonrakerPoller.IsBroadcastActive)
+                else if ((_streamOrchestrator?.IsBroadcastActive ?? MoonrakerPoller.IsBroadcastActive))
                 {
                     _logger.LogInformation("[PrintStreamOrchestrator] Leaving broadcast running (EndStreamAfterPrint=false)");
                 }

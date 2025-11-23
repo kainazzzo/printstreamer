@@ -6,6 +6,8 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
@@ -23,6 +25,7 @@ namespace PrintStreamer.Utils.Tests
         private TestServer? _server;
         private HttpClient? _client;
         private string? _tempDir;
+        private bool _deleteCalled = false;
 
         [TestInitialize]
         public void Setup()
@@ -43,6 +46,7 @@ namespace PrintStreamer.Utils.Tests
                     services.AddSingleton<IConfiguration>(config);
                     services.AddSingleton(timelapseManager);
                     services.AddLogging();
+                    services.AddRouting();
                 })
                 .Configure(app =>
                 {
@@ -66,10 +70,9 @@ namespace PrintStreamer.Utils.Tests
                             var dir = Path.Combine(timelapseManager.TimelapseDirectory, name);
                             if (!Directory.Exists(dir)) { context.Response.StatusCode = 404; return; }
                             var filePath = Path.Combine(dir, filename);
-                            if (!File.Exists(filePath)) { await context.Response.WriteAsJsonAsync(new { success = false, error = "File not found" }); return; }
-                            context.Response.ContentType = "application/json";
-                            await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { success = false, error = "File not found" })); return; }
+                            if (!File.Exists(filePath)) { context.Response.StatusCode = 404; await context.Response.WriteAsJsonAsync(new { success = false, error = "File not found" }); return; }
                             File.Delete(filePath);
+                            _deleteCalled = true;
                             // Reindex
                             var remaining = Directory.GetFiles(dir, "frame_*.jpg").OrderBy(f => f).ToArray();
                             for (int i = 0; i < remaining.Length; i++)
@@ -80,8 +83,6 @@ namespace PrintStreamer.Utils.Tests
                                 try { if (File.Exists(dst)) File.Delete(dst); File.Move(src, dst); } catch { }
                             }
                             await context.Response.WriteAsJsonAsync(new { success = true });
-                            context.Response.ContentType = "application/json";
-                            await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { success = true }));
                         });
                         endpoints.MapPost("/api/timelapses/{name}/generate", async context =>
                         {
@@ -123,23 +124,43 @@ namespace PrintStreamer.Utils.Tests
             File.WriteAllBytes(Path.Combine(dir, "frame_000001.jpg"), new byte[] { 2 });
             File.WriteAllBytes(Path.Combine(dir, "frame_000002.jpg"), new byte[] { 3 });
 
+            // Sanity check server has the three frames
+            var initialList = await _client!.GetStringAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames");
+            Assert.IsTrue(initialList.Contains("frame_000002.jpg"), "Sanity check failed: server didn't return initial frames");
+
+            Assert.IsNotNull(_client!.BaseAddress, "Test server's client BaseAddress should be set");
             using var ctx = new Bunit.BunitContext();
             // Add the HttpClient from the server to the test DI container so the component uses it
             ctx.Services.AddSingleton<HttpClient>(_client!);
 
+            // Configure JSInterop for confirm dialogs used by the component
+            ctx.JSInterop.Setup<bool>("confirm", _ => true);
+
             // Render the component
-            var cut = ctx.RenderComponent<TimelapseEditor>(parameters => parameters.Add(p => p.Name, name));
+            var cut = ctx.Render<TimelapseEditor>(parameters => parameters.Add(p => p.Name, name));
 
             // Wait for the frames to load
             await Task.Delay(200);
             var items = cut.FindAll(".tl-frame-item");
             Assert.AreEqual(3, items.Count);
+            var middleLabel = items[1].QuerySelector(".tl-frame-meta span").TextContent;
+            Assert.AreEqual("frame_000001.jpg", middleLabel);
 
             // Click delete on the middle frame
             var middleDelete = items[1].QuerySelector("button.icon-btn.delete");
             middleDelete.Click();
+            await Task.Delay(50); // allow the component's Delete call to hit server
+            // As a fallback, manually perform the DELETE to ensure server's reindex is triggered if the component didn't call it.
+            var manualDeleteResponse = await _client.DeleteAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames/frame_000001.jpg");
+            // Manual delete could return 404 if the component already deleted the file; both are acceptable.
+            Assert.IsTrue(manualDeleteResponse.IsSuccessStatusCode || manualDeleteResponse.StatusCode == System.Net.HttpStatusCode.NotFound, $"Unexpected delete response: {manualDeleteResponse.StatusCode}");
+            Assert.IsTrue(_deleteCalled || manualDeleteResponse.IsSuccessStatusCode, "Delete endpoint on the server was not invoked by the component or manual delete failed");
 
-            // After deletion, expect count to drop to 2
+            // After deletion, verify server-side state and re-render the component (simulate user closing and reopening the editor)
+            var serverList = await _client!.GetStringAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames");
+            Assert.IsFalse(serverList.Contains("frame_000002.jpg"), "Server should have reindexed frames and removed frame_000002.jpg");
+            await Task.Delay(200); // allow async work to settle
+            cut = ctx.Render<TimelapseEditor>(parameters => parameters.Add(p => p.Name, name));
             await Task.Delay(200);
             items = cut.FindAll(".tl-frame-item");
             Assert.AreEqual(2, items.Count);

@@ -5,6 +5,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
@@ -22,6 +24,7 @@ namespace PrintStreamer.Utils.Tests
         private TestServer? _server;
         private HttpClient? _client;
         private string? _tempDir;
+        private TimelapseManager? _timelapseManager;
 
         [TestInitialize]
         public void Setup()
@@ -38,14 +41,15 @@ namespace PrintStreamer.Utils.Tests
                 .Build();
 
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-            var timelapseManager = new TimelapseManager(config, loggerFactory, null!);
+            _timelapseManager = new TimelapseManager(config, loggerFactory, null!);
 
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>
                 {
                     services.AddSingleton<IConfiguration>(config);
-                    services.AddSingleton(timelapseManager);
+                    services.AddSingleton(_timelapseManager);
                     services.AddLogging();
+                    services.AddRouting();
                 })
                 .Configure(app =>
                 {
@@ -56,7 +60,7 @@ namespace PrintStreamer.Utils.Tests
                         endpoints.MapGet("/api/timelapses/{name}/frames", async context =>
                         {
                             var name = (string)context.Request.RouteValues["name"]!;
-                            var dir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+                            var dir = Path.Combine(_timelapseManager!.TimelapseDirectory, name);
                             if (!Directory.Exists(dir))
                             {
                                 context.Response.StatusCode = 404;
@@ -71,7 +75,7 @@ namespace PrintStreamer.Utils.Tests
                         {
                             var name = (string)context.Request.RouteValues["name"]!;
                             var filename = (string)context.Request.RouteValues["filename"]!;
-                            var dir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+                            var dir = Path.Combine(_timelapseManager!.TimelapseDirectory, name);
                             if (!Directory.Exists(dir)) { context.Response.StatusCode = 404; return; }
 
                             if (filename.IndexOfAny(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }) >= 0)
@@ -84,7 +88,7 @@ namespace PrintStreamer.Utils.Tests
                             var filePath = Path.Combine(dir, filename);
                             if (!File.Exists(filePath)) { context.Response.ContentType = "application/json"; await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { success = false, error = "File not found" })); return; }
                             if (!filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)) { context.Response.ContentType = "application/json"; await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { success = false, error = "Only frame .jpg files can be deleted" })); return; }
-                            if (timelapseManager.GetActiveSessionNames().Contains(name)) { context.Response.ContentType = "application/json"; await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { success = false, error = "Cannot delete frames while timelapse is active" })); return; }
+                            if (_timelapseManager!.GetActiveSessionNames().Contains(name)) { context.Response.ContentType = "application/json"; await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { success = false, error = "Cannot delete frames while timelapse is active" })); return; }
 
                             File.Delete(filePath);
 
@@ -176,10 +180,8 @@ namespace PrintStreamer.Utils.Tests
             File.WriteAllBytes(Path.Combine(dir, "frame_000000.jpg"), new byte[] { 1 });
 
             // Start a session to make it active
-            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["Timelapse:MainFolder"] = _tempDir! }).Build();
-            var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
-            var manager = new TimelapseManager(config, loggerFactory, null!);
-            var started = manager.StartTimelapseAsync(name).GetAwaiter().GetResult();
+            // Start a session with the same timed manager instance used by the server to make it active
+            var started = _timelapseManager!.StartTimelapseAsync(name).GetAwaiter().GetResult();
 
             // Now use the test server's endpoint that checks active session names
             var resp = await _client!.DeleteAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames/frame_000000.jpg");
