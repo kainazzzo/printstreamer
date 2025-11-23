@@ -29,6 +29,7 @@ namespace PrintStreamer.Timelapse
         _mainTimelapseDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
         Directory.CreateDirectory(_mainTimelapseDir);
         _verboseLogs = _config.GetValue<bool?>("Timelapse:VerboseLogs") ?? false;
+        // No time-based resume: resume requires matching saved metadata in the folder
 
         // Set up periodic capture timer (disabled by default, enabled when sessions are active)
         var timelapsePeriod = config.GetValue<TimeSpan?>("Timelapse:Period") ?? TimeSpan.FromMinutes(1);
@@ -59,13 +60,55 @@ namespace PrintStreamer.Timelapse
                     .OrderByDescending(d => Directory.GetCreationTime(d));
                 foreach (var dir in candidates)
                 {
-                    var frames = Directory.GetFiles(dir, "frame_*.jpg");
-                    var videos = Directory.GetFiles(dir, "*.mp4");
-                    if (frames.Length > 0 && videos.Length == 0)
-                    {
-                        existingFolderName = Path.GetFileName(dir);
-                        break;
-                    }
+                        var frames = Directory.GetFiles(dir, "frame_*.jpg");
+                        var videos = Directory.GetFiles(dir, "*.mp4");
+                        if (frames.Length > 0 && videos.Length == 0)
+                        {
+                            // Only resume into an existing folder if saved metadata in that folder
+                            // indicates it belongs to the same job/filename as the one we're starting.
+                            try
+                            {
+                                // Attempt to load persisted metadata from the folder
+                                var metaFile = Path.Combine(dir, "timelapse_metadata.json");
+                                if (File.Exists(metaFile))
+                                {
+                                    var txt = File.ReadAllText(metaFile);
+                                    var node = System.Text.Json.Nodes.JsonNode.Parse(txt);
+                                    // If we have a moonraker filename and the saved metadata contains it, we can resume
+                                    if (!string.IsNullOrWhiteSpace(moonrakerFilename) &&
+                                        ((node?["moonraker_filename"]?.ToString() ?? string.Empty).Equals(moonrakerFilename, StringComparison.OrdinalIgnoreCase) ||
+                                         (node? ["moonraker_path"]?.ToString() ?? string.Empty).Equals(moonrakerFilename, StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        existingFolderName = Path.GetFileName(dir);
+                                        break;
+                                    }
+
+                                    // If no moonraker filename is provided, match by session label saved previously
+                                    if (string.IsNullOrWhiteSpace(moonrakerFilename))
+                                    {
+                                        var savedSessionName = node?["session_name"]?.ToString();
+                                        if (!string.IsNullOrWhiteSpace(savedSessionName) && savedSessionName.Equals(sanitizedBase, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            existingFolderName = Path.GetFileName(dir);
+                                            break;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    // If there is no saved metadata file, fall back to default behavior (resume on restart semantics)
+                                    // For now, only resume if the sanitized folder name contains the sanitizedBase (existing behavior),
+                                    // but be conservative: do not resume ambiguous folders that are not explicitly annotated.
+                                    // We'll only reuse if the folder name exactly equals sanitizedBase.
+                                    if (Path.GetFileName(dir).Equals(sanitizedBase, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        existingFolderName = Path.GetFileName(dir);
+                                        break;
+                                    }
+                                }
+                            }
+                            catch { /* ignore and skip reuse */ }
+                        }
                 }
             }
         }
@@ -86,6 +129,8 @@ namespace PrintStreamer.Timelapse
             actualFolderName = Path.GetFileName(service.OutputDir) ?? sanitizedBase;
         }
 
+        
+
         // Config: gate start until layer 1 by default
         var startAfterLayer1 = _config.GetValue<bool?>("Timelapse:StartAfterLayer1") ?? true;
 
@@ -98,6 +143,22 @@ namespace PrintStreamer.Timelapse
             StartAfterLayer1 = startAfterLayer1,
             CaptureEnabled = !startAfterLayer1
         };
+
+        // Persist session metadata into the output folder so future restarts can decide whether
+        // to resume based on metadata rather than file age alone.
+        try
+        {
+            var meta = new System.Text.Json.Nodes.JsonObject();
+            meta["session_name"] = actualFolderName;
+            if (!string.IsNullOrWhiteSpace(moonrakerFilename)) meta["moonraker_filename"] = moonrakerFilename;
+            if (session.MetadataRaw != null)
+            {
+                // Save the raw metadata under a property for easier reconciliation later
+                meta["moonraker_result"] = session.MetadataRaw.ToJsonString();
+            }
+            await service.SaveSessionMetadataAsync(meta, CancellationToken.None);
+        }
+        catch { }
 
         // If a Moonraker filename was provided, try to download it once and cache contents + parsed layer markers
         if (!string.IsNullOrWhiteSpace(moonrakerFilename))

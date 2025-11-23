@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
@@ -60,6 +62,45 @@ public class TimelapseService : IDisposable
         var newName = $"{baseName}_{next}";
         OutputDir = Path.Combine(mainFolder, newName);
         Directory.CreateDirectory(OutputDir);
+    }
+
+    private const string TimelapseMetadataFile = "timelapse_metadata.json";
+
+    /// <summary>
+    /// Save arbitrary JSON metadata to the timelapse output directory so that the manager
+    /// can make resume decisions after restarts.
+    /// </summary>
+    public async Task SaveSessionMetadataAsync(JsonNode? metadata, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (metadata == null) metadata = new JsonObject();
+            var file = Path.Combine(OutputDir, TimelapseMetadataFile);
+            var txt = System.Text.Json.JsonSerializer.Serialize(metadata, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(file, txt, cancellationToken);
+        }
+        catch
+        {
+            // Best-effort write only
+        }
+    }
+
+    /// <summary>
+    /// Load saved session metadata from the timelapse output directory, or null if not present/invalid.
+    /// </summary>
+    public JsonNode? LoadSessionMetadata()
+    {
+        try
+        {
+            var file = Path.Combine(OutputDir, TimelapseMetadataFile);
+            if (!File.Exists(file)) return null;
+            var txt = File.ReadAllText(file);
+            return JsonNode.Parse(txt);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

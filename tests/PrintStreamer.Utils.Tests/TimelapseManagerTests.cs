@@ -367,5 +367,125 @@ namespace PrintStreamer.Utils.Tests
             Assert.IsNotNull(secondSession);
             Assert.AreNotEqual(resumed, secondSession, "A new print with the same file name should result in a new timelapse folder (numeric suffix appended)");
         }
+
+        [TestMethod]
+        public void StartTimelapse_DoesNotResume_WhenLastFrameIsOlderThanThreshold()
+        {
+            // Arrange
+            var jobFilename = "oldframes_test.gcode";
+            var jobSafe = Path.GetFileNameWithoutExtension(jobFilename);
+
+            // Create initial session and simulate a captured frame
+            var startedSession = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+            Assert.IsNotNull(startedSession);
+            var outputDir = Path.Combine(_tempTimelapseDir, startedSession);
+            Assert.IsTrue(Directory.Exists(outputDir));
+            var sampleFrame = Path.Combine(outputDir, "frame_000000.jpg");
+            File.WriteAllBytes(sampleFrame, new byte[] { 1, 2, 3 });
+
+            // Save metadata to indicate this folder belonged to a different moonraker filename (i.e. different print)
+            var metaJson = new System.Text.Json.Nodes.JsonObject();
+            metaJson["session_name"] = startedSession + "_other"; // different session name to prevent resume
+            metaJson["moonraker_filename"] = "different_name.gcode";
+            File.WriteAllText(Path.Combine(outputDir, "timelapse_metadata.json"), metaJson.ToJsonString());
+
+            // Dispose and re-create manager
+            _sut.Dispose();
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string>
+                {
+                    ["Timelapse:MainFolder"] = _tempTimelapseDir,
+                    ["Stream:Source"] = "http://localhost:8080/stream.mjpeg",
+                })
+                .Build();
+            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+
+            // Act - attempt to start timelapse for the same job filename
+            var resumed = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+
+            // Assert - manager should not resume into the old folder due to old frame time; it should create a new folder
+            Assert.IsNotNull(resumed);
+            Assert.AreNotEqual(startedSession, resumed, "Timelapse manager should create a new folder if last frame is older than configured resume window");
+        }
+
+        [TestMethod]
+        public void StartTimelapse_Resumes_WhenLastFrameWithinThreshold()
+        {
+            // Arrange
+            var jobFilename = "recentframes_test.gcode";
+            var jobSafe = Path.GetFileNameWithoutExtension(jobFilename);
+
+            // Create initial session and simulate a captured frame that is current
+            var startedSession = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+            Assert.IsNotNull(startedSession);
+            var outputDir = Path.Combine(_tempTimelapseDir, startedSession);
+            Assert.IsTrue(Directory.Exists(outputDir));
+            var sampleFrame = Path.Combine(outputDir, "frame_000000.jpg");
+            File.WriteAllBytes(sampleFrame, new byte[] { 1, 2, 3 });
+
+            // Save metadata to indicate this folder belonged to the same session (so resume should be allowed)
+            var metaJson = new System.Text.Json.Nodes.JsonObject();
+            metaJson["session_name"] = startedSession;
+            File.WriteAllText(Path.Combine(outputDir, "timelapse_metadata.json"), metaJson.ToJsonString());
+
+            // Dispose and re-create manager with a very small resume threshold (5 seconds)
+            _sut.Dispose();
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string>
+                {
+                    ["Timelapse:MainFolder"] = _tempTimelapseDir,
+                    ["Stream:Source"] = "http://localhost:8080/stream.mjpeg",
+                    ["Timelapse:ResumeWithinSeconds"] = "5"
+                })
+                .Build();
+            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+
+            // Act - attempt to start timelapse for the same job filename
+            var resumed = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+
+            // Assert - manager should resume into the existing folder due to recent frame
+            Assert.IsNotNull(resumed);
+            Assert.AreEqual(startedSession, resumed, "Timelapse manager should reuse folder if last frame is within resume window");
+        }
+
+        [TestMethod]
+        public void StartTimelapse_Resumes_WhenMoonrakerFilenameMatchesSavedMetadata()
+        {
+            // Arrange
+            var jobFilename = "moonraker_match_test.gcode";
+            var jobSafe = Path.GetFileNameWithoutExtension(jobFilename);
+
+            // Create initial session and simulate a captured frame
+            var startedSession = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
+            Assert.IsNotNull(startedSession);
+            var outputDir = Path.Combine(_tempTimelapseDir, startedSession);
+            Assert.IsTrue(Directory.Exists(outputDir));
+            var sampleFrame = Path.Combine(outputDir, "frame_000000.jpg");
+            File.WriteAllBytes(sampleFrame, new byte[] { 1, 2, 3 });
+
+            // Save metadata indicating the moonraker filename
+            var metaJson = new System.Text.Json.Nodes.JsonObject();
+            metaJson["session_name"] = startedSession;
+            metaJson["moonraker_filename"] = jobFilename;
+            File.WriteAllText(Path.Combine(outputDir, "timelapse_metadata.json"), metaJson.ToJsonString());
+
+            // Dispose and recreate manager
+            _sut.Dispose();
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string>
+                {
+                    ["Timelapse:MainFolder"] = _tempTimelapseDir,
+                    ["Stream:Source"] = "http://localhost:8080/stream.mjpeg"
+                })
+                .Build();
+            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+
+            // Act - supply the moonraker filename as the second parameter
+            var resumed = _sut.StartTimelapseAsync(jobSafe, jobFilename).GetAwaiter().GetResult();
+
+            // Assert - should resume into the existing folder
+            Assert.IsNotNull(resumed);
+            Assert.AreEqual(startedSession, resumed, "Timelapse manager should reuse folder when moonraker filename matches saved metadata");
+        }
     }
 }

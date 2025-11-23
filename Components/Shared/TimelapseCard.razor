@@ -1,7 +1,7 @@
 @inject IJSRuntime JS
 @inject NavigationManager Nav
 
-<div class="timelapse-card @(Timelapse.IsActive ? "active" : "")">
+<div class="timelapse-card @(Timelapse.IsActive ? "active recording" : "")" data-recording="@(Timelapse.IsActive ? "true" : "false")">
     <div class="card-header">
         <h3 class="card-title">@Timelapse.Name</h3>
         <div class="card-actions">
@@ -139,7 +139,8 @@
         transition: all 0.3s ease;
     }
     
-    .timelapse-card.active {
+    .timelapse-card.active,
+    .timelapse-card.recording {
         border-color: #f00;
         box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
     }
