@@ -608,5 +608,376 @@ public class MoonrakerClient
         }
     }
 
+    /// <summary>
+    /// Best-effort: start a print job by filename on Moonraker. Tries common endpoints and returns (ok, message).
+    /// </summary>
+    public async Task<(bool ok, string? message)> StartPrintByFilenameAsync(Uri baseUri, string filename, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(10) };
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
+                try { http.DefaultRequestHeaders.Remove(header); } catch { }
+                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
+            }
+
+            // Collect diagnostics across attempts to return helpful messages
+
+            // Attempt to fetch metadata first to discover the canonical path/name Moonraker knows
+            var variantsList = new List<string>();
+            // Diagnostics for attempts
+            var diagnostics = new List<string>();
+            try
+            {
+                var metaNode = await GetFileMetadataAsync(baseUri, filename, apiKey, authHeader, cancellationToken);
+                if (metaNode != null)
+                {
+                    var fromMeta = FindFilenameInJson(metaNode);
+                    if (!string.IsNullOrWhiteSpace(fromMeta))
+                    {
+                        _logger.LogInformation("[Moonraker] StartPrintByFilename: discovered canonical filename/path from metadata: {Path}", fromMeta);
+                        diagnostics.Add($"metadata -> canonical path: {fromMeta}");
+                        variantsList.Add(fromMeta);
+
+                        // If the metadata returns only a name (no slash), try to find the path via a files listing
+                        if (!fromMeta.Contains('/') || fromMeta.StartsWith("gcodes/") == false)
+                        {
+                            try
+                            {
+                                var found = await FindFileOnServerAsync(baseUri, fromMeta, apiKey, authHeader, cancellationToken);
+                                if (!string.IsNullOrWhiteSpace(found) && !variantsList.Contains(found, StringComparer.OrdinalIgnoreCase))
+                                {
+                                    _logger.LogInformation("[Moonraker] StartPrintByFilename: found full path via file listing: {Path}", found);
+                                    diagnostics.Add($"file list -> canonical path: {found}");
+                                    variantsList.Insert(0, found);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogDebug(ex, "FindFileOnServerAsync failed");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { _logger.LogDebug(ex, "Error while fetching metadata for print start"); }
+
+            // Build filename variants to try (filename and gcodes/filename)
+            var variants = new[]
+            {
+                filename,
+                (filename.StartsWith("gcodes/", StringComparison.OrdinalIgnoreCase) ? filename : $"gcodes/{filename}")
+            };
+            // Prepend discovered metadata path if available
+            if (variantsList.Count > 0)
+            {
+                var newVariants = new List<string>();
+                newVariants.AddRange(variantsList);
+                newVariants.AddRange(variants);
+                variants = newVariants.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+
+            // already defined above
+
+            // Try POST /server/files/print { filename | path }
+            // Check metadata to help diagnose missing file or not available via server/files API
+            try
+            {
+                foreach (var v in variants)
+                {
+                    var encoded = Uri.EscapeDataString(v);
+                    var resp = await http.GetAsync($"/server/files/metadata?filename={encoded}", cancellationToken);
+                    _logger.LogInformation("[Moonraker] metadata check /server/files/metadata?filename={Filename} -> {Status}", v, (int)resp.StatusCode);
+                    diagnostics.Add($"metadata /server/files/metadata?filename={v} -> {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+                        _logger.LogDebug("[Moonraker] metadata: {Txt}", txt?.Substring(0, Math.Min(512, txt.Length)));
+                        break; // Success - stop the metadata loop
+                    }
+                }
+            }
+            catch { }
+            try
+            {
+                var tried = new List<string>();
+                foreach (var v in variants)
+                {
+                    var fileJson = System.Text.Json.JsonSerializer.Serialize(new { filename = v });
+                    var content = new StringContent(fileJson, System.Text.Encoding.UTF8, "application/json");
+                    var resp = await http.PostAsync("/server/files/print", content, cancellationToken);
+                    var respTxt = string.Empty;
+                    try { respTxt = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    var small = respTxt?.Length > 350 ? respTxt.Substring(0, 350) + "..." : respTxt;
+                    tried.Add($"/server/files/print -> {fileJson} = {(int)resp.StatusCode} {resp.ReasonPhrase} {small}");
+                    if (resp.IsSuccessStatusCode) return (true, "Started via /server/files/print");
+
+                    var pathJson = System.Text.Json.JsonSerializer.Serialize(new { path = v });
+                    content = new StringContent(pathJson, System.Text.Encoding.UTF8, "application/json");
+                    resp = await http.PostAsync("/server/files/print", content, cancellationToken);
+                    try { respTxt = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    small = respTxt?.Length > 350 ? respTxt.Substring(0, 350) + "..." : respTxt;
+                    tried.Add($"/server/files/print -> {pathJson} = {(int)resp.StatusCode} {resp.ReasonPhrase} {small}");
+                    if (resp.IsSuccessStatusCode) return (true, "Started via /server/files/print");
+                }
+                _logger.LogInformation("[Moonraker] StartPrintByFilename tried /server/files/print attempts: {Tried}", string.Join("; ", tried));
+                diagnostics.Add($"/server/files/print attempts: {string.Join("; ", tried)}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "StartPrintByFilenameAsync: /server/files/print attempt failed");
+            }
+
+            // Try POST /server/files/gcodes/<encoded>?select=true&print=true
+            try
+            {
+                // If filename already has a path, use it directly
+                var path = filename;
+                if (!filename.Contains('/') && !filename.StartsWith("gcodes/", StringComparison.OrdinalIgnoreCase)) path = $"gcodes/{filename}";
+                var encoded = Uri.EscapeDataString(path);
+                var uri = $"/server/files/gcodes/{encoded}?select=true&print=true";
+                var resp = await http.PostAsync(uri, null, cancellationToken);
+                var respTxt2 = string.Empty; try { respTxt2 = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                var small2 = respTxt2?.Length > 350 ? respTxt2.Substring(0, 350) + "..." : respTxt2;
+                _logger.LogInformation("[Moonraker] StartPrintByFilename tried {Uri} -> {Status} -> {Small}", uri, (int)resp.StatusCode, small2);
+                diagnostics.Add($"{uri} -> {(int)resp.StatusCode} {resp.ReasonPhrase} {small2}");
+                diagnostics.Add($"{uri} -> {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                if (resp.IsSuccessStatusCode) return (true, $"Started via {uri}");
+            }
+            catch { }
+
+            // Try more specialized paths (local/sdcard) + variants with select=true&print=true
+            try
+            {
+                var candidates = new[] { "local", "sdcard", "gcodes" };
+                foreach (var prefix in candidates)
+                {
+                    var path2 = filename;
+                    if (!filename.Contains('/') && !filename.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) path2 = $"{prefix}/{filename}";
+                    var encoded2 = Uri.EscapeDataString(path2);
+                    var uriPrint = $"/server/files/{encoded2}/print";
+                    var resp2 = await http.PostAsync(uriPrint, null, cancellationToken);
+                    var txt2 = string.Empty; try { txt2 = await resp2.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    var small5 = txt2?.Length > 350 ? txt2.Substring(0, 350) + "..." : txt2;
+                    diagnostics.Add($"{uriPrint} -> {(int)resp2.StatusCode} {resp2.ReasonPhrase} {small5}");
+                    _logger.LogInformation("[Moonraker] StartPrintByFilename tried {Uri} -> {Status} -> {Small}", uriPrint, (int)resp2.StatusCode, small5);
+                    if (resp2.IsSuccessStatusCode) return (true, $"Started via {uriPrint}");
+
+                    var uriQs = $"/server/files/{encoded2}?select=true&print=true";
+                    var resp3 = await http.PostAsync(uriQs, null, cancellationToken);
+                    var txt3 = string.Empty; try { txt3 = await resp3.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    var small6 = txt3?.Length > 350 ? txt3.Substring(0, 350) + "..." : txt3;
+                    diagnostics.Add($"{uriQs} -> {(int)resp3.StatusCode} {resp3.ReasonPhrase} {small6}");
+                    _logger.LogInformation("[Moonraker] StartPrintByFilename tried {Uri} -> {Status} -> {Small}", uriQs, (int)resp3.StatusCode, small6);
+                    if (resp3.IsSuccessStatusCode) return (true, $"Started via {uriQs}");
+                }
+            }
+            catch { }
+
+            // Try alternative: POST /printer/print?filename=<filename> using querystring
+            try
+            {
+                var encoded = Uri.EscapeDataString(filename);
+                var uri = $"/printer/print?filename={encoded}";
+                var resp = await http.PostAsync(uri, null, cancellationToken);
+                var txt = string.Empty; try { txt = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                var small = txt?.Length > 350 ? txt.Substring(0, 350) + "..." : txt;
+                diagnostics.Add($"{uri} -> {(int)resp.StatusCode} {resp.ReasonPhrase} {small}");
+                _logger.LogInformation("[Moonraker] StartPrintByFilename tried {Uri} -> {Status} -> {Small}", uri, (int)resp.StatusCode, small);
+                if (resp.IsSuccessStatusCode) return (true, $"Started via {uri}");
+            }
+            catch { }
+
+            // Try the documented start endpoint: POST /printer/print/start?filename=<filename>
+            try
+            {
+                foreach (var v in variants)
+                {
+                    var encodedStart = Uri.EscapeDataString(v);
+                    var uri = $"/printer/print/start?filename={encodedStart}";
+                    var resp = await http.PostAsync(uri, null, cancellationToken);
+                    var txt = string.Empty; try { txt = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    var small = txt?.Length > 350 ? txt.Substring(0, 350) + "..." : txt;
+                    diagnostics.Add($"{uri} -> {(int)resp.StatusCode} {resp.ReasonPhrase} {small}");
+                    _logger.LogInformation("[Moonraker] StartPrintByFilename tried {Uri} -> {Status} -> {Small}", uri, (int)resp.StatusCode, small);
+                    if (resp.IsSuccessStatusCode) return (true, $"Started via {uri}");
+                }
+            }
+            catch { }
+
+            // Try POST /printer/print { filename | path }
+            try
+            {
+                var tried = new List<string>();
+                foreach (var v in variants)
+                {
+                    var fileJson = System.Text.Json.JsonSerializer.Serialize(new { filename = v });
+                    var content = new StringContent(fileJson, System.Text.Encoding.UTF8, "application/json");
+                    var resp = await http.PostAsync("/printer/print", content, cancellationToken);
+                    var respTxt3 = string.Empty; try { respTxt3 = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    var small3 = respTxt3?.Length > 350 ? respTxt3.Substring(0, 350) + "..." : respTxt3;
+                    tried.Add($"/printer/print -> {fileJson} = {(int)resp.StatusCode} {resp.ReasonPhrase} {small3}");
+                    if (resp.IsSuccessStatusCode) return (true, "Started via /printer/print");
+
+                    var pathJson = System.Text.Json.JsonSerializer.Serialize(new { path = v });
+                    content = new StringContent(pathJson, System.Text.Encoding.UTF8, "application/json");
+                    resp = await http.PostAsync("/printer/print", content, cancellationToken);
+                    try { respTxt3 = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    small3 = respTxt3?.Length > 350 ? respTxt3.Substring(0, 350) + "..." : respTxt3;
+                    tried.Add($"/printer/print -> {pathJson} = {(int)resp.StatusCode} {resp.ReasonPhrase} {small3}");
+                    if (resp.IsSuccessStatusCode) return (true, "Started via /printer/print");
+                }
+                _logger.LogInformation("[Moonraker] StartPrintByFilename tried /printer/print attempts: {Tried}", string.Join("; ", tried));
+                diagnostics.Add($"/printer/print attempts: {string.Join("; ", tried)}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "StartPrintByFilenameAsync: /printer/print attempt failed");
+            }
+
+            // Try enqueueing the job via /server/job_queue/job then start the queue
+            try
+            {
+                var jobPayload = System.Text.Json.JsonSerializer.Serialize(new { filenames = variants.ToArray(), reset = false });
+                var content = new StringContent(jobPayload, System.Text.Encoding.UTF8, "application/json");
+                var resp = await http.PostAsync("/server/job_queue/job", content, cancellationToken);
+                var respTxt = string.Empty; try { respTxt = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                var smallQ = respTxt?.Length > 350 ? respTxt.Substring(0, 350) + "..." : respTxt;
+                diagnostics.Add($"/server/job_queue/job -> {(int)resp.StatusCode} {resp.ReasonPhrase} {smallQ}");
+                _logger.LogInformation("[Moonraker] tried enqueue job /server/job_queue/job -> {Status} -> {Small}", (int)resp.StatusCode, smallQ);
+                if (resp.IsSuccessStatusCode)
+                {
+                    // start the job queue
+                    var resp2 = await http.PostAsync("/server/job_queue/start", null, cancellationToken);
+                    var resp2Txt = string.Empty; try { resp2Txt = await resp2.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                    var smallStart = resp2Txt?.Length > 350 ? resp2Txt.Substring(0, 350) + "..." : resp2Txt;
+                    diagnostics.Add($"/server/job_queue/start -> {(int)resp2.StatusCode} {resp2.ReasonPhrase} {smallStart}");
+                    _logger.LogInformation("[Moonraker] tried /server/job_queue/start -> {Status} -> {Small}", (int)resp2.StatusCode, smallStart);
+                    if (resp2.IsSuccessStatusCode) return (true, "Started via job_queue (enqueue -> start)");
+                }
+            }
+            catch { }
+
+            // Try POST /server/files/<path>/print (different path shapes tried)
+            try
+            {
+                // If the endpoint /server/files/gcodes/<encoded>/print might be present
+                var path = filename;
+                if (!filename.Contains('/') && !filename.StartsWith("gcodes/", StringComparison.OrdinalIgnoreCase)) path = $"gcodes/{filename}";
+                var encoded = Uri.EscapeDataString(path);
+                var uri = $"/server/files/{encoded}/print";
+                var resp = await http.PostAsync(uri, null, cancellationToken);
+                var respTxt4 = string.Empty; try { respTxt4 = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { }
+                var small4 = respTxt4?.Length > 350 ? respTxt4.Substring(0, 350) + "..." : respTxt4;
+                _logger.LogInformation("[Moonraker] StartPrintByFilename tried {Uri} -> {Status} -> {Small}", uri, (int)resp.StatusCode, small4);
+                diagnostics.Add($"{uri} -> {(int)resp.StatusCode} {resp.ReasonPhrase} {small4}");
+                diagnostics.Add($"{uri} -> {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                if (resp.IsSuccessStatusCode) return (true, $"Started via {uri}");
+            }
+            catch { }
+
+            var message = "Could not start print: endpoints unsupported or returned non-success status";
+            var diag = string.Join("; ", diagnostics);
+            if (diag.Length > 800) diag = diag.Substring(0, 800) + "...";
+            _logger.LogWarning("[Moonraker] StartPrintByFilename failed for filename {Filename} on base {Base}. Diagnostics: {Diagnostics}", filename, baseUri, diag);
+            return (false, message + ": " + diag);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "StartPrintByFilenameAsync error");
+            return (false, ex.Message);
+        }
+    }
+
+    private async Task<string?> FindFileOnServerAsync(Uri baseUri, string filename, string? apiKey = null, string? authHeader = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(10) };
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var header = string.IsNullOrWhiteSpace(authHeader) ? "X-Api-Key" : authHeader;
+                try { http.DefaultRequestHeaders.Remove(header); } catch { }
+                try { http.DefaultRequestHeaders.Add(header, apiKey); } catch { }
+            }
+
+            var candidateRoots = new[] { "gcodes", "local", "sdcard", "" };
+            foreach (var root in candidateRoots)
+            {
+                var pathParam = string.IsNullOrWhiteSpace(root) ? "" : root;
+                var uri = "/server/files/list" + (string.IsNullOrWhiteSpace(pathParam) ? "?path=" : $"?path={Uri.EscapeDataString(pathParam)}");
+                try
+                {
+                    var resp = await http.GetAsync(uri, cancellationToken);
+                    if (!resp.IsSuccessStatusCode) continue;
+                    var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    var node = JsonNode.Parse(txt);
+                    if (node is JsonObject o && o.TryGetPropertyValue("result", out var res) && res is JsonObject r && r.TryGetPropertyValue("files", out var files) && files is JsonArray arr)
+                    {
+                        foreach (var f in arr)
+                        {
+                            if (f is JsonObject fo)
+                            {
+                                if (fo.TryGetPropertyValue("path", out var p) && p != null)
+                                {
+                                    var pval = p.ToString();
+                                    if (pval.EndsWith(filename, StringComparison.OrdinalIgnoreCase)) return pval;
+                                }
+                                if (fo.TryGetPropertyValue("name", out var n) && n != null && n.ToString().Equals(filename, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (fo.TryGetPropertyValue("path", out var p2) && p2 != null) return p2.ToString();
+                                    // Name matches but no path - fallback to candidate root
+                                    if (string.IsNullOrWhiteSpace(root)) return filename;
+                                    return root + "/" + filename;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static string? FindFilenameInJson(JsonNode? node)
+    {
+        if (node == null) return null;
+        if (node is JsonObject obj)
+        {
+            // Look for common properties
+            if (obj.TryGetPropertyValue("path", out var p) && p is JsonValue pv && pv != null)
+                return pv.ToString();
+            if (obj.TryGetPropertyValue("filename", out var f) && f is JsonValue fv && fv != null)
+                return fv.ToString();
+            if (obj.TryGetPropertyValue("name", out var n) && n is JsonValue nv && nv != null)
+                return nv.ToString();
+
+            // Recurse into properties
+            foreach (var kv in obj)
+            {
+                var rec = FindFilenameInJson(kv.Value);
+                if (!string.IsNullOrWhiteSpace(rec)) return rec;
+            }
+        }
+        else if (node is JsonArray arr)
+        {
+            foreach (var it in arr)
+            {
+                var rec = FindFilenameInJson(it);
+                if (!string.IsNullOrWhiteSpace(rec)) return rec;
+            }
+        }
+        else if (node is JsonValue v)
+        {
+            var s = v.ToString();
+            if (!string.IsNullOrWhiteSpace(s) && s.IndexOf(".gcode", StringComparison.OrdinalIgnoreCase) >= 0) return s;
+        }
+        return null;
+    }
+
     // ... rest of MoonrakerClient methods remain unchanged (GetPrintInfoAsync, etc.)
 }

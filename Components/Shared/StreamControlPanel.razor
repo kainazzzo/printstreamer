@@ -5,13 +5,20 @@
     <!-- Control Buttons with Status -->
     <div class="controls">
         <!-- Camera Toggle Button -->
-                <!-- Camera Toggle Button -->
-        <button class="btn @(CameraEnabled ? "btn-danger" : "btn-success")" @onclick="OnToggleCamera"
+            <!-- Camera Toggle Button -->
+        <button class="btn @(CameraEnabled ? "btn-danger" : "btn-success")" @onclick="ToggleCameraClicked" disabled="@(IsCameraBusy)" aria-busy="@(IsCameraBusy)"
                 @onmouseover="OnCameraMouseOver"
                 @onmouseout="OnCameraMouseOut">
             @if (CameraHover)
             {
-                <span class="icon">📹</span>
+                @if (IsCameraBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">📹</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">Source</span>
                     <span class="btn-status">@(CameraEnabled ? "Turn Off" : "Turn On")</span>
@@ -19,7 +26,14 @@
             }
             else
             {
-                <span class="icon">📹</span>
+                @if (IsCameraBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">📹</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">Source</span>
                     <span class="btn-status">@(CameraEnabled ? "ON" : "OFF")</span>
@@ -29,13 +43,21 @@
 
         <!-- Audio Toggle Button -->
         <button class="btn @(AudioEnabled ? "btn-danger" : "btn-success")"
-                @onclick="ToggleAudio"
+            disabled="@(IsAudioBusy)" aria-busy="@(IsAudioBusy)"
+            @onclick="ToggleAudio"
                 title="@(AudioEnabled ? "Disable audio feed" : "Enable audio feed")"
                 @onmouseover="OnAudioMouseOver"
                 @onmouseout="OnAudioMouseOut">
             @if (AudioHover)
             {
-                <span class="icon">🔊</span>
+                @if (IsAudioBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🔊</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">Audio Feed</span>
                     <span class="btn-status">@(AudioEnabled ? "Disable" : "Enable")</span>
@@ -43,7 +65,14 @@
             }
             else
             {
-                <span class="icon">🔊</span>
+                @if (IsAudioBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🔊</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">Audio Feed</span>
                     <span class="btn-status">@(AudioEnabled ? "ON" : "OFF")</span>
@@ -53,8 +82,9 @@
 
         <!-- Go Live / Stop Live Button -->
         <button class="btn @(IsLive ? "btn-danger" : "btn-success")" 
-                @onclick="@(IsLive ? OnStopLive : OnGoLive)" 
-                disabled="@(!IsLive && (!IsStreamPlaying || IsGoingLive))"
+            @onclick="ToggleLiveClicked" 
+            disabled="@(IsLiveBusy || (!IsLive && (!IsStreamPlaying || IsGoingLive)))"
+            aria-busy="@(IsLiveBusy || IsGoingLive)"
                 @onmouseover="OnLiveMouseOver"
                 @onmouseout="OnLiveMouseOut">
             @if (IsGoingLive)
@@ -65,12 +95,27 @@
                     <span class="btn-status">Going Live...</span>
                 </span>
             }
+            else if (IsLiveBusy)
+            {
+                <span class="spinner"></span>
+                <span class="btn-label">
+                    <span class="btn-title">Stream</span>
+                    <span class="btn-status">@(IsLive ? "Stop" : "Start")</span>
+                </span>
+            }
             else if (IsLive)
             {
                 <span class="pulse-dot"></span>
                 @if (LiveHover)
                 {
-                    <span class="icon">🔴</span>
+                    @if (IsLiveBusy)
+                    {
+                        <span class="spinner"></span>
+                    }
+                    else
+                    {
+                        <span class="icon">🔴</span>
+                    }
                     <span class="btn-label">
                         <span class="btn-title">Stream</span>
                         <span class="btn-status">Stop</span>
@@ -89,7 +134,14 @@
             {
                 @if (LiveHover)
                 {
-                    <span class="icon">🛜</span>
+                    @if (IsLiveBusy)
+                    {
+                        <span class="spinner"></span>
+                    }
+                    else
+                    {
+                        <span class="icon">🛜</span>
+                    }
                     <span class="btn-label">
                         <span class="btn-title">Stream</span>
                         <span class="btn-status">Start</span>
@@ -108,13 +160,21 @@
         
         <!-- Auto Broadcast Toggle Button -->
         <button class="btn @(AutoBroadcastEnabled ? "btn-danger" : "btn-success")" 
-                @onclick="ToggleAutoBroadcast"
+            disabled="@(IsAutoBroadcastBusy)" aria-busy="@(IsAutoBroadcastBusy)"
+            @onclick="ToggleAutoBroadcast"
                 title="@(AutoBroadcastEnabled ? "Disable auto-broadcast" : "Enable auto-broadcast on print start")"
                 @onmouseover="OnAutoBroadcastMouseOver"
                 @onmouseout="OnAutoBroadcastMouseOut">
             @if (AutoBroadcastHover)
             {
-                <span class="icon">🔴</span>
+                @if (IsAutoBroadcastBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🔴</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">Auto-Broadcast</span>
                     <span class="btn-status">@(AutoBroadcastEnabled ? "Disable" : "Enable")</span>
@@ -132,13 +192,21 @@
         
         <!-- Auto Upload Toggle Button -->
         <button class="btn @(AutoUploadEnabled ? "btn-danger" : "btn-success")" 
-                @onclick="ToggleAutoUpload"
+            disabled="@(IsAutoUploadBusy)" aria-busy="@(IsAutoUploadBusy)"
+            @onclick="ToggleAutoUpload"
                 title="@(AutoUploadEnabled ? "Disable auto-upload" : "Enable auto-upload timelapses to YouTube")"
                 @onmouseover="OnAutoUploadMouseOver"
                 @onmouseout="OnAutoUploadMouseOut">
             @if (AutoUploadHover)
             {
-                <span class="icon">🕝</span>
+                @if (IsAutoUploadBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🕝</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">Upload Timelapses</span>
                     <span class="btn-status">@(AutoUploadEnabled ? "Disable" : "Enable")</span>
@@ -156,13 +224,21 @@
         
         <!-- End Stream After Print Toggle Button -->
         <button class="btn @(EndStreamAfterPrintEnabled ? "btn-danger" : "btn-success")" 
-                @onclick="ToggleEndStreamAfterPrint"
+            disabled="@(IsEndAfterPrintBusy)" aria-busy="@(IsEndAfterPrintBusy)"
+            @onclick="ToggleEndStreamAfterPrint"
                 title="@(EndStreamAfterPrintEnabled ? "Disable end stream after print" : "Enable end stream after print completes")"
                 @onmouseover="OnEndStreamAfterPrintMouseOver"
                 @onmouseout="OnEndStreamAfterPrintMouseOut">
             @if (EndStreamAfterPrintHover)
             {
-                <span class="icon">⏹️</span>
+                @if (IsEndAfterPrintBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">⏹️</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">End After Print</span>
                     <span class="btn-status">@(EndStreamAfterPrintEnabled ? "Disable" : "Enable")</span>
@@ -180,14 +256,21 @@
         
         <!-- End Stream After Song Button -->
         <button class="btn @(EndStreamAfterSongEnabled ? "btn-danger" : "btn-success")" 
-                @onclick="ToggleEndStreamAfterSong"
+            @onclick="ToggleEndStreamAfterSong"
                 title="@(EndStreamAfterSongEnabled ? "Cancel end after song" : "End stream gracefully after current song finishes")"
                 @onmouseover="OnEndStreamAfterSongMouseOver"
                 @onmouseout="OnEndStreamAfterSongMouseOut"
-                disabled="@(!IsLive)">
+            disabled="@(IsEndAfterSongBusy || !IsLive)" aria-busy="@(IsEndAfterSongBusy)">
             @if (EndStreamAfterSongHover)
             {
-                <span class="icon">🎵</span>
+                @if (IsEndAfterSongBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🎵</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">End After Song</span>
                     <span class="btn-status">@(EndStreamAfterSongEnabled ? "Cancel" : "Enable")</span>
@@ -195,7 +278,14 @@
             }
             else
             {
-                <span class="icon">🎵</span>
+                @if (IsEndAfterSongBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🎵</span>
+                }
                 <span class="btn-label">
                     <span class="btn-title">End After Song</span>
                     <span class="btn-status">@(EndStreamAfterSongEnabled ? "Pending" : "OFF")</span>
@@ -266,7 +356,7 @@
     
     .btn {
         /* set a fixed width for all control buttons to prevent layout shift */
-    --control-btn-width: 16rem; /* adjustable: change this value to tweak width */
+    --control-btn-width: 12rem; /* adjustable: change this value to tweak width */
         width: var(--control-btn-width);
         padding: 8px 12px;
         border: none;
@@ -475,6 +565,13 @@
     private string SelectedPrivacy = "unlisted";
     private bool IsUpdatingPrivacy = false;
     private string? LastBroadcastId = null;
+    private bool IsCameraBusy = false;
+    private bool IsAudioBusy = false;
+    private bool IsLiveBusy = false;
+    private bool IsAutoBroadcastBusy = false;
+    private bool IsAutoUploadBusy = false;
+    private bool IsEndAfterPrintBusy = false;
+    private bool IsEndAfterSongBusy = false;
     
     private void OnCameraMouseOver() => CameraHover = true;
     private void OnCameraMouseOut() => CameraHover = false;
@@ -545,6 +642,11 @@
     
     private async Task ToggleAutoBroadcast()
     {
+        if (IsAutoBroadcastBusy)
+            return;
+
+        IsAutoBroadcastBusy = true;
+        StateHasChanged();
         try
         {
             var newValue = !AutoBroadcastEnabled;
@@ -560,10 +662,20 @@
         {
             Logger.LogError(ex, "Error toggling auto-broadcast: {Message}", ex.Message);
         }
+        finally
+        {
+            IsAutoBroadcastBusy = false;
+            StateHasChanged();
+        }
     }
     
     private async Task ToggleAutoUpload()
     {
+        if (IsAutoUploadBusy)
+            return;
+
+        IsAutoUploadBusy = true;
+        StateHasChanged();
         try
         {
             var newValue = !AutoUploadEnabled;
@@ -579,10 +691,20 @@
         {
             Logger.LogError(ex, "Error toggling auto-upload: {Message}", ex.Message);
         }
+        finally
+        {
+            IsAutoUploadBusy = false;
+            StateHasChanged();
+        }
     }
     
     private async Task ToggleEndStreamAfterPrint()
     {
+        if (IsEndAfterPrintBusy)
+            return;
+
+        IsEndAfterPrintBusy = true;
+        StateHasChanged();
         try
         {
             var newValue = !EndStreamAfterPrintEnabled;
@@ -598,10 +720,20 @@
         {
             Logger.LogError(ex, "Error toggling end-stream-after-print: {Message}", ex.Message);
         }
+        finally
+        {
+            IsEndAfterPrintBusy = false;
+            StateHasChanged();
+        }
     }
     
     private async Task ToggleEndStreamAfterSong()
     {
+        if (IsEndAfterSongBusy)
+            return;
+
+        IsEndAfterSongBusy = true;
+        StateHasChanged();
         try
         {
             var newValue = !EndStreamAfterSongEnabled;
@@ -617,10 +749,20 @@
         {
             Logger.LogError(ex, "Error toggling end-stream-after-song: {Message}", ex.Message);
         }
+        finally
+        {
+            IsEndAfterSongBusy = false;
+            StateHasChanged();
+        }
     }
 
     private async Task ToggleAudio()
     {
+        if (IsAudioBusy)
+            return;
+
+        IsAudioBusy = true;
+        StateHasChanged();
         try
         {
             var newValue = !AudioEnabled;
@@ -634,6 +776,62 @@
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error toggling audio feed: {Message}", ex.Message);
+        }
+        finally
+        {
+            IsAudioBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleCameraClicked()
+    {
+        if (IsCameraBusy)
+            return;
+
+        IsCameraBusy = true;
+        StateHasChanged();
+        try
+        {
+            await OnToggleCamera.InvokeAsync((object?)null);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error invoking camera toggle: {Message}", ex.Message);
+        }
+        finally
+        {
+            IsCameraBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleLiveClicked()
+    {
+        if (IsLiveBusy)
+            return;
+
+        IsLiveBusy = true;
+        StateHasChanged();
+        try
+        {
+            if (IsLive)
+            {
+                await OnStopLive.InvokeAsync((object?)null);
+            }
+            else
+            {
+                await OnGoLive.InvokeAsync((object?)null);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error toggling live: {Message}", ex.Message);
+        }
+        finally
+        {
+            IsLiveBusy = false;
+            StateHasChanged();
         }
     }
 }

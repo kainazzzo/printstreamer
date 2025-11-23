@@ -57,6 +57,25 @@ namespace PrintStreamer.Models
         /// Helper: true if state indicates print is finished or error.
         /// </summary>
         public bool IsDone => State != null && PrinterStateClassifier.DoneStates.Contains(State, StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Helper: true if the printer is actively printing and shows evidence of progress/movement
+        /// (for example a progress percent > 0, or a current layer reported). This is used to
+        /// distinguish transient states where a job is 'active' but has not yet started movement
+        /// (probe triggered, heating, etc).
+        /// </summary>
+        public bool IsActivelyPrintingInProgress
+        {
+            get
+            {
+                if (!IsActivelyPrinting) return false;
+                // If we have an explicit layer index or a progress percent > 0.5% then treat as in-progress
+                if (CurrentLayer.HasValue && CurrentLayer.Value > 0) return true;
+                if (ProgressPercent.HasValue && ProgressPercent.Value > 0.5) return true;
+                // As minor fallback, if Remaining is missing but other indicators exist, treat as in-progress
+                return false;
+            }
+        }
     }
 
     /// <summary>

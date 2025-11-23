@@ -1,0 +1,95 @@
+@using PrintStreamer.Services
+@inject IJSRuntime JS
+@inject PrinterControlApiService PrinterApi
+@inject ILogger<GcodePreview> Logger
+
+<div style="width:@(Width);height:@(Height);position:relative;">
+    <canvas id="@CanvasId" @ref="_canvasRef" style="width:100%;height:100%;background:#111;border-radius:6px;display:block;"></canvas>
+    @if (ShowLoading)
+    {
+        <div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#999;">Loading preview...</div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public List<string>? Commands { get; set; }
+
+    [Parameter]
+    public int MaxLines { get; set; } = 1000;
+
+    [Parameter]
+    public bool FetchFromApi { get; set; } = true;
+
+    [Parameter]
+    public string Width { get; set; } = "100%";
+
+    [Parameter]
+    public string Height { get; set; } = "200px";
+
+    [Parameter]
+    public string CanvasId { get; set; } = $"gcode-preview-{Guid.NewGuid():N}";
+
+    private ElementReference _canvasRef;
+    private IJSObjectReference? _module;
+    private bool ShowLoading { get; set; } = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (firstRender)
+        {
+            try
+            {
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "/js/gcode-renderer.js");
+            }
+            catch (Exception ex)
+            {
+                try { Logger.LogWarning(ex, "GcodePreview: failed to import renderer module"); } catch { }
+            }
+
+            await RefreshAsync();
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        await RefreshAsync();
+    }
+
+    public async Task RefreshAsync()
+    {
+        if (_module == null) return;
+        ShowLoading = true;
+        try
+        {
+            List<string> cmds = Commands ?? new List<string>();
+            if ((cmds == null || cmds.Count == 0) && FetchFromApi)
+            {
+                var resp = await PrinterApi.GetGcodeHistoryAsync(MaxLines);
+                if (resp?.Commands != null)
+                {
+                    cmds = resp.Commands;
+                }
+            }
+            // Render using the JS module
+            await _module.InvokeVoidAsync("renderGcodePreview", _canvasRef, cmds);
+        }
+        catch (Exception ex)
+        {
+            try { Logger.LogWarning(ex, "GcodePreview: render failed"); } catch { }
+        }
+        finally
+        {
+            ShowLoading = false;
+            StateHasChanged();
+        }
+    }
+
+}

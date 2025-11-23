@@ -1,0 +1,75 @@
+@using PrintStreamer.Services
+@using Microsoft.JSInterop
+@using Microsoft.Extensions.Logging
+@inject IJSRuntime JS
+@inject ILogger<ConsoleDisplay> Logger
+
+<div id="@ContainerId" class="console-window @(FlipLayout ? "flipped" : "")" style="height:@(Height);overflow:auto;display:flex;background:#000;color:#fff;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;overscroll-behavior:contain;">
+    @if (Lines == null || Lines.Count == 0)
+    {
+        <div style="color:#666;">No console lines</div>
+    }
+    else
+    {
+        @foreach (var line in Lines)
+        {
+            var color = line.Level switch
+            {
+                "error" => "#ff6b6b",
+                "warn" => "#ffd93d",
+                "info" => "#6bcf7f",
+                _ => "#ccc"
+            };
+            var prefix = line.FromLocal ? "[local]" : "";
+            <div style="color:@color">@(line.Timestamp.ToLocalTime().ToString("HH:mm:ss")) @prefix @line.Text</div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter]
+    public List<ConsoleLine>? Lines { get; set; }
+
+    [Parameter]
+    public string ContainerId { get; set; } = $"console-{Guid.NewGuid():N}";
+
+    [Parameter]
+    public bool AutoScroll { get; set; } = true;
+
+    [Parameter]
+    public bool FlipLayout { get; set; } = false;
+
+    [Parameter]
+    public string Height { get; set; } = "200px";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        try
+        {
+            await JS.InvokeVoidAsync("psWatchConsole", ContainerId, AutoScroll, FlipLayout);
+            try { Logger.LogDebug("ConsoleDisplay: registered watcher for {ContainerId} autoScroll={AutoScroll} flip={FlipLayout}", ContainerId, AutoScroll, FlipLayout); } catch { }
+        }
+        catch (Exception ex)
+        {
+            try { Logger.LogWarning(ex, "ConsoleDisplay: psWatchConsole registration failed for {ContainerId}", ContainerId); } catch { }
+        }
+    }
+
+    public async Task RefreshWatchAsync()
+    {
+        try { await JS.InvokeVoidAsync("psUnwatchConsole", ContainerId); } catch { }
+        try { await JS.InvokeVoidAsync("psWatchConsole", ContainerId, AutoScroll, FlipLayout); } catch { }
+        // Log computed flexDirection after watch registration for debugging
+        try { var computed = await JS.InvokeAsync<string?>("getComputedStylePropertyById", ContainerId, "flexDirection"); try { Logger.LogDebug("ConsoleDisplay.RefreshWatchAsync: computed flexDirection={FlexDir} (flip={Flip})", computed, FlipLayout); } catch { } } catch { }
+        try { await JS.InvokeVoidAsync("psUpdateWatch", ContainerId, AutoScroll, FlipLayout); } catch { }
+        try { await JS.InvokeVoidAsync("psForceScroll", ContainerId, FlipLayout ? "top" : "bottom", 120); } catch { }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        // Ensure watcher is refreshed when input parameters are changed (e.g., flip toggled)
+        try { await RefreshWatchAsync(); } catch { }
+    }
+}

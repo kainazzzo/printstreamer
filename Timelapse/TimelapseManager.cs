@@ -372,6 +372,28 @@ namespace PrintStreamer.Timelapse
         }
     }
 
+    public void NotifyPrinterState(string? sessionName, string? state)
+    {
+        if (string.IsNullOrWhiteSpace(sessionName)) return;
+        if (!_activeSessions.TryGetValue(sessionName, out var session)) return;
+
+        try
+        {
+            var s = (state ?? string.Empty).Trim();
+            var isPaused = s.Equals("paused", StringComparison.OrdinalIgnoreCase);
+            // other states imply capturing is allowed; specifically "resuming" and "printing" should resume captures
+            session.IsPaused = isPaused;
+            if (_verboseLogs)
+            {
+                Console.WriteLine($"[TimelapseManager] Session {sessionName} paused state updated: {session.IsPaused}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TimelapseManager] Error in NotifyPrinterState for {sessionName}: {ex.Message}");
+        }
+    }
+
     public async Task StopAllTimelapsesAsync()
     {
         var sessions = _activeSessions.Keys.ToArray();
@@ -391,7 +413,8 @@ namespace PrintStreamer.Timelapse
         foreach (var dir in Directory.GetDirectories(_mainTimelapseDir))
         {
             var dirName = Path.GetFileName(dir);
-            var isActive = _activeSessions.ContainsKey(dirName);
+            _activeSessions.TryGetValue(dirName, out var activeSession);
+            var isActive = activeSession != null;
             
             var frameFiles = Directory.GetFiles(dir, "frame_*.jpg").OrderBy(f => f).ToArray();
             var videoFiles = Directory.GetFiles(dir, "*.mp4").ToArray();
@@ -401,10 +424,11 @@ namespace PrintStreamer.Timelapse
                 Name = dirName,
                 Path = dir,
                 IsActive = isActive,
+                IsPaused = isActive && activeSession != null ? activeSession.IsPaused : false,
                 FrameCount = frameFiles.Length,
                 VideoFiles = videoFiles.Select(f => Path.GetFileName(f) ?? "unknown").ToArray(),
-                StartTime = isActive && _activeSessions.TryGetValue(dirName, out var session) 
-                    ? session.StartTime 
+                StartTime = isActive && activeSession != null
+                    ? activeSession.StartTime
                     : Directory.GetCreationTime(dir),
                 LastFrameTime = frameFiles.Length > 0 
                     ? File.GetLastWriteTime(frameFiles.Last()) 
@@ -502,6 +526,15 @@ namespace PrintStreamer.Timelapse
                         }
                         continue;
                     }
+                    // Skip capture if printer is paused for this session
+                    if (session.IsPaused)
+                    {
+                        if (_verboseLogs)
+                        {
+                            Console.WriteLine($"[TimelapseManager] Session {session.Name} is paused; skipping capture.");
+                        }
+                        continue;
+                    }
                     
                     await CaptureFrameForSessionAsync(session);
                 }
@@ -534,6 +567,16 @@ namespace PrintStreamer.Timelapse
                 if (_verboseLogs)
                 {
                     Console.WriteLine($"[TimelapseManager] Capture gated until layer 1 for session {session.Name}; skipping capture.");
+                }
+                return;
+            }
+
+            // Guard: if capture paused for this session
+            if (session.IsPaused)
+            {
+                if (_verboseLogs)
+                {
+                    Console.WriteLine($"[TimelapseManager] Capture suppressed because session {session.Name} is paused.");
                 }
                 return;
             }
@@ -678,6 +721,8 @@ namespace PrintStreamer.Timelapse
     public double? EstimatedSeconds { get; set; }
     public double? FilamentTotalMm { get; set; }
     public bool IsStopped { get; set; } = false;
+    // When set, capture should be suspended until IsPaused is cleared
+    public bool IsPaused { get; set; } = false;
     // Gating: start capturing only when first printing layer begins
     public bool StartAfterLayer1 { get; set; } = true;
     public bool CaptureEnabled { get; set; } = false;
@@ -689,6 +734,7 @@ namespace PrintStreamer.Timelapse
     public string Name { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public bool IsActive { get; set; }
+    public bool IsPaused { get; set; }
     public int FrameCount { get; set; }
     public string[] VideoFiles { get; set; } = Array.Empty<string>();
     public DateTime StartTime { get; set; }

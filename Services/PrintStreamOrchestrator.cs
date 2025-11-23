@@ -157,6 +157,8 @@ namespace PrintStreamer.Services
                     try
                     {
                         _timelapseManager.NotifyPrintProgress(_activeTimelapseSession, current.CurrentLayer, current.TotalLayers);
+                        // Inform timelapse manager about printer state (paused/resuming/printing)
+                        _timelapseManager.NotifyPrinterState(_activeTimelapseSession, current.State);
                     }
                     catch (Exception ex)
                     {

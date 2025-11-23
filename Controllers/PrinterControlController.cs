@@ -13,17 +13,20 @@ namespace PrintStreamer.Controllers
     public class PrinterControlController : ControllerBase
     {
         private readonly PrinterConsoleService _console;
+        private readonly MoonrakerClient _moonrakerClient;
         private readonly IConfiguration _config;
         private readonly ILogger<PrinterControlController> _logger;
 
         public PrinterControlController(
             PrinterConsoleService console, 
             IConfiguration config, 
-            ILogger<PrinterControlController> logger)
+            ILogger<PrinterControlController> logger,
+            MoonrakerClient moonrakerClient)
         {
             _console = console;
             _config = config;
             _logger = logger;
+            _moonrakerClient = moonrakerClient;
         }
 
         /// <summary>
@@ -383,6 +386,86 @@ namespace PrintStreamer.Controllers
             {
                 _logger.LogError(ex, "Error getting printer status");
                 return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get last completed filename and current printing state to drive client UI behavior
+        /// </summary>
+        [HttpGet("reprint/info")]
+        public IActionResult GetReprintInfo()
+        {
+            try
+            {
+                var current = MoonrakerPoller.CurrentPrinterState;
+                var isPrinting = current?.IsActivelyPrinting ?? false;
+                var inProgress = current?.IsActivelyPrintingInProgress ?? false;
+                var isError = string.Equals(current?.State, "error", StringComparison.OrdinalIgnoreCase);
+                var lastCompleted = MoonrakerPoller.LastCompletedFilename;
+                var currentFilename = current?.Filename;
+                return Ok(new { isPrinting, isPrintingInProgress = inProgress, isError, lastCompletedFilename = lastCompleted, currentFilename });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting reprint info");
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Reprint the last completed job by filename. This will attempt to start the last completed job on the printer.
+        /// Returns success state and a message.
+        /// </summary>
+        [HttpPost("reprint")]
+        public async Task<IActionResult> ReprintLastJob(CancellationToken ct = default)
+        {
+            try
+            {
+                var current = MoonrakerPoller.CurrentPrinterState;
+                // Only forbid reprint when a print is actually in progress (i.e., movement/progress),
+                // not when the printer is in a pre-movement state like a probe or heating phase.
+                if (current?.IsActivelyPrintingInProgress ?? false)
+                {
+                    return BadRequest(new { success = false, message = "Printer is currently printing" });
+                }
+
+                var lastFilename = MoonrakerPoller.LastCompletedFilename;
+                // If we don't have a previously completed job, fall back to the current job filename
+                // (useful for situations where a print has errored before movement / did not complete).
+                if (string.IsNullOrWhiteSpace(lastFilename))
+                {
+                    lastFilename = current?.Filename;
+                }
+                if (string.IsNullOrWhiteSpace(lastFilename))
+                {
+                    return NotFound(new { success = false, message = "No last completed or current job available" });
+                }
+
+                // Resolve base URL from configuration
+                var baseUrl = _config.GetValue<string>("Moonraker:BaseUrl");
+                if (string.IsNullOrWhiteSpace(baseUrl))
+                {
+                    return StatusCode(500, new { success = false, message = "Moonraker base URL not configured" });
+                }
+
+                if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
+                {
+                    return StatusCode(500, new { success = false, message = "Moonraker base URL is invalid" });
+                }
+
+                var apiKey = _config.GetValue<string>("Moonraker:ApiKey");
+                var authHeader = _config.GetValue<string>("Moonraker:AuthHeader") ?? "X-Api-Key";
+
+                var (ok, message) = await _moonrakerClient.StartPrintByFilenameAsync(baseUri, lastFilename, apiKey, authHeader, ct);
+                if (ok)
+                    return Ok(new { success = true, message });
+                else
+                    return StatusCode(500, new { success = false, message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error reprinting last job");
+                return StatusCode(500, new { success = false, message = ex.Message });
             }
         }
 

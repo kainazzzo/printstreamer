@@ -1,5 +1,8 @@
 @using PrintStreamer.Services
+@using Microsoft.Extensions.Logging
 @inject PrinterConsoleService PrinterConsoleService
+@inject ILogger<MiniGcodeRenderer> Logger
+@implements IDisposable
 
 <style>
     .console-display {
@@ -49,26 +52,23 @@
     }
 </style>
 
-<div class="console-display" @ref="_consoleRef">
-    @if (_consoleLines.Count == 0)
-    {
-        <div class="console-empty">Waiting for printer output...</div>
-    }
-    else
-    {
-        @foreach (var line in _consoleLines)
-        {
-            var lineClass = line.FromLocal ? "local" : line.Level;
-            <div class="console-line @lineClass">
-                <span style="color: #666;">[@(line.Timestamp.ToLocalTime().ToString("HH:mm:ss"))]</span> @line.Text
-            </div>
+<div style="display:flex;gap:8px;align-items:flex-start;">
+    <div style="flex: 1 1 50%;">
+        <GcodePreview CanvasId="@_containerId" Commands="_gcodeCommands" FetchFromApi="true" MaxLines="50" Height="200px" Width="100%" />
+    </div>
+    <div style="width:220px;">
+        @{
+            var cid = $"mini-console-lines-{Guid.NewGuid():N}";
         }
-    }
+        <ConsoleDisplay Lines="_consoleLines" ContainerId="cid" AutoScroll="true" FlipLayout="false" Height="200px" />
+    </div>
 </div>
 
 @code {
     private List<ConsoleLine> _consoleLines = new();
-    private ElementReference _consoleRef;
+    // ElementRef removed - ConsoleDisplay manages its own DOM container
+    private string _containerId = $"mini-console-{Guid.NewGuid():N}";
+    private List<string> _gcodeCommands = new();
 
     protected override void OnInitialized()
     {
@@ -83,27 +83,27 @@
 
     private void HandleNewLine(ConsoleLine line)
     {
+        try { Logger.LogDebug("MiniGcodeRenderer: HandleNewLine invoked - {Timestamp:O} {Level} {FromLocal} {Text}", line.Timestamp, line.Level, line.FromLocal, line.Text); } catch { }
         _ = InvokeAsync(() =>
         {
-            _consoleLines.Add(line);
+            if (_consoleLines == null) _consoleLines = new List<ConsoleLine>();
+            // Insert at beginning if flipped, otherwise append
+            var isFlipped = false; // this component is simple and doesn't expose flip; default to consistent append
+            try { /* if we had a flip flag, we'd use it here */ } catch { }
+            if (isFlipped) _consoleLines.Insert(0, line); else _consoleLines.Add(line);
+            // Update gcode command cache
+            _gcodeCommands = _consoleLines.Select(l => l.Text).ToList();
             
-            // Keep only the last 50 lines
+            // Keep only the last 50 lines (trim from the end if flipped, otherwise from the start)
             if (_consoleLines.Count > 50)
             {
-                _consoleLines.RemoveAt(0);
+                if (isFlipped) _consoleLines.RemoveRange(50, _consoleLines.Count - 50);
+                else _consoleLines.RemoveAt(0);
             }
             
             StateHasChanged();
             
-            // Auto-scroll to bottom
-            _ = Task.Delay(10).ContinueWith(async _ =>
-            {
-                try
-                {
-                    await _consoleRef.FocusAsync();
-                }
-                catch { }
-            });
+            // Auto-scroll is handled by ConsoleDisplay's JS watcher
         });
     }
 

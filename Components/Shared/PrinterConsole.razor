@@ -1,7 +1,11 @@
 @using PrintStreamer.Services
+@using Microsoft.Extensions.Logging
 @inject PrinterConsoleService PrinterConsoleService
 @inject IConfiguration Cfg
 @inject IJSRuntime JS
+@inject PrinterControlApiService PrinterApi
+@inject ILogger<PrinterConsole> Logger
+@implements IDisposable
 
 @code {
     [Parameter(CaptureUnmatchedValues = true)]
@@ -25,13 +29,20 @@
     private bool _autoScroll = true;
     private bool _flipLayout = false;
     private string _containerId = $"printer-console-{Guid.NewGuid().ToString("N")}";
+    private ConsoleDisplay? _displayRef;
     // Presets loaded from configuration (appsettings)
     private record Preset(string Name, int ToolTemp, int BedTemp);
     private List<Preset> _presets = new List<Preset>();
+    private string? _reprintLastFileName;
+    private bool _isPrinting = false;
+    private bool _isPrintingInProgress = false;
+    private bool _isErrorState = false;
+    private bool _isReprintBusy = false;
+    private CancellationTokenSource? _reprintInfoCts;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        base.OnInitialized();
+        await base.OnInitializedAsync();
         // Default AllowSend from config if not specified by parent
         try
         {
@@ -40,6 +51,13 @@
                 var allowFromCfg = Cfg.GetValue<bool?>("Stream:Console:AllowSend");
                 if (allowFromCfg.HasValue) AllowSend = allowFromCfg.Value;
             }
+        }
+        catch { }
+        // Periodic refresh to update reprint button state
+        try
+        {
+            _reprintInfoCts = new CancellationTokenSource();
+            _ = UpdateReprintInfoPeriodicAsync(_reprintInfoCts.Token);
         }
         catch { }
 
@@ -67,6 +85,23 @@
         catch { }
         _lines = PrinterConsoleService.GetLatestLines(MaxLines).ToList();
         PrinterConsoleService.OnNewLine += HandleNewLine;
+        try { Logger.LogDebug("PrinterConsole: Subscribed to PrinterConsoleService.OnNewLine (MaxLines={MaxLines})", MaxLines); } catch { }
+        // Try to load reprint info (if PrinterApi is available)
+        try
+        {
+            if (PrinterApi != null)
+            {
+                var info = await PrinterApi.GetReprintInfoAsync();
+                if (info != null)
+                {
+                    _reprintLastFileName = info.LastCompletedFilename ?? info.CurrentFilename;
+                    _isPrinting = info.IsPrinting;
+                    _isPrintingInProgress = info.IsPrintingInProgress;
+                    _isErrorState = info.IsError;
+                }
+            }
+        }
+        catch { }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -74,18 +109,20 @@
         await base.OnAfterRenderAsync(firstRender);
         if (firstRender)
         {
-            try { await JS.InvokeVoidAsync("psWatchConsole", _containerId, _autoScroll, _flipLayout); } catch { }
+            try { Logger.LogDebug("PrinterConsole: OnAfterRender (firstRender=true) - ConsoleDisplay will initialize JS watcher (autoScroll={AutoScroll}, flipLayout={FlipLayout})", _autoScroll, _flipLayout); } catch { }
         }
     }
 
     private async Task OnAutoScrollChanged()
     {
         StateHasChanged();
-        try { await JS.InvokeVoidAsync("psUpdateWatch", _containerId, _autoScroll, _flipLayout); } catch { }
+        try { if (_displayRef != null) await _displayRef.RefreshWatchAsync(); } catch { }
     }
 
     private void HandleNewLine(ConsoleLine l)
     {
+        try { Logger.LogDebug("PrinterConsole: HandleNewLine invoked - {Timestamp:O} {Level} {FromLocal} {Text}", l.Timestamp, l.Level, l.FromLocal, l.Text); } catch { }
+        try { JS.InvokeVoidAsync("console.log", $"PrinterConsole: HandleNewLine - {l.Timestamp:O} {l.Level} {l.FromLocal} {l.Text}"); } catch { }
         // Update copy and trim - make a new list to avoid collection modified exceptions
         var newLines = new List<ConsoleLine>(_lines);
         newLines.Add(l);
@@ -94,6 +131,7 @@
         // Safe UI update and auto-scroll
         _ = InvokeAsync(async () =>
         {
+            try { Logger.LogDebug("PrinterConsole: InvokeAsync StateHasChanged (autoScroll={AutoScroll}, flipLayout={FlipLayout})", _autoScroll, _flipLayout); } catch { }
             StateHasChanged();
             if (_autoScroll)
             {
@@ -103,12 +141,14 @@
                 {
                     // Match popout behavior: small delay then call the simple scroll helper
                     await Task.Delay(10);
-                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "top"); } catch { }
+                    try { Logger.LogDebug("PrinterConsole: scrolling top (flip)"); } catch { }
+                    try { await JS.InvokeVoidAsync("psScrollToPositionWithRetry", _containerId, "top", 6, 30); } catch { }
                 }
                 else
                 {
                     await Task.Delay(10);
-                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "bottom"); } catch { }
+                    try { Logger.LogDebug("PrinterConsole: scrolling bottom"); } catch { }
+                    try { await JS.InvokeVoidAsync("psScrollToPositionWithRetry", _containerId, "bottom", 6, 30); } catch { }
                 }
                 }
                 catch { }
@@ -118,11 +158,9 @@
 
     private async Task OnFlipChanged()
     {
-        // Unregister watcher temporarily to avoid race where observer scrolls during DOM reorder
+        try { Logger.LogDebug("PrinterConsole: OnFlipChanged invoked - _flipLayout={FlipLayout} _autoScroll={AutoScroll}", _flipLayout, _autoScroll); } catch { }
+        // Unregister watcher temporarily so we can re-register after the DOM flips
         try { await JS.InvokeVoidAsync("psUnwatchConsole", _containerId); } catch { }
-
-        // Update watcher state immediately (kept for compatibility but observer is currently removed)
-        try { await JS.InvokeVoidAsync("psUpdateWatch", _containerId, _autoScroll, _flipLayout); } catch { }
 
         // Request a render first so the DOM order updates
         await InvokeAsync(StateHasChanged);
@@ -133,32 +171,73 @@
         {
             try
             {
-                await Task.Delay(40);
-                if (_flipLayout)
-                {
-                    await Task.Delay(10);
-                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "top"); } catch { }
-                }
-                else
-                {
-                    await Task.Delay(10);
-                    try { await JS.InvokeVoidAsync("scrollToPositionById", _containerId, "bottom"); } catch { }
-                }
-                // Re-register watcher with correct settings so future mutations are observed
-                try { await JS.InvokeVoidAsync("psWatchConsole", _containerId, _autoScroll, _flipLayout); } catch { }
+                await Task.Delay(150);
+                    if (_flipLayout)
+                        {
+                            await Task.Delay(40);
+                        // Re-register watcher with updated flip state and computed style
+                        try { if (_displayRef != null) await _displayRef.RefreshWatchAsync(); } catch { }
+                            try { await JS.InvokeVoidAsync("psScrollToPositionWithRetry", _containerId, "top", 6, 30); } catch { }
+                            // Force final position to avoid observer race
+                            try { await JS.InvokeVoidAsync("psForceScroll", _containerId, "top", 120); } catch { }
+                        }
+                    else
+                    {
+                        await Task.Delay(40);
+                        // Re-register watcher with updated flip setting
+                        try { if (_displayRef != null) await _displayRef.RefreshWatchAsync(); } catch { }
+                        try { await JS.InvokeVoidAsync("psScrollToPositionWithRetry", _containerId, "bottom", 6, 30); } catch { }
+                        try { await JS.InvokeVoidAsync("psForceScroll", _containerId, "bottom", 120); } catch { }
+                    }
+                // Re-register watcher is handled by the shared ConsoleDisplay
+                try { Logger.LogDebug("PrinterConsole: OnFlipChanged re-registered psWatchConsole (flip={FlipLayout}, autoScroll={AutoScroll})", _flipLayout, _autoScroll); } catch { }
+                // Log computed style to help validate flip behavior
+                try { var flexDir = await JS.InvokeAsync<string?>("getComputedStylePropertyById", _containerId, "flexDirection"); try { Logger.LogDebug("PrinterConsole: After flip - computed flexDirection={FlexDir}", flexDir); } catch { } } catch { }
             }
             catch { }
         }
         else
         {
             // Re-register watcher even when auto-scroll is disabled so flip toggles remain consistent
-            try { await JS.InvokeVoidAsync("psWatchConsole", _containerId, _autoScroll, _flipLayout); } catch { }
+            // Re-register handled by the shared ConsoleDisplay
         }
     }
 
     public void Dispose()
     {
         try { PrinterConsoleService.OnNewLine -= HandleNewLine; } catch { }
+        try { Logger.LogDebug("PrinterConsole: Unsubscribed from PrinterConsoleService.OnNewLine and disposed"); } catch { }
+        try { _reprintInfoCts?.Cancel(); } catch { }
+        try { _reprintInfoCts?.Dispose(); } catch { }
+    }
+
+    private async Task UpdateReprintInfoPeriodicAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(3000, ct);
+                if (ct.IsCancellationRequested) break;
+                try
+                {
+                    if (PrinterApi != null)
+                    {
+                        var info = await PrinterApi.GetReprintInfoAsync(ct);
+                        if (info != null)
+                        {
+                            _reprintLastFileName = info.LastCompletedFilename ?? info.CurrentFilename;
+                            _isPrinting = info.IsPrinting;
+                            _isPrintingInProgress = info.IsPrintingInProgress;
+                            await InvokeAsync(StateHasChanged);
+                        }
+                    }
+                }
+                catch { }
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+        }
     }
 
     private async Task Send()
@@ -168,6 +247,44 @@
         _lastSendMessage = res.Message;
         _input = string.Empty;
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ReprintLastConsole()
+    {
+        if (string.IsNullOrWhiteSpace(_reprintLastFileName))
+        {
+            try { await JS.InvokeVoidAsync("showToast", "No previous job available to reprint", "warning"); } catch { }
+            return;
+        }
+        if (!_isErrorState)
+        {
+            try { await JS.InvokeVoidAsync("showToast", "Printer is currently printing", "warning"); } catch { }
+            return;
+        }
+        try
+        {
+            _isReprintBusy = true;
+            StateHasChanged();
+            var res = await PrinterApi.ReprintLastAsync();
+            if (res?.Success ?? false)
+            {
+                try { await JS.InvokeVoidAsync("showToast", $"Reprint started: {_reprintLastFileName}", "success"); } catch { }
+            }
+            else
+            {
+                var err = res?.Error ?? res?.Message ?? "Failed to start reprint";
+                try { await JS.InvokeVoidAsync("showToast", err, "error"); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            try { await JS.InvokeVoidAsync("showToast", $"Error: {ex.Message}", "error"); } catch { }
+        }
+        finally
+        {
+            _isReprintBusy = false;
+            StateHasChanged();
+        }
     }
 }
 
@@ -183,25 +300,13 @@
     </div>
     @if (!Collapsed)
     {
-        <div id="@_containerId" data-flip="@(_flipLayout ? "true" : "false")" class="console-window @( _flipLayout ? "flipped" : "")" style="height:200px;overflow:auto;display:flex;flex-direction:column;background:#000;color:#fff;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;">
-            @foreach (var line in _lines)
-            {
-                var color = line.Level switch
-                {
-                    "error" => "#ff6b6b",
-                    "warn" => "#ffd93d",
-                    "info" => "#6bcf7f",
-                    _ => "#ccc"
-                };
-                var prefix = line.FromLocal ? "[local]" : "";
-                <div style="color:@color">@(line.Timestamp.ToLocalTime().ToString("HH:mm:ss")) @prefix @line.Text</div>
-            }
-        </div>
+        <ConsoleDisplay @ref="_displayRef" Lines="_lines" ContainerId="_containerId" AutoScroll="_autoScroll" FlipLayout="_flipLayout" Height="200px" />
         @if (AllowSend)
         {
             <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
                 <input @bind="_input" style="flex:1;padding:6px;font-family:monospace;" />
                 <button @onclick="Send">Send</button>
+                <button @onclick="ReprintLastConsole" disabled="@(_isPrintingInProgress || string.IsNullOrWhiteSpace(_reprintLastFileName) || _isReprintBusy)" title="Reprint last completed job">🔁</button>
             </div>
             <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <span style="font-size:12px;color:#aaa;">Quick actions:</span>
@@ -223,7 +328,11 @@
             </div>
             @if (!string.IsNullOrEmpty(_lastSendMessage))
             {
-                <div style="margin-top:6px;font-size:12px;color:#ccc;">@_lastSendMessage</div>
+                    <div style="margin-top:6px;font-size:12px;color:#ccc;">@_lastSendMessage</div>
+                    @if (!string.IsNullOrWhiteSpace(_reprintLastFileName))
+                    {
+                        <div style="margin-top:6px;font-size:12px;color:#ccc;">Last/Current: @_reprintLastFileName</div>
+                    }
             }
         }
     }

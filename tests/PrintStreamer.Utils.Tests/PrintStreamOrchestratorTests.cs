@@ -68,11 +68,53 @@ namespace PrintStreamer.Utils.Tests
             // Verify Start still only called once
             Assert.AreEqual(1, timelapseFake.StartCount);
         }
+
+        [TestMethod]
+        public async Task NotifiesTimelapseManagerOnPauseAndResume()
+        {
+            // Arrange
+            var inMemory = new Dictionary<string, string?>
+            {
+                ["YouTube:LiveBroadcast:Enabled"] = "false",
+                ["Timelapse:LastLayerOffset"] = "1",
+            };
+            var config = new ConfigurationBuilder().AddInMemoryCollection(inMemory).Build();
+
+            var timelapseFake = new FakeTimelapseManager();
+            var orchestrator = new PrintStreamOrchestrator(config, NullLoggerFactory.Instance, timelapseFake);
+
+            var startState = new PrinterState {
+                State = "printing",
+                Filename = "job.gcode",
+                CurrentLayer = 1,
+                TotalLayers = 100,
+                ProgressPercent = 10.0,
+                SnapshotTime = DateTime.UtcNow
+            };
+
+            // Act - Start session
+            await orchestrator.HandlePrinterStateChangedAsync(null, startState, CancellationToken.None);
+
+            // Act - Pause
+            var pausedState = startState with { State = "paused" };
+            await orchestrator.HandlePrinterStateChangedAsync(startState, pausedState, CancellationToken.None);
+
+            // Assert pause notified
+            Assert.AreEqual("paused", timelapseFake.LastStateNotified, true);
+
+            // Act - Resume
+            var resumeState = pausedState with { State = "printing" };
+            await orchestrator.HandlePrinterStateChangedAsync(pausedState, resumeState, CancellationToken.None);
+
+            // Assert resume notified
+            Assert.AreEqual("printing", timelapseFake.LastStateNotified, true);
+        }
         
         private class FakeTimelapseManager : ITimelapseManager
         {
             public int StartCount;
             public int StopCount;
+                public string? LastStateNotified;
 
             public Task<string?> StartTimelapseAsync(string sessionName, string? moonrakerFilename = null)
             {
@@ -87,6 +129,7 @@ namespace PrintStreamer.Utils.Tests
             }
 
             public void NotifyPrintProgress(string? sessionName, int? currentLayer, int? totalLayers) { }
+            public void NotifyPrinterState(string? sessionName, string? state) { LastStateNotified = state; }
         }
     }
 }

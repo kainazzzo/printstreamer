@@ -305,16 +305,16 @@
         min-height: 0;
     }
 
-    .console-lines {
+    .console-output .console-window {
         flex: 1;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 2px;
         min-height: 0;
+        overscroll-behavior: contain;
     }
-
-    .console-lines.flipped {
+    .console-output .console-window.flipped {
         flex-direction: column-reverse;
     }
 
@@ -426,7 +426,14 @@
                             <button class="preset-btn" @onclick='() => ApplyPreset("cooldown")'>Cooldown</button>
                         }
                     </div>
-                    <button class="cancel-btn" @onclick="ConfirmCancel" title="Cancel current print">🛑 Cancel Print</button>
+                    <div style="display:flex;gap:6px;flex-direction:column;align-items:stretch;">
+                        <button class="cancel-btn" @onclick="ConfirmCancel" title="Cancel current print">🛑 Cancel Print</button>
+                        <button class="preset-btn" @onclick="ReprintLast" disabled="@(!_isErrorState || string.IsNullOrWhiteSpace(_reprintLastFileName) || _isReprintBusy)" title="Reprint last completed job">🔁 Reprint</button>
+                        @if (!string.IsNullOrWhiteSpace(_reprintLastFileName))
+                        {
+                            <div style="font-size:12px;color:#ccc;margin-top:6px;">Last/Current: @_reprintLastFileName</div>
+                        }
+                    </div>
                 </div>
             </div>
 
@@ -443,13 +450,8 @@
             <div class="control-section console-section">
                 <h4>Console</h4>
                     <div class="console-output">
-                        <div id="popoutConsoleLines" class="console-lines @(_consoleFlipped ? "flipped" : "")" @ref="_consoleContainer">
-                        @foreach (var line in GetDisplayConsoleLines())
-                        {
-                            <div class="console-line @line.Level">@line.Text</div>
-                        }
+                            <ConsoleDisplay @ref="_displayRef" Lines="GetDisplayConsoleLines()" ContainerId="popoutConsoleLines" AutoScroll="_autoScroll" FlipLayout="_consoleFlipped" Height="100%" />
                     </div>
-                </div>
                 <div class="console-controls">
                     <button @onclick="ToggleAutoScroll" class="@(_autoScroll ? "active" : "")" title="Toggle auto-scroll">
                         @(_autoScroll ? "↓" : "↕") Auto
@@ -475,10 +477,16 @@
     private bool _autoScroll = true;
     private bool _consoleFlipped = false;
     private List<ConsoleLine> _consoleLinesBuffer = new();
-    private ElementReference _consoleContainer;
+    private string? _reprintLastFileName = null;
+    private bool _isPrinting = false;
+    private bool _isPrintingInProgress = false;
+    private bool _isErrorState = false;
+    private bool _isReprintBusy = false;
+    // removed _consoleContainer ElementReference - ConsoleDisplay manages container by id
     private ElementReference _gcodeInputRef;
     private bool _disposed = false;
     private CancellationTokenSource? _tempUpdateCts;
+        private ConsoleDisplay? _displayRef;
 
     // Configurable cancel macro (falls back to M409)
     private string _cancelMacro = "M409";
@@ -489,6 +497,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await base.OnInitializedAsync();
         try
         {
             // Load cancel macro from config (Macros:CancelPrint) with fallback
@@ -549,6 +558,23 @@
             // Start periodic temperature updates
             _tempUpdateCts = new CancellationTokenSource();
             _ = UpdateTemperaturesPeriodicAsync(_tempUpdateCts.Token);
+                // Kick off a synchronous reprint info load first so the UI updates quickly
+                try
+                {
+                    if (PrinterApi != null)
+                    {
+                        var info = await PrinterApi.GetReprintInfoAsync();
+                        if (info != null)
+                        {
+                            _reprintLastFileName = info.LastCompletedFilename ?? info.CurrentFilename;
+                            _isPrinting = info.IsPrinting;
+                            _isPrintingInProgress = info.IsPrintingInProgress;
+                            _isErrorState = info.IsError;
+                        }
+                    }
+                }
+                catch { }
+                _ = UpdateReprintInfoPeriodicAsync(_tempUpdateCts.Token);
         }
         catch (Exception ex)
         {
@@ -574,6 +600,33 @@
                     _currentToolTemp = toolTemp;
                     _currentBedTemp = bedTemp;
                     await InvokeAsync(StateHasChanged);
+                }
+                catch { }
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+        }
+    }
+
+    private async Task UpdateReprintInfoPeriodicAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && !_disposed)
+        {
+            try
+            {
+                await Task.Delay(3000, ct);
+                if (ct.IsCancellationRequested || _disposed) break;
+                try
+                {
+                    var info = await PrinterApi.GetReprintInfoAsync(ct);
+                    if (info != null)
+                    {
+                        _reprintLastFileName = info.LastCompletedFilename ?? info.CurrentFilename;
+                        _isPrinting = info.IsPrinting;
+                        _isPrintingInProgress = info.IsPrintingInProgress;
+                        _isErrorState = info.IsError;
+                        await InvokeAsync(StateHasChanged);
+                    }
                 }
                 catch { }
             }
@@ -629,7 +682,7 @@
             if (_autoScroll)
             {
                 await Task.Delay(10);
-                await ScrollToBottomAsync();
+                if (!_minimized) await ScrollToBottomAsync();
             }
         });
     }
@@ -643,7 +696,7 @@
     {
         try
         {
-            await JS.InvokeVoidAsync("scrollToPositionById", "popoutConsoleLines", _consoleFlipped ? "top" : "bottom");
+            await JS.InvokeVoidAsync("psScrollToPositionWithRetry", "popoutConsoleLines", _consoleFlipped ? "top" : "bottom", 6, 30);
         }
         catch { }
     }
@@ -658,6 +711,7 @@
         {
             await Task.Delay(10);
             await ScrollToBottomAsync();
+            try { await JS.InvokeVoidAsync("psForceScroll", "popoutConsoleLines", _consoleFlipped ? "top" : "bottom", 120); } catch { }
         }
     }
 
@@ -669,8 +723,11 @@
         // If auto-scroll is enabled, adjust scroll to the appropriate end after flipping
         if (_autoScroll)
         {
-            await Task.Delay(10);
+            // Refresh watcher so the flip state and computed styles are correct
+            try { if (_displayRef != null) await _displayRef.RefreshWatchAsync(); } catch { }
+            await Task.Delay(150);
             await ScrollToBottomAsync();
+            try { await JS.InvokeVoidAsync("psForceScroll", "popoutConsoleLines", _consoleFlipped ? "top" : "bottom", 120); } catch { }
         }
     }
 
@@ -784,6 +841,44 @@
         catch (Exception ex)
         {
             await ShowToastAsync($"Error: {ex.Message}", "error");
+        }
+    }
+
+    private async Task ReprintLast()
+    {
+        if (string.IsNullOrWhiteSpace(_reprintLastFileName))
+        {
+            await ShowToastAsync("No previous job available to reprint", "warning");
+            return;
+        }
+        if (!_isErrorState)
+        {
+            await ShowToastAsync("Printer is currently printing", "warning");
+            return;
+        }
+        try
+        {
+            _isReprintBusy = true;
+            StateHasChanged();
+            var res = await PrinterApi.ReprintLastAsync();
+            if (res?.Success ?? false)
+            {
+                await ShowToastAsync($"Reprint started: {_reprintLastFileName}", "success");
+            }
+            else
+            {
+                var err = res?.Error ?? res?.Message ?? "Failed to start reprint";
+                await ShowToastAsync(err, "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "error");
+        }
+        finally
+        {
+            _isReprintBusy = false;
+            StateHasChanged();
         }
     }
 

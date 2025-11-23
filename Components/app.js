@@ -70,15 +70,19 @@ window.psScrollToBottom = function(elementId){
     try{
         const el = document.getElementById(elementId);
         if(!el) return;
-        // Use requestAnimationFrame and scroll the last child into view when possible;
-        // this is more reliable when Blazor updates the DOM and element heights change.
+        // Use requestAnimationFrame and directly manipulate the element scrollTop
+        // to avoid any implicit scrolling of the document/window caused by
+        // element.scrollIntoView.
         requestAnimationFrame(() => {
-            const last = el.lastElementChild;
-            if (last && typeof last.scrollIntoView === 'function') {
-                last.scrollIntoView({ block: 'end', inline: 'nearest' });
-            } else {
-                el.scrollTop = el.scrollHeight;
-            }
+            try {
+                console.log('[psScroll] scrolling to bottom', elementId);
+                // Scroll to the visual end; prefer scrollTo for consistent behavior
+                if (typeof el.scrollTo === 'function') {
+                    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+                } else {
+                    el.scrollTop = el.scrollHeight;
+                }
+            } catch(e) { /* ignore */ }
         });
     }catch(e){ /* ignore */ }
 };
@@ -89,12 +93,19 @@ window.psScrollToTop = function(elementId){
         const el = document.getElementById(elementId);
         if(!el) return;
         requestAnimationFrame(() => {
-            const first = el.firstElementChild;
-            if (first && typeof first.scrollIntoView === 'function') {
-                first.scrollIntoView({ block: 'start', inline: 'nearest' });
-            } else {
-                el.scrollTop = 0;
-            }
+            try {
+                const style = window.getComputedStyle(el);
+                const dir = style && style.flexDirection ? style.flexDirection : '';
+                const isReverse = dir.indexOf('reverse') !== -1;
+                console.log('[psScroll] scrolling to top', elementId, { flexDirection: dir, computedIsReverse: isReverse });
+                // If container uses column-reverse, invert top/bottom semantics
+                if (isReverse) {
+                    // Visual top corresponds to DOM end
+                    el.scrollTop = el.scrollHeight;
+                } else {
+                    el.scrollTop = 0;
+                }
+            } catch(e) { /* ignore */ }
         });
     }catch(e){ /* ignore */ }
 };
@@ -111,25 +122,26 @@ window.psScrollToPositionWithRetry = function(elementId, position, attempts = 6,
         const doScroll = () => {
             try {
                 const info = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, children: el.children.length };
-                console.debug('[psScroll] doScroll', position, info);
-                if (position === 'top') {
-                    const first = el.firstElementChild;
-                    if (first && typeof first.scrollIntoView === 'function') {
-                        first.scrollIntoView({ block: 'start', inline: 'nearest' });
-                        console.debug('[psScroll] scrolled first child into view');
-                    } else {
-                        el.scrollTop = 0;
-                        console.debug('[psScroll] set scrollTop=0');
-                    }
+                const style = window.getComputedStyle(el);
+                const dir = style && style.flexDirection ? style.flexDirection : '';
+                const isReverse = dir.indexOf('reverse') !== -1;
+                console.debug('[psScroll] doScroll', position, info, { flexDirection: dir, isReverse });
+                // If we are using a reversed flex-direction, invert requested position.
+                let resolved = position;
+                if (isReverse) {
+                    resolved = (position === 'top') ? 'bottom' : 'top';
+                }
+                if (resolved === 'top') {
+                    el.scrollTop = 0;
+                    console.debug('[psScroll] set scrollTop=0 (resolved top)');
                 } else {
-                    const last = el.lastElementChild;
-                    if (last && typeof last.scrollIntoView === 'function') {
-                        last.scrollIntoView({ block: 'end', inline: 'nearest' });
-                        console.debug('[psScroll] scrolled last child into view');
+                    // Try to scroll to the DOM end and ensure real final position is visible
+                    if (typeof el.scrollTo === 'function') {
+                        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
                     } else {
-                        el.scrollTop = el.scrollHeight;
-                        console.debug('[psScroll] set scrollTop=scrollHeight');
+                        el.scrollTop = el.scrollHeight - el.clientHeight;
                     }
+                    console.debug('[psScroll] set scrollTop=scrollHeight (resolved bottom)', el.scrollHeight, el.clientHeight);
                 }
             } catch (e) { console.error('[psScroll] doScroll error', e); }
         };
@@ -157,7 +169,13 @@ window.psForceScroll = function(elementId, position, delayMs = 100){
             try {
                 const el = document.getElementById(elementId);
                 if(!el) return;
-                if(position === 'top'){
+                const style = window.getComputedStyle(el);
+                const dir = style && style.flexDirection ? style.flexDirection : '';
+                const isReverse = dir.indexOf('reverse') !== -1;
+                // If using reverse, invert semantics
+                let resolved = position;
+                if (isReverse) resolved = (position === 'top') ? 'bottom' : 'top';
+                if(resolved === 'top'){
                     if (typeof el.scrollTo === 'function') {
                         el.scrollTo({ top: 0, behavior: 'auto' });
                     } else {
@@ -168,7 +186,7 @@ window.psForceScroll = function(elementId, position, delayMs = 100){
                     if (typeof el.scrollTo === 'function') {
                         el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
                     } else {
-                        el.scrollTop = el.scrollHeight;
+                        el.scrollTop = el.scrollHeight - el.clientHeight;
                     }
                     console.debug('[psForceScroll] scrolled bottom', elementId, { scrollHeight: el.scrollHeight });
                 }
@@ -184,7 +202,14 @@ window.scrollToBottom = function(elementRef){
         if(elementRef && elementRef.id){
             const el = document.getElementById(elementRef.id);
             if(el){
-                el.scrollTop = el.scrollHeight;
+                const style = window.getComputedStyle(el);
+                const dir = style && style.flexDirection ? style.flexDirection : '';
+                const isReverse = dir.indexOf('reverse') !== -1;
+                if(isReverse){
+                    el.scrollTop = 0;
+                } else {
+                    el.scrollTop = el.scrollHeight - el.clientHeight;
+                }
             }
         }
     }catch(e){ /* ignore */ }
@@ -197,10 +222,15 @@ window.scrollToPosition = function(elementRef, position){
         if(elementRef && elementRef.id){
             const el = document.getElementById(elementRef.id);
             if(el){
-                if(position === 'top'){
+                const style = window.getComputedStyle(el);
+                const dir = style && style.flexDirection ? style.flexDirection : '';
+                const isReverse = dir.indexOf('reverse') !== -1;
+                let resolved = position;
+                if (isReverse) resolved = (position === 'top') ? 'bottom' : 'top';
+                if(resolved === 'top'){
                     el.scrollTop = 0;
-                } else if(position === 'bottom'){
-                    el.scrollTop = el.scrollHeight;
+                } else if(resolved === 'bottom'){
+                    el.scrollTop = el.scrollHeight - el.clientHeight;
                 }
             }
         }
@@ -212,10 +242,15 @@ window.scrollToPositionById = function(elementId, position){
     try{
         const el = document.getElementById(elementId);
         if(!el) return;
-        if(position === 'top'){
+        const style = window.getComputedStyle(el);
+        const dir = style && style.flexDirection ? style.flexDirection : '';
+        const isReverse = dir.indexOf('reverse') !== -1;
+        let resolved = position;
+        if (isReverse) resolved = (position === 'top') ? 'bottom' : 'top';
+        if(resolved === 'top'){
             el.scrollTop = 0;
-        } else if(position === 'bottom'){
-            el.scrollTop = el.scrollHeight;
+        } else if(resolved === 'bottom'){
+            el.scrollTop = el.scrollHeight - el.clientHeight;
         }
     }catch(e){ /* ignore */ }
 };
@@ -227,6 +262,16 @@ window.getScrollHeightById = function(elementId){
         if(!el) return 0;
         return el.scrollHeight || 0;
     }catch(e){ return 0; }
+};
+
+// Read a computed style property on an element by id
+window.getComputedStylePropertyById = function(elementId, prop) {
+    try {
+        const el = document.getElementById(elementId);
+        if (!el) return null;
+        const style = window.getComputedStyle(el);
+        return style && style[prop] ? style[prop] : null;
+    } catch(e) { return null; }
 };
 
 // Watch a console element with a MutationObserver to perform reliable auto-scrolling.
@@ -247,17 +292,29 @@ window.psWatchConsole = function(elementId, autoScroll = true, flipLayout = fals
             try { window._psWatchers[elementId].observer.disconnect(); } catch {}
         }
 
+        const style = window.getComputedStyle(el);
+        const flexDirection = style && style.flexDirection ? style.flexDirection : '';
         const state = {
             autoScroll: !!autoScroll,
             flipLayout: !!flipLayout,
-            observer: null
+            observer: null,
+            flexDirection: flexDirection
         };
+            // Do not react to the immediate mutation that happens during DOM flips; wait for stable state
+            state.ignoreNextMutation = false;
+        console.debug('[psWatch] computed flexDirection', { elementId, flexDirection });
 
         const callback = function(mutationsList){
             try {
-                if(!state.autoScroll) return;
+                        if(!state.autoScroll) return;
+                        if(state.ignoreNextMutation){
+                            state.ignoreNextMutation = false;
+                            console.debug('[psWatch] ignored initial mutation after watch update', { elementId });
+                            return;
+                        }
                 // When content changes, scroll to the appropriate end.
                 const pos = state.flipLayout ? 'top' : 'bottom';
+                console.debug('[psWatch] mutation', { elementId, pos, flipLayout: state.flipLayout, flexDirection: state.flexDirection });
                 // Use the robust retry scroller
                 window.psScrollToPositionWithRetry(elementId, pos, 6, 40);
             } catch (e) { console.error('[psWatch] mutation handler error', e); }
@@ -273,7 +330,7 @@ window.psWatchConsole = function(elementId, autoScroll = true, flipLayout = fals
         const initialPos = state.flipLayout ? 'top' : 'bottom';
         window.psScrollToPositionWithRetry(elementId, initialPos, 6, 40);
 
-        console.debug('[psWatch] watching', { elementId, children: el.children.length });
+        console.debug('[psWatch] watching', { elementId, children: el.children.length, flexDirection: state.flexDirection, flipLayout: state.flipLayout });
     } catch (e) {
         console.error('[psWatch] error', e);
     }
@@ -287,8 +344,22 @@ window.psUpdateWatch = function(elementId, autoScroll = true, flipLayout = false
             // Not registered yet — try to register
             return window.psWatchConsole(elementId, autoScroll, flipLayout);
         }
+        const previousFlip = w.flipLayout;
         w.autoScroll = !!autoScroll;
         w.flipLayout = !!flipLayout;
+        // Mark the watcher to ignore the next mutation to avoid race conditions during DOM flip
+        if (previousFlip !== w.flipLayout) {
+            w.ignoreNextMutation = true;
+            console.debug('[psWatch] set ignoreNextMutation due to flip change', { elementId, previousFlip, newFlip: w.flipLayout });
+        }
+        try {
+            const el = document.getElementById(elementId);
+            if (el) {
+                const style = window.getComputedStyle(el);
+                w.flexDirection = style && style.flexDirection ? style.flexDirection : '';
+                console.debug('[psWatch] update computed flexDirection', { elementId, flexDirection: w.flexDirection, flipLayout: w.flipLayout });
+            }
+        } catch (e) { /* ignore */ }
         // If autoScroll enabled, perform an immediate scroll to sync state
         if(w.autoScroll){
             const pos = w.flipLayout ? 'top' : 'bottom';

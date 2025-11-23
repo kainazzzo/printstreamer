@@ -46,6 +46,10 @@ internal static class MoonrakerPoller
     private static PrinterState? _currentPrinterState;
     public static PrinterState? CurrentPrinterState => _currentPrinterState;
 
+    // Last completed job filename (nullable). Updated when a print finishes.
+    private static string? _lastCompletedFilename;
+    public static string? LastCompletedFilename => _lastCompletedFilename;
+
     // Camera simulation and blackout logic is handled only by WebCamManager.
 
         /// <summary>
@@ -498,6 +502,8 @@ internal static class MoonrakerPoller
                             {
                                 lastCompletedJobFilename = finishedJobFilename;
                             }
+                            // Store last completed job filename in a static accessible property
+                            if (!string.IsNullOrWhiteSpace(finishedJobFilename)) _lastCompletedFilename = finishedJobFilename;
                             lastJobFilename = null;
 
                             jobMissingSince = null;

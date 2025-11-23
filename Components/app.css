@@ -507,6 +507,18 @@ textarea {
     background: #000;
 }
 
+/* Console window styling: ensure flip class can reverse visual order */
+.console-window {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto; /* ensure container allows vertical scroll */
+    min-height: 0; /* let flex children shrink as needed */
+}
+.console-window.flipped {
+    flex-direction: column-reverse;
+}
+
 /* Stream layout responsiveness: stack panels on narrow screens */
 .stream-container {
     flex-direction: row;

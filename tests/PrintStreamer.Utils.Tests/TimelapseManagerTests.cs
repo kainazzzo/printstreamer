@@ -294,6 +294,32 @@ namespace PrintStreamer.Utils.Tests
         }
 
         [TestMethod]
+        public void NotifyPrinterState_PausesAndResumesSession()
+        {
+            // Arrange
+            var sessionName = "pause_session";
+            var session = _sut.StartTimelapseAsync(sessionName).GetAwaiter().GetResult();
+            Assert.IsNotNull(session);
+
+            // Act - pause
+            _sut.NotifyPrinterState(session, "paused");
+
+            // Assert - session should be paused when inspecting GetAllTimelapses
+            var all = _sut.GetAllTimelapses().ToList();
+            var info = all.FirstOrDefault(t => t.Name == session);
+            Assert.IsNotNull(info);
+            Assert.IsTrue(info.IsActive);
+            Assert.IsTrue(info.IsPaused, "Session should be flagged as paused after NotifyPrinterState paused");
+
+            // Act - resume
+            _sut.NotifyPrinterState(session, "printing");
+            all = _sut.GetAllTimelapses().ToList();
+            info = all.FirstOrDefault(t => t.Name == session);
+            Assert.IsNotNull(info);
+            Assert.IsFalse(info.IsPaused, "Session should not be paused after notifying printing state");
+        }
+
+        [TestMethod]
         public void StartTimelapse_AfterRestart_ResumesSameTimelapseForSameJob()
         {
             // Arrange

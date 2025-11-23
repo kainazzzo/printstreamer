@@ -197,6 +197,39 @@ namespace PrintStreamer.Services
                 return null;
             }
         }
+
+        /// <summary>
+        /// Get reprint info: whether the printer is currently printing and the last completed filename
+        /// </summary>
+        public async Task<ReprintInfoResponse?> GetReprintInfoAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                return await _http.GetFromJsonAsync<ReprintInfoResponse>($"/api/printer/reprint/info", ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting reprint info");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Request to reprint the last completed job (best-effort server action)
+        /// </summary>
+        public async Task<ApiResponse?> ReprintLastAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var response = await _http.PostAsync($"/api/printer/reprint", null, ct);
+                return await response.Content.ReadFromJsonAsync<ApiResponse>(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error reprinting last job");
+                return null;
+            }
+        }
     }
 
     // Response DTOs
@@ -214,8 +247,13 @@ namespace PrintStreamer.Services
 
     public class ApiResponse
     {
+        [System.Text.Json.Serialization.JsonPropertyName("success")]
         public bool Success { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("message")]
         public string? Message { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("error")]
         public string? Error { get; set; }
         public int? Temperature { get; set; }
         public string? Preset { get; set; }
@@ -279,5 +317,21 @@ namespace PrintStreamer.Services
         public bool Connected { get; set; }
         public string? LastMessage { get; set; }
         public DateTime Timestamp { get; set; }
+    }
+
+    public class ReprintInfoResponse
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("isPrinting")]
+        public bool IsPrinting { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("lastCompletedFilename")]
+        public string? LastCompletedFilename { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("currentFilename")]
+        public string? CurrentFilename { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("isPrintingInProgress")]
+        public bool IsPrintingInProgress { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("isError")]
+        public bool IsError { get; set; }
     }
 }
