@@ -292,9 +292,21 @@ namespace PrintStreamer.Timelapse
                     Console.WriteLine($"[TimelapseManager] Last-layer threshold reached for session {sessionName} ({currentLayer}/{totalLayers}, offset={layerOffset}) - finalizing timelapse.");
                     try
                     {
-                        // Create video synchronously via existing StopTimelapseAsync to ensure proper cleanup
-                        var createdVideo = await StopTimelapseAsync(sessionName);
-                        return createdVideo;
+                        var autoFinalize = _config.GetValue<bool?>("Timelapse:AutoFinalize") ?? true;
+                        if (autoFinalize)
+                        {
+                            var createdVideo = await StopTimelapseAsync(sessionName);
+                            return createdVideo;
+                        }
+                        else
+                        {
+                            // Signal to callers that we reached the last-layer threshold: stop capturing but do not create video here.
+                            session.IsStopped = true;
+                            // Optionally set an explicit flag for callers:
+                            // session.LastLayerReached = true;
+                            if (_verboseLogs) Console.WriteLine($"[TimelapseManager] Threshold reached for {sessionName}; AutoFinalize disabled - caller must call StopTimelapseAsync.");
+                            return null;
+                        }
                     }
                     catch (Exception ex)
                     {

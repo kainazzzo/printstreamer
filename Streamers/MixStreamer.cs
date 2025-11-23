@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -140,24 +141,56 @@ namespace PrintStreamer.Streamers
         {
             try
             {
-                if (_proc != null && !_proc.HasExited)
-                {
-                    _logger.LogInformation("[Video+Audio Mix] Stopping ffmpeg...");
-                    try
-                    {
-                        if (_proc.StartInfo.RedirectStandardInput)
-                        {
-                            _proc.StandardInput.WriteLine("q");
-                            _proc.StandardInput.Flush();
-                        }
-                    }
-                    catch { }
+                // Swap the process out so concurrent callers (Dispose/Stop) don't race.
+                var proc = Interlocked.Exchange(ref _proc, null);
+                if (proc == null) return;
 
-                    if (!_proc.WaitForExit(5000))
+                // Guard access to process state - HasExited may throw if not associated.
+                try
+                {
+                    if (proc.HasExited)
+                    {
+                        try { proc.Dispose(); } catch { }
+                        return;
+                    }
+                }
+                catch
+                {
+                    try { proc.Dispose(); } catch { }
+                    return;
+                }
+
+                _logger.LogInformation("[Video+Audio Mix] Stopping ffmpeg...");
+                try
+                {
+                    if (proc.StartInfo != null && proc.StartInfo.RedirectStandardInput)
+                    {
+                        try
+                        {
+                            proc.StandardInput.WriteLine("q");
+                            proc.StandardInput.Flush();
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    if (!proc.WaitForExit(5000))
                     {
                         _logger.LogWarning("[Video+Audio Mix] ffmpeg did not exit gracefully, killing...");
-                        _proc.Kill(entireProcessTree: true);
+                        try { proc.Kill(entireProcessTree: true); } catch { }
                     }
+                }
+                catch (Exception exInner)
+                {
+                    _logger.LogWarning(exInner, "[Video+Audio Mix] Error waiting for/terminating ffmpeg");
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                }
+                finally
+                {
+                    try { proc.Dispose(); } catch { }
                 }
             }
             catch (Exception ex)

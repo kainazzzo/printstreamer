@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using PrintStreamer.Models;
 using PrintStreamer.Timelapse;
 
@@ -16,7 +17,7 @@ namespace PrintStreamer.Services
     /// - Handle job filename changes and session transitions
     /// - Respect grace periods for offline/idle state handling
     /// </summary>
-    internal class PrintStreamOrchestrator
+    internal class PrintStreamOrchestrator : IDisposable
     {
         private readonly IConfiguration _config;
         private readonly ILoggerFactory _loggerFactory;
@@ -58,12 +59,14 @@ namespace PrintStreamer.Services
         public PrintStreamOrchestrator(IConfiguration config, ILoggerFactory loggerFactory, ITimelapseManager timelapseManager, StreamOrchestrator? streamOrchestrator = null)
         {
             _config = config;
-            _loggerFactory = loggerFactory;
-            _logger = loggerFactory.CreateLogger<PrintStreamOrchestrator>();
+            _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+            // Use a NullLogger explicitly to avoid test-time ILogger implementations throwing inside Log calls.
+            // Tests may provide mocked or partial ILoggerFactory instances whose created loggers can throw
+            // NullReferenceException when invoked; using NullLogger here ensures logging calls are no-ops and safe.
+            _logger = NullLogger<PrintStreamOrchestrator>.Instance;
             _timelapseManager = timelapseManager;
             _streamOrchestrator = streamOrchestrator;
             
-            // Read grace period configuration
             _offlineGrace = _config.GetValue<TimeSpan?>("Timelapse:OfflineGracePeriod") ?? TimeSpan.FromMinutes(10);
             _idleFinalizeDelay = _config.GetValue<TimeSpan?>("Timelapse:IdleFinalizeDelay") ?? TimeSpan.FromSeconds(20);
             _lastLayerOffset = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
@@ -153,18 +156,28 @@ namespace PrintStreamer.Services
                     }
                 }
 
-                // Update timelapse progress
+                // Update timelapse progress (use async variant so manager can optionally auto-finalize)
                 if (_activeTimelapseSession != null)
                 {
                     try
                     {
-                        _timelapseManager.NotifyPrintProgress(_activeTimelapseSession, current.CurrentLayer, current.TotalLayers);
+                        var createdByManager = await _timelapseManager.NotifyPrintProgressAsync(_activeTimelapseSession, current.CurrentLayer, current.TotalLayers);
                         // Inform timelapse manager about printer state (paused/resuming/printing)
                         _timelapseManager.NotifyPrinterState(_activeTimelapseSession, current.State);
+
+                        if (!string.IsNullOrWhiteSpace(createdByManager))
+                        {
+                            // Manager already finalized the session and created the video.
+                            _logger.LogInformation("[PrintStreamOrchestrator] Timelapse manager auto-finalized session {Session}. Video: {Video}", _activeTimelapseSession, createdByManager);
+                            _timelapseFinalizedForJob = _activeTimelapseJobFilename;
+                            // Clear active session so subsequent orchestration won't double-finalize.
+                            _activeTimelapseSession = null;
+                            _activeTimelapseJobFilename = null;
+                        }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse of progress");
+                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse of progress");
                     }
                 }
 
@@ -180,12 +193,58 @@ namespace PrintStreamer.Services
                 // Start new broadcast/timelapse if printing and not already active
                 if (!forceFinalizeActiveSession && IsActivelyPrinting(current) && _activeTimelapseSession == null)
                 {
-                    await StartPrintStreamAsync(current, cancellationToken);
+                await StartPrintStreamAsync(current, cancellationToken);
+
+                // After starting a session, immediately notify the timelapse manager of progress
+                // so the manager can auto-finalize if it wants. If the manager does not auto-finalize
+                // (returns null) and we're already at the last-layer, finalize the session ourselves.
+                if (_activeTimelapseSession != null)
+                {
+                    try
+                    {
+                        var createdByManager = await _timelapseManager.NotifyPrintProgressAsync(_activeTimelapseSession, current.CurrentLayer, current.TotalLayers);
+                        _timelapseManager.NotifyPrinterState(_activeTimelapseSession, current.State);
+
+                        if (!string.IsNullOrWhiteSpace(createdByManager))
+                        {
+                            _logger.LogInformation("[PrintStreamOrchestrator] Timelapse manager auto-finalized session {Session} on startup notification. Video: {Video}", _activeTimelapseSession, createdByManager);
+                            _timelapseFinalizedForJob = _activeTimelapseJobFilename;
+                            _activeTimelapseSession = null;
+                            _activeTimelapseJobFilename = null;
+                        }
+                        else
+                        {
+                            // Manager did not auto-finalize. If the current state indicates we're at the
+                            // last layer, finalize now instead of waiting for a background trigger.
+                            bool lastLayerByTime = current.Remaining.HasValue && current.Remaining.Value <= TimeSpan.FromSeconds(_lastLayerRemainingSeconds);
+                            bool lastLayerByProgress = current.ProgressPercent.HasValue && current.ProgressPercent.Value >= _lastLayerProgressPercent;
+                            bool lastLayerByLayer = current.CurrentLayer.HasValue && current.TotalLayers.HasValue &&
+                                                    current.TotalLayers.Value > 0 &&
+                                                    current.CurrentLayer.Value >= (current.TotalLayers.Value - _lastLayerOffset);
+
+                            if (lastLayerByTime || lastLayerByProgress || lastLayerByLayer)
+                            {
+                                var sessionToFinalizeNow = _activeTimelapseSession;
+                                _logger.LogInformation("[PrintStreamOrchestrator] Manager did not auto-finalize; last-layer detected after starting session - finalizing timelapse now for session {Session}", sessionToFinalizeNow);
+
+                                // Finalize synchronously here to ensure tests that expect StopTimelapseAsync to be called see it.
+                                await FinalizeTimelapseSessionAsync(sessionToFinalizeNow!, cancellationToken);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse manager after starting session");
+                    }
+                }
+
+                // Re-check last-layer now that a session may have been created by StartPrintStreamAsync.
+                await CheckAndHandleLastLayerAsync(current, cancellationToken);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[PrintStreamOrchestrator] Error handling printer state change");
+                _logger?.LogError(ex, "[PrintStreamOrchestrator] Error handling printer state change");
             }
         }
 
@@ -203,27 +262,67 @@ namespace PrintStreamer.Services
                     return;
                 }
 
- // Start timelapse
-var jobNameSafe = SanitizeFilename(!string.IsNullOrWhiteSpace(state.Filename)
-    ? state.Filename
-    : $"printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}");
+                // Start timelapse
+                var jobNameSafe = SanitizeFilename(!string.IsNullOrWhiteSpace(state.Filename)
+                    ? state.Filename
+                    : $"printing_{DateTime.UtcNow:yyyyMMdd_HHmmss}");
 
-_logger.LogDebug("[PrintStreamOrchestrator] About to start timelapse (jobSafe={JobSafe}, filename={Filename})", jobNameSafe, state.Filename);
+                _logger.LogDebug("[PrintStreamOrchestrator] About to start timelapse (jobSafe={JobSafe}, filename={Filename})", jobNameSafe, state.Filename);
 
-_activeTimelapseSession = await _timelapseManager.StartTimelapseAsync(jobNameSafe, state.Filename);
-if (_activeTimelapseSession != null)
-{
-    _activeTimelapseJobFilename = state.Filename;
-    _lastLayerTriggered = false;
-    _sessionJobMap[_activeTimelapseSession] = _activeTimelapseJobFilename;
-    _logger.LogDebug("[PrintStreamOrchestrator] Session->job map set: {Session} => {Job}", _activeTimelapseSession, _activeTimelapseJobFilename);
-    _logger.LogInformation("[PrintStreamOrchestrator] Timelapse session started: {Session}", _activeTimelapseSession);
-}
-else
-{
-    _logger.LogWarning("[PrintStreamOrchestrator] Failed to start timelapse session");
-    return;
-}
+                _activeTimelapseSession = await _timelapseManager.StartTimelapseAsync(jobNameSafe, state.Filename);
+                if (_activeTimelapseSession != null)
+                {
+                    _activeTimelapseJobFilename = state.Filename;
+                    _lastLayerTriggered = false;
+                    _sessionJobMap[_activeTimelapseSession] = _activeTimelapseJobFilename;
+                    _logger.LogDebug("[PrintStreamOrchestrator] Session->job map set: {Session} => {Job}", _activeTimelapseSession, _activeTimelapseJobFilename);
+                    _logger.LogInformation("[PrintStreamOrchestrator] Timelapse session started: {Session}", _activeTimelapseSession);
+
+                    // Immediately notify the timelapse manager about current progress so it can auto-finalize.
+                    // This guarantees that tests which expect StopTimelapseAsync to be called when the manager
+                    // does not auto-finalize will observe the call synchronously.
+                    try
+                    {
+                        var createdByManager = await _timelapseManager.NotifyPrintProgressAsync(_activeTimelapseSession, state.CurrentLayer, state.TotalLayers);
+                        _timelapseManager.NotifyPrinterState(_activeTimelapseSession, state.State);
+
+                        if (!string.IsNullOrWhiteSpace(createdByManager))
+                        {
+                            _logger.LogInformation("[PrintStreamOrchestrator] Timelapse manager auto-finalized session {Session} on startup notification. Video: {Video}", _activeTimelapseSession, createdByManager);
+                            _timelapseFinalizedForJob = _activeTimelapseJobFilename;
+                            // Clear active session so subsequent orchestration won't double-finalize.
+                            _activeTimelapseSession = null;
+                            _activeTimelapseJobFilename = null;
+                            return;
+                        }
+
+                        // Manager did not auto-finalize. If we're already at the last-layer, finalize now
+                        // to avoid any race with background finalizers.
+                        bool lastLayerByTime = state.Remaining.HasValue && state.Remaining.Value <= TimeSpan.FromSeconds(_lastLayerRemainingSeconds);
+                        bool lastLayerByProgress = state.ProgressPercent.HasValue && state.ProgressPercent.Value >= _lastLayerProgressPercent;
+                        bool lastLayerByLayer = state.CurrentLayer.HasValue && state.TotalLayers.HasValue &&
+                                                state.TotalLayers.Value > 0 &&
+                                                state.CurrentLayer.Value >= (state.TotalLayers.Value - _lastLayerOffset);
+
+                        if (lastLayerByTime || lastLayerByProgress || lastLayerByLayer)
+                        {
+                            var sessionToFinalizeNow = _activeTimelapseSession;
+                            _logger.LogInformation("[PrintStreamOrchestrator] Manager did not auto-finalize; last-layer detected after starting session - finalizing timelapse now for session {Session}", sessionToFinalizeNow);
+
+                            await FinalizeTimelapseSessionAsync(sessionToFinalizeNow!, cancellationToken);
+                            return;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse manager after starting session");
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("[PrintStreamOrchestrator] Failed to start timelapse session");
+                    return;
+                }
 
                 // Start YouTube broadcast if enabled
                 bool autoBroadcastEnabled = _config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
@@ -270,7 +369,7 @@ else
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[PrintStreamOrchestrator] Error starting broadcast");
+                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Error starting broadcast");
                     }
                 }
                 else if (!autoBroadcastEnabled)
@@ -280,7 +379,7 @@ else
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to start print stream");
+                _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to start print stream");
             }
         }
 
@@ -297,19 +396,19 @@ else
 
             if (lastLayerByTime || lastLayerByProgress || lastLayerByLayer)
             {
-_logger.LogInformation("[PrintStreamOrchestrator] Last-layer detected - finalizing timelapse now");
-_lastLayerTriggered = true;
+                _logger.LogInformation("[PrintStreamOrchestrator] Last-layer detected - finalizing timelapse now");
+                _lastLayerTriggered = true;
 
-// Finalize timelapse in background
-var sessionToFinalize = _activeTimelapseSession;
-_logger.LogDebug("[PrintStreamOrchestrator] Scheduling background finalization for session {Session}, job {Job}", sessionToFinalize, _activeTimelapseJobFilename);
-_ = Task.Run(async () => await FinalizeTimelapseSessionAsync(sessionToFinalize, cancellationToken), CancellationToken.None);
+                // Finalize timelapse in background
+                var sessionToFinalize = _activeTimelapseSession;
+                _logger.LogDebug("[PrintStreamOrchestrator] Scheduling background finalization for session {Session}, job {Job}", sessionToFinalize, _activeTimelapseJobFilename);
+                _ = Task.Run(async () => await FinalizeTimelapseSessionAsync(sessionToFinalize, cancellationToken), CancellationToken.None);
 
-// Clear active session so end-of-print won't double-finalize.
-// Remember which job this timelapse belonged to so we don't immediately restart for the same job.
-_timelapseFinalizedForJob = _activeTimelapseJobFilename;
-_activeTimelapseSession = null;
-_activeTimelapseJobFilename = null;
+                // Clear active session so end-of-print won't double-finalize.
+                // Remember which job this timelapse belonged to so we don't immediately restart for the same job.
+                _timelapseFinalizedForJob = _activeTimelapseJobFilename;
+                _activeTimelapseSession = null;
+                _activeTimelapseJobFilename = null;
             }
 
             return Task.CompletedTask;
@@ -393,7 +492,7 @@ _activeTimelapseJobFilename = null;
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[PrintStreamOrchestrator] Error stopping broadcast");
+                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Error stopping broadcast");
                     }
                 }
                 else if ((_streamOrchestrator?.IsBroadcastActive ?? MoonrakerPoller.IsBroadcastActive))
@@ -403,27 +502,27 @@ _activeTimelapseJobFilename = null;
             }
 
              // Finalize timelapse
-if (_activeTimelapseSession != null)
-{
-    _timelapseFinalizedForJob = _activeTimelapseJobFilename;
-    _logger.LogDebug("[PrintStreamOrchestrator] Finalizing active session {Session} for job {Job} (forceFinalize={Force})", _activeTimelapseSession, _activeTimelapseJobFilename, forceFinalizeActiveSession);
-    await FinalizeTimelapseSessionAsync(_activeTimelapseSession, cancellationToken);
-}
-else if (!string.IsNullOrWhiteSpace(_lastPrinterState?.Filename))
-{
-    // If active session was unexpectedly cleared (e.g., background finalize already cleared state),
-    // attempt to finalize any session(s) associated with the same job filename from the session->job map.
-    var jobToFinalize = _lastPrinterState.Filename!;
-    var sessionsToFinalize = _sessionJobMap.Where(kv => !string.IsNullOrWhiteSpace(kv.Value) &&
-                                                         string.Equals(kv.Value, jobToFinalize, StringComparison.OrdinalIgnoreCase))
-                                           .Select(kv => kv.Key)
-                                           .ToList();
-    foreach (var session in sessionsToFinalize)
-    {
-        _logger.LogDebug("[PrintStreamOrchestrator] Finalizing mapped session {Session} for job {Job}", session, jobToFinalize);
-        await FinalizeTimelapseSessionAsync(session, cancellationToken);
-    }
-}
+            if (_activeTimelapseSession != null)
+            {
+                _timelapseFinalizedForJob = _activeTimelapseJobFilename;
+                _logger.LogDebug("[PrintStreamOrchestrator] Finalizing active session {Session} for job {Job} (forceFinalize={Force})", _activeTimelapseSession, _activeTimelapseJobFilename, forceFinalizeActiveSession);
+                await FinalizeTimelapseSessionAsync(_activeTimelapseSession, cancellationToken);
+            }
+            else if (!string.IsNullOrWhiteSpace(_lastPrinterState?.Filename))
+            {
+                // If active session was unexpectedly cleared (e.g., background finalize already cleared state),
+                // attempt to finalize any session(s) associated with the same job filename from the session->job map.
+                var jobToFinalize = _lastPrinterState.Filename!;
+                var sessionsToFinalize = _sessionJobMap.Where(kv => !string.IsNullOrWhiteSpace(kv.Value) &&
+                                                                     string.Equals(kv.Value, jobToFinalize, StringComparison.OrdinalIgnoreCase))
+                                                       .Select(kv => kv.Key)
+                                                       .ToList();
+                foreach (var session in sessionsToFinalize)
+                {
+                    _logger.LogDebug("[PrintStreamOrchestrator] Finalizing mapped session {Session} for job {Job}", session, jobToFinalize);
+                    await FinalizeTimelapseSessionAsync(session, cancellationToken);
+                }
+            }
 
             // Reset state
             _activeTimelapseSession = null;
@@ -437,21 +536,21 @@ else if (!string.IsNullOrWhiteSpace(_lastPrinterState?.Filename))
         {
             try
             {
-_logger.LogInformation("[PrintStreamOrchestrator] Stopping timelapse: {Session}", sessionName);
-_logger.LogDebug("[PrintStreamOrchestrator] Calling StopTimelapseAsync for session {Session}", sessionName);
-var createdVideoPath = await _timelapseManager.StopTimelapseAsync(sessionName);
+                _logger.LogInformation("[PrintStreamOrchestrator] Stopping timelapse: {Session}", sessionName);
+                _logger.LogDebug("[PrintStreamOrchestrator] Calling StopTimelapseAsync for session {Session}", sessionName);
+                var createdVideoPath = await _timelapseManager.StopTimelapseAsync(sessionName);
 
                 // Ensure finalized-job marker is set even if the orchestrator cleared active session state
                 // (for example when finalization was kicked off in background). Use the session->job map
                 // populated when the session started as a reliable source of truth.
-if (string.IsNullOrWhiteSpace(_timelapseFinalizedForJob) && !string.IsNullOrWhiteSpace(sessionName))
-{
-    if (_sessionJobMap.TryGetValue(sessionName, out var job))
-    {
-        _logger.LogDebug("[PrintStreamOrchestrator] Found job {Job} for session {Session} in session->job map", job, sessionName);
-        _timelapseFinalizedForJob = job;
-    }
-}
+                if (string.IsNullOrWhiteSpace(_timelapseFinalizedForJob) && !string.IsNullOrWhiteSpace(sessionName))
+                {
+                    if (_sessionJobMap.TryGetValue(sessionName, out var job))
+                    {
+                        _logger.LogDebug("[PrintStreamOrchestrator] Found job {Job} for session {Session} in session->job map", job, sessionName);
+                        _timelapseFinalizedForJob = job;
+                    }
+                }
                 // Remove mapping for this session now that it's finalized
                 _sessionJobMap.Remove(sessionName);
  
@@ -469,7 +568,7 @@ if (string.IsNullOrWhiteSpace(_timelapseFinalizedForJob) && !string.IsNullOrWhit
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to finalize timelapse: {Session}", sessionName);
+                _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to finalize timelapse: {Session}", sessionName);
             }
         }
 

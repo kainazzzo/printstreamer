@@ -128,7 +128,15 @@ namespace PrintStreamer.Utils.Tests
                 return Task.FromResult<string?>("/tmp/video.mp4");
             }
 
+            // Synchronous notify used by older tests
             public void NotifyPrintProgress(string? sessionName, int? currentLayer, int? totalLayers) { }
+
+            // Async variant expected by current ITimelapseManager; fake does not auto-finalize
+            public Task<string?> NotifyPrintProgressAsync(string? sessionName, int? currentLayer, int? totalLayers)
+            {
+                return Task.FromResult<string?>(null);
+            }
+
             public void NotifyPrinterState(string? sessionName, string? state) { LastStateNotified = state; }
         }
     }

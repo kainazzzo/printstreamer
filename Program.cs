@@ -1406,14 +1406,35 @@ if (serveEnabled)
 	{
 		try
 		{
-			var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
-			var filePath = Path.Combine(timelapseDir, filename);
+var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, name);
+var filePath = Path.Combine(timelapseDir, filename);
 
-			// Security check: ensure the file is within the timelapse directory
-			if (!filePath.StartsWith(timelapseDir) || !File.Exists(filePath))
-			{
-				return Results.NotFound();
-			}
+// Security check: ensure the file is within the timelapse directory
+try
+{
+    // Resolve absolute, normalized paths
+    var fullTimelapseDir = Path.GetFullPath(timelapseDir);
+    var fullFilePath = Path.GetFullPath(filePath);
+
+    // Ensure directory comparison doesn't match partial folder names by requiring a trailing separator
+    var dirPathWithSep = fullTimelapseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+    // Allow either a file within the directory or the directory itself (defensive)
+    if (!fullFilePath.StartsWith(dirPathWithSep, StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(fullFilePath, fullTimelapseDir, StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.NotFound();
+    }
+
+    if (!File.Exists(fullFilePath)) return Results.NotFound();
+
+    // Use the canonical full path from here on
+    filePath = fullFilePath;
+}
+catch
+{
+    return Results.NotFound();
+}
 
 			var contentType = filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg" :
 							 filename.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? "video/mp4" :

@@ -1580,6 +1580,17 @@ namespace PrintStreamer.Services
                     {
                         _logger.LogError(" - {Domain}/{Reason}: {Msg}", e.Domain, e.Reason, e.Message);
                     }
+
+                    // Treat invalid/redundant transition errors as successful end operations (idempotent)
+                    foreach (var e in gae.Error.Errors)
+                    {
+                        if (string.Equals(e.Reason, "redundantTransition", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(e.Reason, "invalidTransition", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogInformation("Received {Reason} while ending broadcast; treating as success.", e.Reason);
+                            return true;
+                        }
+                    }
                 }
             }
             else

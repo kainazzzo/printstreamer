@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 public class TimelapseService : IDisposable
 {
@@ -15,7 +16,7 @@ public class TimelapseService : IDisposable
 
     public TimelapseService(string mainFolder, string streamId, ILogger<TimelapseService> logger)
     {
-        _logger = logger;
+        _logger = logger ?? NullLogger<TimelapseService>.Instance;
         // mainFolder: base timelapse directory (configurable)
         // streamId: unique per stream/job (timestamp, job name, etc)
 
@@ -109,7 +110,7 @@ public class TimelapseService : IDisposable
     /// </summary>
     public TimelapseService(string mainFolder, string streamId, ILogger<TimelapseService> logger, bool reuseExisting)
     {
-        _logger = logger;
+        _logger = logger ?? NullLogger<TimelapseService>.Instance;
         Directory.CreateDirectory(mainFolder);
         var candidate = Path.Combine(mainFolder, streamId);
         OutputDir = candidate;
