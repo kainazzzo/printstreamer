@@ -428,7 +428,7 @@
                     </div>
                     <div style="display:flex;gap:6px;flex-direction:column;align-items:stretch;">
                         <button class="cancel-btn" @onclick="ConfirmCancel" title="Cancel current print">🛑 Cancel Print</button>
-                        <button class="preset-btn" @onclick="ReprintLast" disabled="@(!_isErrorState || string.IsNullOrWhiteSpace(_reprintLastFileName) || _isReprintBusy)" title="Reprint last completed job">🔁 Reprint</button>
+                        <button class="cancel-btn" @onclick="ReprintLast" disabled="@(!_isErrorState || string.IsNullOrWhiteSpace(_reprintLastFileName) || _isReprintBusy)" title="Reprint last completed job">🔁 Reprint</button>
                         @if (!string.IsNullOrWhiteSpace(_reprintLastFileName))
                         {
                             <div style="font-size:12px;color:#ccc;margin-top:6px;">Last/Current: @_reprintLastFileName</div>

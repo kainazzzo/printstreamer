@@ -174,14 +174,14 @@ namespace PrintStreamer.Services
                             var t = info.Tool0Temp.Value;
                             detailsList.Add($"Nozzle: {t.Actual?.ToString("F1") ?? "n/a"}°C / {t.Target?.ToString("F1") ?? "n/a"}°C");
                         }
-                        if (!string.IsNullOrWhiteSpace(info.FilamentType) || !string.IsNullOrWhiteSpace(info.FilamentColor) || !string.IsNullOrWhiteSpace(info.FilamentBrand))
+                        if (!string.IsNullOrWhiteSpace(info.FilamentBrand))
                         {
-                            var fil = $"Filament: {info.FilamentBrand ?? ""} {info.FilamentType ?? ""} {info.FilamentColor ?? ""}".Trim();
+                            var fil = $"Filament: {info.FilamentBrand ?? ""} {info.FilamentColor ?? ""}".Trim();
                             detailsList.Add(fil);
                         }
                         if (info.FilamentUsedMm.HasValue || info.FilamentTotalMm.HasValue)
                         {
-                            detailsList.Add($"Filament Used: {info.FilamentUsedMm?.ToString("F0") ?? "n/a"}mm / {info.FilamentTotalMm?.ToString("F0") ?? "n/a"}mm");
+                            detailsList.Add($"Used: {info.FilamentTotalMm?.ToString("F0") ?? "n/a"}mm");
                         }
                         if (detailsList.Count > 0)
                         {
