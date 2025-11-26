@@ -3,6 +3,7 @@
 @using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Routing
 @using Microsoft.AspNetCore.Components.Web
+@using Microsoft.AspNetCore.Components.Forms
 @implements IDisposable
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -94,6 +95,23 @@
       </div>
 
       <div>
+        <div class="section">
+          <h2>Upload</h2>
+          <div class="help-text">Upload a local audio file to the server (<code>/api/audio/upload</code>). You can preview the file locally before uploading.</div>
+          <InputFile OnChange="OnInputFileChanged" accept="audio/*" />
+          <div style="margin-top:8px">
+            <div>@(_uploadName ?? "No file selected")</div>
+            <div class="button-group" style="margin-top:6px; flex-wrap: wrap;">
+              <button @onclick="PreviewSelected" disabled="@(_uploadData == null)">Preview</button>
+              <button class="success" @onclick="UploadSelected" disabled="@(_uploadData == null)">Upload</button>
+              <button @onclick="ClearSelected" disabled="@(_uploadData == null)">Clear</button>
+            </div>
+          </div>
+          <div style="margin-top:8px">
+            <audio id="uploadPreview" controls preload="none" style="width:100%"></audio>
+          </div>
+        </div>
+
         <div class="section">
           <h2>Queue</h2>
           @if (_state?.Queue == null || _state.Queue.Count == 0)
@@ -288,6 +306,85 @@
   private async Task Preview(string name)
   {
     try { await JS.InvokeVoidAsync("trackPreview.play", name); } catch { }
+  }
+
+  // Upload support fields and handlers
+  private IBrowserFile? _uploadFile;
+  private string? _uploadName;
+  private byte[]? _uploadData;
+
+  private async Task OnInputFileChanged(InputFileChangeEventArgs e)
+  {
+    try
+    {
+      _uploadFile = e.File;
+      _uploadName = _uploadFile?.Name;
+      _uploadData = null;
+      if (_uploadFile != null)
+      {
+        // Limit to 50 MB for safety; adjust as needed
+        const long maxAllowed = 50 * 1024 * 1024;
+        using var ms = new System.IO.MemoryStream();
+        await _uploadFile.OpenReadStream(maxAllowed).CopyToAsync(ms);
+        _uploadData = ms.ToArray();
+      }
+    }
+    catch
+    {
+      _uploadFile = null;
+      _uploadName = null;
+      _uploadData = null;
+    }
+  }
+
+  private async Task PreviewSelected()
+  {
+    try
+    {
+      if (_uploadData == null || _uploadFile == null) return;
+      var base64 = Convert.ToBase64String(_uploadData);
+      var dataUrl = $"data:{_uploadFile.ContentType};base64,{base64}";
+      await JS.InvokeVoidAsync("playDataUrlInAudio", "uploadPreview", dataUrl);
+    }
+    catch { }
+  }
+
+  private void ClearSelected()
+  {
+    _uploadFile = null;
+    _uploadName = null;
+    _uploadData = null;
+  }
+
+  private async Task UploadSelected()
+  {
+    if (_uploadData == null || _uploadFile == null) return;
+    try
+    {
+      using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+      using var content = new MultipartFormDataContent();
+      var fileContent = new ByteArrayContent(_uploadData);
+      fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(_uploadFile.ContentType ?? "application/octet-stream");
+      content.Add(fileContent, "file", _uploadFile.Name);
+      var resp = await client.PostAsync("api/audio/upload", content);
+      if (resp.IsSuccessStatusCode)
+      {
+        await Toast($"Upload succeeded: {_uploadFile.Name}", "success");
+        // Refresh track list after successful upload
+        await LoadTracks();
+        StateHasChanged();
+        ClearSelected();
+      }
+      else
+      {
+        var err = await resp.Content.ReadAsStringAsync();
+        await Toast($"Upload failed: {err}", "error");
+      }
+    }
+    catch (Exception ex)
+    {
+      await Toast($"Upload error: {ex.Message}", "error");
+    }
   }
 
   private async Task Post(string url)

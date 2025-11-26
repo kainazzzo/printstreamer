@@ -3,35 +3,71 @@
 
 let isStreamPlaying = false; // legacy; real status comes from window._printstreamer_mjpeg_ready
 
-// Toast notification system
+ // Toast notification system
 window.showToast = function (message, type = 'info') {
     const container = document.getElementById('toast-container');
     if (!container) {
         console.warn('Toast container not found');
         return;
     }
-    
+
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    
+
     const icon = type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ';
-    
-    // Convert URLs in message to clickable links
-    const messageWithLinks = message.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:#66ccff;text-decoration:underline">$1</a>');
-    
-    toast.innerHTML = `<span style='font-size:1.2em'>${icon}</span><span>${messageWithLinks}</span>`;
-    
+
+    // Build message content safely, converting URLs into anchors without using innerHTML
+    const createLinkifiedFragment = function (text) {
+        const frag = document.createDocumentFragment();
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        let lastIndex = 0;
+        let match;
+        while ((match = urlRegex.exec(text)) !== null) {
+            const url = match[0];
+            if (match.index > lastIndex) {
+                frag.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+            }
+            const a = document.createElement('a');
+            a.href = url;
+            a.textContent = url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.style.color = '#66ccff';
+            a.style.textDecoration = 'underline';
+            frag.appendChild(a);
+            lastIndex = urlRegex.lastIndex;
+        }
+        if (lastIndex < text.length) {
+            frag.appendChild(document.createTextNode(text.substring(lastIndex)));
+        }
+        return frag;
+    };
+
+    const iconSpan = document.createElement('span');
+    iconSpan.style.fontSize = '1.2em';
+    iconSpan.textContent = icon;
+
+    const contentSpan = document.createElement('span');
+    contentSpan.appendChild(createLinkifiedFragment(String(message || '')));
+
+    toast.appendChild(iconSpan);
+    toast.appendChild(contentSpan);
+
     container.appendChild(toast);
-    
-    // Auto-remove after duration
-    const duration = message.includes('http') ? 8000 : 4000;
+
+    // Auto-remove after duration (longer if message contains a URL)
+    const duration = /https?:\/\//.test(String(message || '')) ? 8000 : 4000;
     setTimeout(() => {
-        toast.style.animation = 'slideOut 0.3s ease-in forwards';
-        setTimeout(() => toast.remove(), 300);
+        try {
+            toast.style.animation = 'slideOut 0.3s ease-in forwards';
+            setTimeout(() => {
+                try { toast.remove(); } catch (e) { /* ignore */ }
+            }, 300);
+        } catch (e) { /* ignore */ }
     }, duration);
 };
 
-// Initialize MJPEG stream
+ // Initialize MJPEG stream
 window.initializeStreams = function () {
     console.log('[Streams] Initializing MJPEG');
 
@@ -52,7 +88,7 @@ window.initializeStreams = function () {
     }
 };
 
-// Reload streams (after camera toggle)
+ // Reload streams (after camera toggle)
 window.reloadStreams = function () {
     const mjpegImg = document.getElementById('mjpeg');
     if (mjpegImg) {
@@ -383,7 +419,7 @@ window.psUnwatchConsole = function(elementId){
     }
 };
 
-// Player control helpers exposed for Blazor UI
+ // Player control helpers exposed for Blazor UI
 window.streamControls = {
     play: function() {},
     pause: function() {},
@@ -392,6 +428,53 @@ window.streamControls = {
     isMuted: function() { return true; },
     isPlaying: function() { try { return !!window._printstreamer_mjpeg_ready; } catch { return false; } }
 };
+
+// Expose a stable namespace while keeping backward-compatible globals.
+// This lets callers use window.printstreamer.helpers.* while existing window.* callers continue to work.
+window.printstreamer = window.printstreamer || {};
+window.printstreamer.helpers = window.printstreamer.helpers || {};
+
+// Map existing globals into the namespace (shallow references).
+window.printstreamer.helpers.streamControls = window.streamControls;
+window.printstreamer.helpers.initializeStreams = window.initializeStreams;
+window.printstreamer.helpers.reloadStreams = window.reloadStreams;
+window.printstreamer.helpers.getStreamPlayingStatus = window.getStreamPlayingStatus;
+window.printstreamer.helpers.psScrollToBottom = window.psScrollToBottom;
+window.printstreamer.helpers.psScrollToTop = window.psScrollToTop;
+window.printstreamer.helpers.psScrollToPositionWithRetry = window.psScrollToPositionWithRetry;
+window.printstreamer.helpers.psForceScroll = window.psForceScroll;
+window.printstreamer.helpers.scrollToBottom = window.scrollToBottom;
+window.printstreamer.helpers.scrollToPosition = window.scrollToPosition;
+window.printstreamer.helpers.scrollToPositionById = window.scrollToPositionById;
+window.printstreamer.helpers.getScrollHeightById = window.getScrollHeightById;
+window.printstreamer.helpers.getComputedStylePropertyById = window.getComputedStylePropertyById;
+window.printstreamer.helpers._psWatchers = window._psWatchers;
+window.printstreamer.helpers.psWatchConsole = window.psWatchConsole;
+window.printstreamer.helpers.psUpdateWatch = window.psUpdateWatch;
+window.printstreamer.helpers.psUnwatchConsole = window.psUnwatchConsole;
+window.printstreamer.helpers.audioPreview = window.audioPreview;
+window.printstreamer.helpers.trackPreview = window.trackPreview;
+
+// Also create lightweight global aliases that forward to the namespaced helpers (optional safety).
+// These keep existing global names working while signalling the preferred namespaced API.
+const ns = window.printstreamer.helpers;
+window.initializeStreams = function() { return ns.initializeStreams && ns.initializeStreams.apply(this, arguments); };
+window.reloadStreams = function() { return ns.reloadStreams && ns.reloadStreams.apply(this, arguments); };
+window.getStreamPlayingStatus = function() { return ns.getStreamPlayingStatus && ns.getStreamPlayingStatus.apply(this, arguments); };
+window.psScrollToBottom = function() { return ns.psScrollToBottom && ns.psScrollToBottom.apply(this, arguments); };
+window.psScrollToTop = function() { return ns.psScrollToTop && ns.psScrollToTop.apply(this, arguments); };
+window.psScrollToPositionWithRetry = function() { return ns.psScrollToPositionWithRetry && ns.psScrollToPositionWithRetry.apply(this, arguments); };
+window.psForceScroll = function() { return ns.psForceScroll && ns.psForceScroll.apply(this, arguments); };
+window.scrollToBottom = function() { return ns.scrollToBottom && ns.scrollToBottom.apply(this, arguments); };
+window.scrollToPosition = function() { return ns.scrollToPosition && ns.scrollToPosition.apply(this, arguments); };
+window.scrollToPositionById = function() { return ns.scrollToPositionById && ns.scrollToPositionById.apply(this, arguments); };
+window.getScrollHeightById = function() { return ns.getScrollHeightById && ns.getScrollHeightById.apply(this, arguments); };
+window.getComputedStylePropertyById = function() { return ns.getComputedStylePropertyById && ns.getComputedStylePropertyById.apply(this, arguments); };
+window.psWatchConsole = function() { return ns.psWatchConsole && ns.psWatchConsole.apply(this, arguments); };
+window.psUpdateWatch = function() { return ns.psUpdateWatch && ns.psUpdateWatch.apply(this, arguments); };
+window.psUnwatchConsole = function() { return ns.psUnwatchConsole && ns.psUnwatchConsole.apply(this, arguments); };
+window.audioPreview = ns.audioPreview || window.audioPreview;
+window.trackPreview = ns.trackPreview || window.trackPreview;
 
 // Register a YouTube iframe end handler that seeks to the last frame and pauses
 window.printstreamer = window.printstreamer || {};
@@ -490,7 +573,7 @@ window.audioPreview = {
     }
 };
 
-// Local file preview player (per-track)
+ // Local file preview player (per-track)
 window.trackPreview = {
     play: function(name) {
         try {
@@ -502,3 +585,22 @@ window.trackPreview = {
         } catch {}
     }
 };
+
+// Play a provided data: URL in an <audio> element and attempt to play it.
+// Used by the Audio page upload preview.
+window.playDataUrlInAudio = function(elementId, dataUrl) {
+    try {
+        const a = document.getElementById(elementId);
+        if (!a) return;
+        // Assign the data URL and attempt to play. Handle promise rejection silently.
+        a.src = dataUrl;
+        // If already loaded, reset currentTime to 0 for a fresh preview.
+        try { a.currentTime = 0; } catch (e) { /* ignore */ }
+        a.play().catch(() => {});
+    } catch (e) { /* ignore */ }
+};
+
+// Expose into namespaced helpers for consistency
+if (window.printstreamer && window.printstreamer.helpers) {
+    window.printstreamer.helpers.playDataUrlInAudio = window.playDataUrlInAudio;
+}

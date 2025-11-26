@@ -5,6 +5,7 @@ using System.Diagnostics;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Antiforgery;
 using PrintStreamer.Overlay;
+using System.Linq;
 
 // Moonraker polling and streaming helpers moved to Services/MoonrakerPoller.cs
 
@@ -2000,12 +2001,179 @@ catch
 		return Results.Json(new { success = true, folder = audio.Folder });
 	});
 
-	app.MapPost("/api/audio/scan", (HttpContext ctx) =>
-	{
-		var audio = ctx.RequestServices.GetRequiredService<AudioService>();
-		audio.Rescan();
-		return Results.Json(new { success = true });
-	});
+app.MapPost("/api/audio/scan", (HttpContext ctx) =>
+{
+var audio = ctx.RequestServices.GetRequiredService<AudioService>();
+audio.Rescan();
+return Results.Json(new { success = true });
+});
+
+/* Upload a single audio file (multipart/form-data, field name "file") into the configured audio folder.
+   Enhanced diagnostics and robust streaming to capture detailed failures when copying streams.
+   - Logs request sizes and file metadata
+   - Ensures destination folder is absolute and writable (best-effort test)
+   - Uses explicit stream copy with buffered copy to capture more precise exception context
+   - Triggers audio.Rescan() on success
+*/
+app.MapPost("/api/audio/upload", async (HttpContext ctx, ILogger<Program> logger) =>
+{
+    try
+    {
+        // Allow larger uploads for this endpoint (e.g., 300 MB).
+        var maxUploadBytes = 300L * 1024L * 1024L;
+        try
+        {
+            var maxReqFeature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+            if (maxReqFeature != null && !maxReqFeature.IsReadOnly)
+            {
+                maxReqFeature.MaxRequestBodySize = maxUploadBytes;
+                logger.LogDebug("Set per-request MaxRequestBodySize={MaxBytes}", maxUploadBytes);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not set per-request MaxRequestBodySize (continuing)");
+        }
+
+        logger.LogDebug("Incoming upload: Content-Length={ContentLength}, HasForm={HasForm}", ctx.Request.ContentLength, ctx.Request.HasFormContentType);
+        if (!ctx.Request.HasFormContentType)
+        {
+            return Results.BadRequest(new { success = false, error = "Expected multipart/form-data" });
+        }
+
+        var form = await ctx.Request.ReadFormAsync();
+        var file = form.Files["file"] ?? form.Files.FirstOrDefault();
+        if (file == null || file.Length == 0)
+        {
+            logger.LogWarning("Upload request missing file");
+            return Results.BadRequest(new { success = false, error = "No file provided" });
+        }
+
+        // Capture file metadata early
+        var origFileName = Path.GetFileName(file.FileName ?? "upload");
+        logger.LogInformation("Upload received: name={FileName}, length={Length}, contentType={ContentType}", origFileName, file.Length, file.ContentType);
+
+        if (string.IsNullOrWhiteSpace(origFileName))
+        {
+            return Results.BadRequest(new { success = false, error = "Invalid file name" });
+        }
+
+        var allowedExt = new[] { ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus" };
+        var ext = Path.GetExtension(origFileName).ToLowerInvariant();
+        if (!Array.Exists(allowedExt, a => a == ext))
+        {
+            logger.LogWarning("Rejected upload with unsupported extension: {Ext}", ext);
+            return Results.BadRequest(new { success = false, error = $"Unsupported file extension '{ext}'" });
+        }
+
+        const long maxBytes = 200L * 1024L * 1024L;
+        if (file.Length > maxBytes)
+        {
+            logger.LogWarning("Rejected upload too large: {Length} > {Max}", file.Length, maxBytes);
+            return Results.BadRequest(new { success = false, error = "File too large" });
+        }
+
+        var audio = ctx.RequestServices.GetRequiredService<AudioService>();
+        var folder = audio.Folder;
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            var cfg = ctx.RequestServices.GetRequiredService<IConfiguration>();
+            folder = cfg.GetValue<string>("Audio:Folder") ?? "audio";
+        }
+
+        // Normalize to absolute path
+        folder = Path.GetFullPath(folder);
+        logger.LogDebug("Resolved audio folder: {Folder}", folder);
+
+        // Ensure folder exists and is writable (best-effort)
+        try
+        {
+            Directory.CreateDirectory(folder);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to create audio folder: {Folder}", folder);
+            return Results.Json(new { success = false, error = "Failed to create destination folder" });
+        }
+
+        try
+        {
+            // Quick write test: create and delete a tiny temp file to ensure write permissions
+            var tmpTest = Path.Combine(folder, $".write_test_{Guid.NewGuid():N}.tmp");
+            await File.WriteAllTextAsync(tmpTest, "x");
+            File.Delete(tmpTest);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Audio folder not writable: {Folder}", folder);
+            return Results.Json(new { success = false, error = "Destination folder not writable" });
+        }
+
+        // Build destination path and avoid collisions
+        var destName = origFileName;
+        var destPath = Path.Combine(folder, destName);
+        var attempt = 1;
+        while (File.Exists(destPath))
+        {
+            destName = Path.GetFileNameWithoutExtension(origFileName) + $" ({attempt})" + Path.GetExtension(origFileName);
+            destPath = Path.Combine(folder, destName);
+            attempt++;
+            if (attempt > 100) break;
+        }
+
+        // Explicit buffered copy with more detailed error logging
+        try
+        {
+            await using var destFs = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
+            // Use the form file's OpenReadStream so we get a stream we can copy from directly
+            await using var src = file.OpenReadStream();
+            logger.LogDebug("Starting copy: srcLength={SrcLen}, destPath={Dest}", src.Length, destPath);
+
+            var buffer = new byte[64 * 1024];
+            int read;
+            long total = 0;
+            while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ctx.RequestAborted)) > 0)
+            {
+                await destFs.WriteAsync(buffer.AsMemory(0, read), ctx.RequestAborted);
+                total += read;
+            }
+
+            await destFs.FlushAsync(ctx.RequestAborted);
+            logger.LogInformation("Copy complete: wrote {Bytes} bytes to {Dest}", total, destPath);
+        }
+        catch (OperationCanceledException oce)
+        {
+            logger.LogWarning(oce, "Upload canceled while copying to disk: {Dest}", destPath);
+            // Try to clean up partially written file
+            try { if (File.Exists(destPath)) File.Delete(destPath); } catch { }
+            return Results.Json(new { success = false, error = "Upload canceled" });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed while copying uploaded file to {Dest}", destPath);
+            try { if (File.Exists(destPath)) File.Delete(destPath); } catch { }
+            return Results.Json(new { success = false, error = "Failed saving file: " + ex.Message });
+        }
+
+        // Trigger rescan
+        try
+        {
+            audio.Rescan();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Rescan failed after upload; uploaded file saved at {Path}", destPath);
+        }
+
+        logger.LogInformation("Uploaded audio file saved: {Path}", destPath);
+        return Results.Json(new { success = true, filename = destName, path = destPath });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Unhandled error in /api/audio/upload");
+        return Results.Json(new { success = false, error = ex.Message });
+    }
+});
 
 	app.MapPost("/api/audio/queue", async (HttpContext ctx) =>
 	{
