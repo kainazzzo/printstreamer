@@ -270,12 +270,12 @@
     await LoadState();
   }
 
-  private async Task Play() { await Post("api/audio/play"); try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }
-  private async Task Pause() { await Post("api/audio/pause"); /* keep preview connected so silence plays while paused */ try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} await LoadState(); }
-  private async Task ConnectPreview() { try { await JS.InvokeVoidAsync("audioPreview.play"); } catch {} }
-  private async Task ReloadPreview() { try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} }
-  private async Task Next() { await Post("api/audio/next"); try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} await LoadState(); }
-  private async Task Prev() { await Post("api/audio/prev"); try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch {} await LoadState(); }
+  private async Task Play() { await Post("api/audio/play"); try { await JS.InvokeVoidAsync("printstreamer.helpers.audioPreview.play"); } catch {} await LoadState(); }
+  private async Task Pause() { await Post("api/audio/pause"); /* keep preview connected so silence plays while paused */ try { await JS.InvokeVoidAsync("printstreamer.helpers.audioPreview.play"); } catch {} await LoadState(); }
+  private async Task ConnectPreview() { try { await JS.InvokeVoidAsync("printstreamer.helpers.audioPreview.play"); } catch {} }
+  private async Task ReloadPreview() { try { await JS.InvokeVoidAsync("printstreamer.helpers.audioPreview.reload"); } catch {} }
+  private async Task Next() { await Post("api/audio/next"); try { await JS.InvokeVoidAsync("printstreamer.helpers.audioPreview.reload"); } catch {} await LoadState(); }
+  private async Task Prev() { await Post("api/audio/prev"); try { await JS.InvokeVoidAsync("printstreamer.helpers.audioPreview.reload"); } catch {} await LoadState(); }
   private async Task ClearQueue() { await Post("api/audio/clear"); await LoadState(); }
   private async Task ToggleShuffle() { var en = !(_state?.Shuffle ?? false); await Post($"api/audio/shuffle?enabled={(en ? "true" : "false")}"); await LoadState(); }
   private async Task OnRepeatChange(ChangeEventArgs e) { var v = e.Value?.ToString() ?? "None"; _repeatSel = v; await Post($"api/audio/repeat?mode={Uri.EscapeDataString(v)}"); await LoadState(); }
@@ -287,11 +287,11 @@
     {
       using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
       var resp = await client.PostAsync($"api/audio/play-track?name={Uri.EscapeDataString(name)}", null);
-      if (resp.IsSuccessStatusCode)
-      {
-        await Toast($"Playing now: {name}", "success");
-        try { await JS.InvokeVoidAsync("audioPreview.reload"); } catch { }
-      }
+        if (resp.IsSuccessStatusCode)
+        {
+          await Toast($"Playing now: {name}", "success");
+          try { await JS.InvokeVoidAsync("printstreamer.helpers.audioPreview.reload"); } catch { }
+        }
       else
       {
         var err = await resp.Content.ReadAsStringAsync();
@@ -305,7 +305,7 @@
   // New: local file preview in the browser
   private async Task Preview(string name)
   {
-    try { await JS.InvokeVoidAsync("trackPreview.play", name); } catch { }
+    try { await JS.InvokeVoidAsync("printstreamer.helpers.trackPreview.play", name); } catch { }
   }
 
   // Upload support fields and handlers
@@ -344,7 +344,7 @@
       if (_uploadData == null || _uploadFile == null) return;
       var base64 = Convert.ToBase64String(_uploadData);
       var dataUrl = $"data:{_uploadFile.ContentType};base64,{base64}";
-      await JS.InvokeVoidAsync("playDataUrlInAudio", "uploadPreview", dataUrl);
+      await JS.InvokeVoidAsync("printstreamer.helpers.playDataUrlInAudio", "uploadPreview", dataUrl);
     }
     catch { }
   }

@@ -2633,30 +2633,73 @@ static void PrintHelp()
 internal static class ProxyUtil
 {
 	internal static ILogger? Logger;
-	internal static readonly HttpClient Client;
+internal static readonly HttpClient Client;
 
-	// Static ctor so we can configure handler timeouts separately from overall HttpClient timeout
-	static ProxyUtil()
-	{
-		// Use a SocketsHttpHandler so we can set a short connect timeout but keep the overall
-		// HttpClient timeout infinite (we rely on downstream cancellation tokens).
-		var handler = new SocketsHttpHandler
-		{
-			// Fail fast when upstream is unreachable (reduced to 5s for better responsiveness)
-			ConnectTimeout = TimeSpan.FromSeconds(5),
-			// Allow connection pooling and keep-alive for better performance
-			PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-			PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2)
-		};
-		Client = new HttpClient(handler)
-		{
-			// Let the request be controlled by the passed CancellationToken (ctx.RequestAborted)
-			Timeout = System.Threading.Timeout.InfiniteTimeSpan
-		};
-	}
+// Static ctor so we can configure handler timeouts separately from overall HttpClient timeout
+static ProxyUtil()
+{
+// Use a SocketsHttpHandler so we can set a short connect timeout but keep the overall
+// HttpClient timeout infinite (we rely on downstream cancellation tokens).
+var handler = new SocketsHttpHandler
+{
+// Fail fast when upstream is unreachable (reduced to 5s for better responsiveness)
+ConnectTimeout = TimeSpan.FromSeconds(5),
+// Allow connection pooling and keep-alive for better performance
+PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2)
+};
+Client = new HttpClient(handler)
+{
+// Let the request be controlled by the passed CancellationToken (ctx.RequestAborted)
+Timeout = System.Threading.Timeout.InfiniteTimeSpan
+};
+}
 
-	internal static async Task ProxyRequest(HttpContext ctx, string targetBase, string path)
-	{
+// Small helpers to redact sensitive tokens from logged output and URLs.
+// Keep these conservative and best-effort: do not attempt to fully parse every response.
+internal static string RedactSensitive(string input)
+{
+    if (string.IsNullOrEmpty(input)) return input;
+    try
+    {
+        var outStr = input;
+
+        // redact common query param forms: access_token=VALUE
+        outStr = System.Text.RegularExpressions.Regex.Replace(outStr, "(?i)([?&]access_token)=([^&\\s]+)", "$1=<redacted>");
+
+        // redact JSON fields "access_token":"VALUE" and "refresh_token":"VALUE"
+        outStr = System.Text.RegularExpressions.Regex.Replace(outStr, "(?i)(\"access_token\"\\s*:\\s*\")([^\"]+)(\")", "$1<redacted>$3");
+        outStr = System.Text.RegularExpressions.Regex.Replace(outStr, "(?i)(\"refresh_token\"\\s*:\\s*\")([^\"]+)(\")", "$1<redacted>$3");
+        outStr = System.Text.RegularExpressions.Regex.Replace(outStr, "(?i)(\"id_token\"\\s*:\\s*\")([^\"]+)(\")", "$1<redacted>$3");
+        outStr = System.Text.RegularExpressions.Regex.Replace(outStr, "(?i)(\"token\"\\s*:\\s*\")([^\"]+)(\")", "$1<redacted>$3");
+
+        // Generic key=value forms (best-effort)
+        outStr = System.Text.RegularExpressions.Regex.Replace(outStr, "(?i)(access_token)\\s*=\\s*[^&\\s]+", "$1=<redacted>");
+
+        return outStr;
+    }
+    catch
+    {
+        return input;
+    }
+}
+
+internal static string SanitizeUrl(string url)
+{
+    if (string.IsNullOrEmpty(url)) return url;
+    try
+    {
+        // redact access_token query param values in URLs
+        return System.Text.RegularExpressions.Regex.Replace(url, "(?i)([?&])(access_token)=([^&]+)", "$1$2=<redacted>");
+    }
+    catch
+    {
+        return url;
+    }
+}
+
+internal static async Task ProxyRequest(HttpContext ctx, string targetBase, string path)
+{
 		try
 		{
 			var targetUrl = targetBase.TrimEnd('/') + "/" + path.TrimStart('/');
@@ -2665,15 +2708,15 @@ internal static class ProxyUtil
 				targetUrl += ctx.Request.QueryString.Value;
 			}
 
-			// Log Moonraker API calls for debugging
-			if (path.StartsWith("printer/") || path.StartsWith("api/") || path.StartsWith("server/") || path.StartsWith("machine/") || path.StartsWith("access/"))
-			{
-				Logger?.LogDebug("Moonraker Proxy {Method} {TargetUrl}", ctx.Request.Method, targetUrl);
-			}
-			else if (path.StartsWith("assets/") || path.Contains(".js") || path.Contains(".css"))
-			{
-				Logger?.LogDebug("Asset Proxy {Method} {Path} -> {TargetUrl}", ctx.Request.Method, path, targetUrl);
-			}
+ // Log Moonraker API calls for debugging
+if (path.StartsWith("printer/") || path.StartsWith("api/") || path.StartsWith("server/") || path.StartsWith("machine/") || path.StartsWith("access/"))
+{
+    Logger?.LogDebug("Moonraker Proxy {Method} {TargetUrl}", ctx.Request.Method, SanitizeUrl(targetUrl));
+}
+else if (path.StartsWith("assets/") || path.Contains(".js") || path.Contains(".css"))
+{
+    Logger?.LogDebug("Asset Proxy {Method} {Path} -> {TargetUrl}", ctx.Request.Method, path, SanitizeUrl(targetUrl));
+}
 
 			using var forward = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), targetUrl);
 
@@ -2747,11 +2790,11 @@ internal static class ProxyUtil
 
 				if (shouldBuffer)
 				{
-					var body = await response.Content.ReadAsStringAsync(ctx.RequestAborted);
-					// Log truncated body for diagnostics (redact tokens)
-					var logBody = body?.Replace(Environment.NewLine, " ") ?? string.Empty;
-					if (logBody.Length > 1000) logBody = logBody.Substring(0, 1000) + "...";
-					Logger?.LogDebug("Proxy Response {StatusCode} ({ContentType};len={ContentLength}) from {TargetUrl}: {Body}", response.StatusCode, contentType, contentLength, targetUrl, logBody);
+var body = await response.Content.ReadAsStringAsync(ctx.RequestAborted);
+// Redact sensitive tokens and normalize newlines before truncation
+var logBody = RedactSensitive(body ?? string.Empty).Replace(Environment.NewLine, " ");
+if (logBody.Length > 1000) logBody = logBody.Substring(0, 1000) + "...";
+Logger?.LogDebug("Proxy Response {StatusCode} ({ContentType};len={ContentLength}) from {TargetUrl}: {Body}", response.StatusCode, contentType, contentLength, SanitizeUrl(targetUrl), logBody);
 
 					// If HTML 200, inject WS shim and fix asset paths before writing
 					if ((int)response.StatusCode == 200 && !string.IsNullOrWhiteSpace(contentType) && contentType.IndexOf("text/html", StringComparison.OrdinalIgnoreCase) >= 0)

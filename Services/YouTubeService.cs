@@ -807,16 +807,34 @@ namespace PrintStreamer.Services
 			_youtubeService?.Dispose();
 		}
 
-		/// <summary>
-		/// Fetch and print the full LiveBroadcast and LiveStream resources for debugging.
-		/// </summary>
-		public async Task LogBroadcastAndStreamResourcesAsync(string? broadcastId, string? streamId, CancellationToken cancellationToken = default)
-		{
-			if (_youtubeService == null)
-			{
-				_logger.LogError("YouTube service not initialized.");
-				return;
-			}
+/// <summary>
+/// Fetch and print the full LiveBroadcast and LiveStream resources for debugging.
+/// </summary>
+private static string RedactYouTubeResourceJson(string json)
+{
+    if (string.IsNullOrEmpty(json)) return json;
+    try
+    {
+        // Redact common ingestion/stream key fields in YouTube JSON resources.
+        json = System.Text.RegularExpressions.Regex.Replace(json, "(?i)\"streamName\"\\s*:\\s*\"[^\"]+\"", "\"streamName\": \"<redacted>\"");
+        json = System.Text.RegularExpressions.Regex.Replace(json, "(?i)\"ingestionAddress\"\\s*:\\s*\"[^\"]+\"", "\"ingestionAddress\": \"<redacted>\"");
+        // Best-effort redact nested ingestionInfo blocks
+        json = System.Text.RegularExpressions.Regex.Replace(json, "(?i)\"ingestionInfo\"\\s*:\\s*\\{[^\\}]*\\}", "\"ingestionInfo\": { \"streamName\": \"<redacted>\", \"ingestionAddress\": \"<redacted>\" }");
+        return json;
+    }
+    catch
+    {
+        return json;
+    }
+}
+
+public async Task LogBroadcastAndStreamResourcesAsync(string? broadcastId, string? streamId, CancellationToken cancellationToken = default)
+{
+if (_youtubeService == null)
+{
+_logger.LogError("YouTube service not initialized.");
+return;
+}
 
 			try
 			{
@@ -825,7 +843,7 @@ namespace PrintStreamer.Services
 					var bReq = _youtubeService.LiveBroadcasts.List("id,snippet,status,contentDetails");
 					bReq.Id = broadcastId;
 					var bResp = await bReq.ExecuteAsync(cancellationToken);
-					_logger.LogInformation("LiveBroadcast resource: {Resource}", JsonSerializer.Serialize(bResp, new JsonSerializerOptions { WriteIndented = true }));
+					_logger.LogInformation("LiveBroadcast resource: {Resource}", RedactYouTubeResourceJson(JsonSerializer.Serialize(bResp, new JsonSerializerOptions { WriteIndented = true })));
 				}
 
 				if (string.IsNullOrEmpty(streamId)) streamId = _lastCreatedStreamId;
@@ -834,7 +852,7 @@ namespace PrintStreamer.Services
 					var sReq = _youtubeService.LiveStreams.List("id,snippet,cdn,contentDetails,status");
 					sReq.Id = streamId;
 					var sResp = await sReq.ExecuteAsync(cancellationToken);
-					_logger.LogInformation("LiveStream resource: {Resource}", JsonSerializer.Serialize(sResp, new JsonSerializerOptions { WriteIndented = true }));
+					_logger.LogInformation("LiveStream resource: {Resource}", RedactYouTubeResourceJson(JsonSerializer.Serialize(sResp, new JsonSerializerOptions { WriteIndented = true })));
 				}
 			}
 			catch (Exception ex)
