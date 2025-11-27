@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using PrintStreamer.Services;
@@ -24,14 +26,13 @@ public sealed class OverlayTextService : IDisposable
     private readonly string _textFileDir;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loopTask;
-    // Optional provider to get cached timelapse metadata (filename -> session data)
     private readonly ITimelapseMetadataProvider? _tlProvider;
     private readonly Func<string?>? _audioProvider;
     private readonly ILogger<OverlayTextService> _logger;
-    // Filament metadata cache (per-filename) to avoid hitting Moonraker on every refresh
     private readonly Dictionary<string, (DateTime fetchedAt, FilamentMeta meta)> _filamentCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly int _filamentCacheSeconds;
     private readonly bool _showFilamentInOverlay;
+    private readonly TimeZoneInfo _displayTimeZone;
 
     public string TextFilePath => _textFilePath;
 
@@ -41,29 +42,43 @@ public sealed class OverlayTextService : IDisposable
         _audioProvider = audioProvider;
         _logger = logger;
         _moonrakerClient = moonrakerClient;
-    _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
 
         _moonrakerBase = (config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125").TrimEnd('/');
         _apiKey = config.GetValue<string>("Moonraker:ApiKey");
         _authHeader = config.GetValue<string>("Moonraker:AuthHeader");
 
-     _template = config.GetValue<string>("Overlay:Template") ??
-         "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpeed:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
+        // Configure display timezone (optional). Fall back to system local on error.
+        var tzName = config.GetValue<string>("Overlay:Timezone");
+        TimeZoneInfo tz = TimeZoneInfo.Local;
+        if (!string.IsNullOrWhiteSpace(tzName))
+        {
+            try
+            {
+                tz = TimeZoneInfo.FindSystemTimeZoneById(tzName);
+            }
+            catch (Exception ex)
+            {
+                try { _logger.LogWarning(ex, "[Overlay] Failed to find timezone '{Tz}', falling back to system local", tzName); } catch { }
+                tz = TimeZoneInfo.Local;
+            }
+        }
+        _displayTimeZone = tz;
 
-     // Optional fixed-width padding to reduce overlay ‘bounce’ as digits change
-     _padSpeedWidth = config.GetValue<int?>("Overlay:PadSpeedWidth") ?? 3; // e.g., "  0", " 15", "120"
-     _padFlowWidth = config.GetValue<int?>("Overlay:PadFlowWidth") ?? 5;   // e.g., " 0.0", "12.3"
+        _template = config.GetValue<string>("Overlay:Template") ??
+            "Nozzle: {nozzle:0}°C/{nozzleTarget:0}°C | Bed: {bed:0}°C/{bedTarget:0}°C | Layer {layers} | {progress:0}%\nSpeed:{speed}mm/s | Flow:{flow} | Fil:{filament}m | ETA:{eta:hh:mm tt}";
 
-    var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
+        _padSpeedWidth = config.GetValue<int?>("Overlay:PadSpeedWidth") ?? 3;
+        _padFlowWidth = config.GetValue<int?>("Overlay:PadFlowWidth") ?? 5;
+
+        var refreshMs = config.GetValue<int?>("Overlay:RefreshMs") ?? 1000;
         if (refreshMs < 200) refreshMs = 200;
         _interval = TimeSpan.FromMilliseconds(refreshMs);
 
-        // Filament metadata cache TTL (seconds); default 60s
         _filamentCacheSeconds = config.GetValue<int?>("Overlay:FilamentCacheSeconds") ?? 60;
-        _showFilamentInOverlay = config.GetValue<bool?>("Overlay:ShowFilamentInOverlay") ?? true;        // Choose a writable directory for the overlay text file with graceful fallbacks
-        // 1) AppContext.BaseDirectory/overlay (publish/run stable)
-        // 2) CurrentDirectory/overlay
-        // 3) $TMPDIR/printstreamer/overlay
+        _showFilamentInOverlay = config.GetValue<bool?>("Overlay:ShowFilamentInOverlay") ?? true;
+
+        // Choose writable directory for overlay file
         string[] candidates = new[]
         {
             Path.Combine(AppContext.BaseDirectory, "overlay"),
@@ -98,8 +113,22 @@ public sealed class OverlayTextService : IDisposable
 
     private async Task RunAsync(CancellationToken ct)
     {
-        // Ensure file exists with placeholder
-        try { await SafeWriteAsync(Render(new OverlayData()), ct); } catch { }
+        // Initial placeholder: use NaN for numeric fields so ReplaceNum shows em-dash
+        try
+        {
+            var placeholder = new OverlayData
+            {
+                Nozzle = double.NaN,
+                NozzleTarget = double.NaN,
+                Bed = double.NaN,
+                BedTarget = double.NaN,
+                Filament = double.NaN,
+                Time = DateTime.UtcNow,
+                Progress = 0
+            };
+            await SafeWriteAsync(Render(placeholder), ct);
+        }
+        catch { }
 
         while (!ct.IsCancellationRequested)
         {
@@ -121,7 +150,6 @@ public sealed class OverlayTextService : IDisposable
 
     private async Task<OverlayData> QueryAsync(CancellationToken ct)
     {
-        // Query Moonraker for temps, print status, and time estimates
         var url = _moonrakerBase + "/printer/objects/query" +
             "?extruder=temperature,target&heater_bed=temperature,target&print_stats=state,filename,info,print_duration,filament_used,total_duration" +
             "&display_status=progress,flow,speed,volumetric_flow&virtual_sdcard=progress,file_position,print_duration" +
@@ -146,7 +174,7 @@ public sealed class OverlayTextService : IDisposable
         var status = root.GetProperty("result").GetProperty("status");
         var extruder = status.TryGetProperty("extruder", out var ex) ? ex : default;
         var bed = status.TryGetProperty("heater_bed", out var hb) ? hb : default;
-    var print = status.TryGetProperty("print_stats", out var ps) ? ps : default;
+        var print = status.TryGetProperty("print_stats", out var ps) ? ps : default;
 
         double nozzle = TryDouble(extruder, "temperature");
         double nozzleTarget = TryDouble(extruder, "target");
@@ -155,12 +183,10 @@ public sealed class OverlayTextService : IDisposable
 
         string state = TryString(print, "state") ?? string.Empty;
 
-        // Determine if there's an active print job (state is "printing" or "paused")
         bool isPrinting = state.Equals("printing", StringComparison.OrdinalIgnoreCase);
         bool isPaused = state.Equals("paused", StringComparison.OrdinalIgnoreCase);
         bool isActiveJob = isPrinting || isPaused;
 
-        // Try to get layer info and filament metadata for more accurate overlay (only if actively printing)
         int? currentLayer = null;
         int? totalLayers = null;
         string? filamentType = null;
@@ -176,7 +202,6 @@ public sealed class OverlayTextService : IDisposable
             if (infoElem.TryGetProperty("total_layer", out var tlElem) && tlElem.ValueKind == JsonValueKind.Number && tlElem.TryGetInt32(out var tl))
                 totalLayers = tl;
 
-            // Filament fields direct from print_stats.info (preferred live source when available)
             if (infoElem.TryGetProperty("filament_type", out var ft) && ft.ValueKind != JsonValueKind.Undefined)
                 filamentType = ft.ToString();
             else if (infoElem.TryGetProperty("FILAMENT_TYPE", out var ftU) && ftU.ValueKind != JsonValueKind.Undefined)
@@ -192,7 +217,6 @@ public sealed class OverlayTextService : IDisposable
             else if (infoElem.TryGetProperty("FILAMENT_COLOR", out var fcU) && fcU.ValueKind != JsonValueKind.Undefined)
                 filamentColor = fcU.ToString();
 
-            // Used/total in mm when provided by print_stats.info
             if (infoElem.TryGetProperty("filament_used_mm", out var fum) && fum.ValueKind == JsonValueKind.Number && fum.TryGetDouble(out var usedMm))
                 filamentUsedMm = usedMm;
             else if (infoElem.TryGetProperty("FILAMENT_USED_MM", out var fumU) && fumU.ValueKind == JsonValueKind.Number && fumU.TryGetDouble(out var usedMmU))
@@ -204,18 +228,15 @@ public sealed class OverlayTextService : IDisposable
                 filamentTotalMm = totalMmU;
         }
 
-        // Get progress from display_status (0-1 range) and volumetric flow (mm^3/s)
         var displayStatus = status.TryGetProperty("display_status", out var ds) ? ds : default;
         double progress01 = TryDouble(displayStatus, "progress");
-        double? flowVolume = null; // mm^3/s from Moonraker
+        double? flowVolume = null;
         if (displayStatus.ValueKind != JsonValueKind.Undefined)
         {
-            // Get volumetric_flow if available (preferred)
             var vflow = TryDouble(displayStatus, "volumetric_flow");
             if (!double.IsNaN(vflow) && vflow > 0) flowVolume = vflow;
         }
 
-        // Get virtual_sdcard for more reliable progress
         var vsd = status.TryGetProperty("virtual_sdcard", out var vsdElem) ? vsdElem : default;
         if (vsd.ValueKind != JsonValueKind.Undefined)
         {
@@ -226,7 +247,6 @@ public sealed class OverlayTextService : IDisposable
             }
         }
 
-        // Get actual speed in mm/s and factors from gcode_move
         var gcodeMove = status.TryGetProperty("gcode_move", out var gm) ? gm : default;
         double? speedMmS = null;
         double? speedFactor = null;
@@ -235,24 +255,21 @@ public sealed class OverlayTextService : IDisposable
         if (gcodeMove.ValueKind != JsonValueKind.Undefined)
         {
             var spd = TryDouble(gcodeMove, "speed");
-            // Empirically: reported speed aligns with mm/min; convert to mm/s
             if (!double.IsNaN(spd) && spd > 0) speedMmS = spd / 60.0;
 
             var spdFactor = TryDouble(gcodeMove, "speed_factor");
-            if (!double.IsNaN(spdFactor)) speedFactor = spdFactor * 100.0; // Convert to percentage
+            if (!double.IsNaN(spdFactor)) speedFactor = spdFactor * 100.0;
 
             var extFactor = TryDouble(gcodeMove, "extrude_factor");
             if (!double.IsNaN(extFactor)) extrudeFactor = extFactor;
         }
-        // Fallback: try display_status.speed if gcode_move.speed missing
+
         if ((!speedMmS.HasValue || speedMmS.Value <= 0) && displayStatus.ValueKind != JsonValueKind.Undefined)
         {
             var dspSpd = TryDouble(displayStatus, "speed");
-            // Convert fallback speed to mm/s as well
             if (!double.IsNaN(dspSpd) && dspSpd > 0) speedMmS = dspSpd / 60.0;
         }
 
-        // Get motion_report for live toolhead velocity (not historical speed from gcode_move)
         var motionReport = status.TryGetProperty("motion_report", out var mr) ? mr : default;
         double? extruderVelocity = null;
         double? toolheadVelocity = null;
@@ -261,24 +278,18 @@ public sealed class OverlayTextService : IDisposable
             var extVel = TryDouble(motionReport, "live_extruder_velocity");
             if (!double.IsNaN(extVel)) extruderVelocity = extVel;
 
-            // Get actual live toolhead velocity (live_velocity in mm/s)
             var thVel = TryDouble(motionReport, "live_velocity");
             if (!double.IsNaN(thVel) && thVel >= 0) toolheadVelocity = thVel;
         }
 
-        // Use display_status.progress as primary source (already set from display_status or virtual_sdcard above)
-        // Only show progress when there's an active job
         int progress = isActiveJob ? (int)Math.Round(progress01 * 100) : 0;
-    string filename = TryString(print, "filename") ?? string.Empty;
+        string filename = TryString(print, "filename") ?? string.Empty;
 
-        // Get print duration and filament used for ETA calculation (only if actively printing)
         double printDuration = isActiveJob ? TryDouble(print, "print_duration") : double.NaN;
         double filamentUsed = isActiveJob ? TryDouble(print, "filament_used") : double.NaN;
 
-        // Merge filament metadata with file metadata cache when needed
         if (_showFilamentInOverlay && isActiveJob && !string.IsNullOrWhiteSpace(filename))
         {
-            // Decide if we need to fetch metadata: when any key is missing or cache expired
             var needs = string.IsNullOrWhiteSpace(filamentType) || string.IsNullOrWhiteSpace(filamentBrand) || string.IsNullOrWhiteSpace(filamentColor) || !filamentTotalMm.HasValue;
             var now = DateTime.UtcNow;
             FilamentMeta? cached = null;
@@ -332,17 +343,14 @@ public sealed class OverlayTextService : IDisposable
             }
         }
 
-        // Calculate ETA if progress is meaningful and job is active
         DateTime? eta = null;
         if (isActiveJob && progress01 > 0.01 && !double.IsNaN(printDuration) && printDuration > 0)
         {
             var estimatedTotal = printDuration / progress01;
             var remaining = estimatedTotal - printDuration;
-            eta = DateTime.Now.AddSeconds(remaining);
+            eta = DateTime.UtcNow.AddSeconds(remaining);
         }
 
-        // If we have a timelapse metadata provider and a filename, prefer its cached totals/slicer
-        // Only use this when there's an active job
         string? providerSlicer = null;
         double? layerHeight = null;
         double? extrusionWidth = null;
@@ -365,42 +373,29 @@ public sealed class OverlayTextService : IDisposable
             catch { }
         }
 
-        // Calculate volumetric flow if Klipper doesn't provide it
-        // Formula: volumetric_flow (mm³/s) = extruder_velocity (mm/s) × π × (filament_diameter/2)²
-        // Only calculate when there's an active job
         if (isActiveJob && !flowVolume.HasValue && extruderVelocity.HasValue && extruderVelocity.Value > 0.01)
         {
-            // Use 1.75mm as default filament diameter (most common)
-            // Could be made configurable if needed
             var filDiam = 1.75;
             var radius = filDiam / 2.0;
             var crossSectionArea = Math.PI * radius * radius;
-
-            // Apply extrude_factor if available (flow rate multiplier from M221)
             var flowMultiplier = extrudeFactor ?? 1.0;
             flowVolume = extruderVelocity.Value * crossSectionArea * flowMultiplier;
         }
 
-        // Clear flow if no active job
         if (!isActiveJob)
         {
             flowVolume = null;
         }
 
-        // For speed, use live toolhead velocity from motion_report when available
-        // Only show speed when there's an active print job AND toolhead is actually moving
         double? displaySpeed = null;
         if (isActiveJob && toolheadVelocity.HasValue && toolheadVelocity.Value > 0.1)
         {
-            // Use actual live toolhead velocity (already in mm/s)
             displaySpeed = toolheadVelocity.Value;
         }
         else if (isActiveJob)
         {
-            // Job is active but toolhead not moving - show 0
             displaySpeed = 0.0;
         }
-        // If no active job, displaySpeed stays null and will show as "-"
 
         return new OverlayData
         {
@@ -412,9 +407,9 @@ public sealed class OverlayTextService : IDisposable
             Progress = progress,
             Layer = currentLayer,
             LayerMax = totalLayers,
-            Time = DateTime.Now,
+            Time = DateTime.UtcNow,
             Filename = filename,
-            Speed = displaySpeed, // Use live toolhead velocity (only when job is active)
+            Speed = displaySpeed,
             SpeedFactor = speedFactor,
             Flow = flowVolume,
             Filament = filamentUsed,
@@ -422,7 +417,7 @@ public sealed class OverlayTextService : IDisposable
             FilamentBrand = filamentBrand,
             FilamentColor = filamentColor,
             FilamentName = filamentName,
-            FilamentUsedMm = double.IsNaN(filamentUsed) ? filamentUsedMm : filamentUsed, // prefer live used from print_stats (mm)
+            FilamentUsedMm = double.IsNaN(filamentUsed) ? filamentUsedMm : filamentUsed,
             FilamentTotalMm = filamentTotalMm ?? providerFilamentTotalMm,
             Slicer = providerSlicer,
             ETA = eta
@@ -488,7 +483,21 @@ public sealed class OverlayTextService : IDisposable
             return System.Text.RegularExpressions.Regex.Replace(
                 input,
                 @"\{" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?::([^}]+))?\}",
-                m => value.ToString(m.Groups[1].Success ? m.Groups[1].Value : "HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
+                m =>
+                {
+                    var fmt = m.Groups[1].Success ? m.Groups[1].Value : "HH:mm:ss";
+                    try
+                    {
+                        // Treat the incoming value as UTC (it is produced as UTC) then convert to display timezone.
+                        var utc = DateTime.SpecifyKind(value, DateTimeKind.Utc);
+                        var display = TimeZoneInfo.ConvertTimeFromUtc(utc, _displayTimeZone);
+                        return display.ToString(fmt, System.Globalization.CultureInfo.InvariantCulture);
+                    }
+                    catch
+                    {
+                        return value.ToString(fmt, System.Globalization.CultureInfo.InvariantCulture);
+                    }
+                },
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
             );
         }
@@ -508,10 +517,8 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceNum(s, "bed", d.Bed);
         s = ReplaceNum(s, "bedTarget", d.BedTarget);
         s = ReplaceInt(s, "progress", d.Progress);
-        // Layer replacements (use '-' when unknown)
         s = ReplaceNullableInt(s, "layer", d.Layer);
         s = ReplaceNullableInt(s, "layermax", d.LayerMax);
-        // {layers} -> "current/total" with '-' when unknown
         s = System.Text.RegularExpressions.Regex.Replace(s, @"\{layers\}", m =>
         {
             var left = d.Layer.HasValue ? d.Layer.Value.ToString() : "-";
@@ -522,15 +529,13 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceStr(s, "state", d.State ?? string.Empty);
         s = ReplaceStr(s, "filename", d.Filename ?? string.Empty);
         s = ReplaceStr(s, "slicer", d.Slicer ?? string.Empty);
-    // New filament string fields
-    s = ReplaceStr(s, "filament_type", d.FilamentType ?? string.Empty);
-    s = ReplaceStr(s, "filament_brand", d.FilamentBrand ?? string.Empty);
-    s = ReplaceStr(s, "filament_color", d.FilamentColor ?? string.Empty);
-    s = ReplaceStr(s, "filament_name", d.FilamentName ?? string.Empty);
-        // Template contains units (e.g. "mm/s"); only insert the numeric value here to avoid duplicating units.
-        // Pad to fixed width to keep label alignment stable.
+        s = ReplaceStr(s, "filament_type", d.FilamentType ?? string.Empty);
+        s = ReplaceStr(s, "filament_brand", d.FilamentBrand ?? string.Empty);
+        s = ReplaceStr(s, "filament_color", d.FilamentColor ?? string.Empty);
+        s = ReplaceStr(s, "filament_name", d.FilamentName ?? string.Empty);
+
         {
-            var speedStr = d.Speed.HasValue ? d.Speed.Value.ToString("0") : "0";
+            var speedStr = d.Speed.HasValue ? d.Speed.Value.ToString("0") : "-";
             if (_padSpeedWidth > 0)
             {
                 try { speedStr = speedStr.PadLeft(_padSpeedWidth); } catch { }
@@ -538,24 +543,20 @@ public sealed class OverlayTextService : IDisposable
             s = ReplaceStr(s, "speed", speedStr);
         }
         s = ReplaceStr(s, "speedfactor", d.SpeedFactor.HasValue ? d.SpeedFactor.Value.ToString("0") + "%" : "-");
-        // Flow is volumetric (mm^3/s) from Moonraker display_status.flow
-        // Flow is volumetric (mm^3/s) from Moonraker: provide only the numeric value here
-        // so the template can include units to avoid duplication.
+
         {
-            var flowStr = d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "0.0";
+            var flowStr = d.Flow.HasValue ? d.Flow.Value.ToString("0.0") : "-";
             if (_padFlowWidth > 0)
             {
                 try { flowStr = flowStr.PadLeft(_padFlowWidth); } catch { }
             }
             s = ReplaceStr(s, "flow", flowStr);
         }
-        // Filament usage: d.Filament is provided in mm. Convert to meters here but do NOT append the unit
-        // because the overlay template itself may include the unit (avoid doubling like "mm" -> "mm").
+
         s = ReplaceStr(s, "filament", d.Filament.HasValue && !double.IsNaN(d.Filament.Value) ? (d.Filament.Value / 1000.0).ToString("0.00") : "0.00");
-    // New filament numeric tokens in raw millimeters
-    s = ReplaceNum(s, "filament_used_mm", d.FilamentUsedMm.HasValue ? d.FilamentUsedMm.Value : double.NaN, "0");
-    s = ReplaceNum(s, "filament_total_mm", d.FilamentTotalMm.HasValue ? d.FilamentTotalMm.Value : double.NaN, "0");
-        // ETA with time format if available
+        s = ReplaceNum(s, "filament_used_mm", d.FilamentUsedMm.HasValue ? d.FilamentUsedMm.Value : double.NaN, "0");
+        s = ReplaceNum(s, "filament_total_mm", d.FilamentTotalMm.HasValue ? d.FilamentTotalMm.Value : double.NaN, "0");
+
         if (d.ETA.HasValue)
         {
             s = ReplaceDate(s, "eta", d.ETA.Value);
@@ -565,7 +566,6 @@ public sealed class OverlayTextService : IDisposable
             s = ReplaceStr(s, "eta", "-");
         }
 
-        // If the template didn't ask for layers explicitly, append them so they're always visible
         if (!System.Text.RegularExpressions.Regex.IsMatch(_template, @"\{(?:layer|layermax|layers)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
         {
             var left = d.Layer.HasValue ? d.Layer.Value.ToString() : "-";
@@ -573,7 +573,6 @@ public sealed class OverlayTextService : IDisposable
             s = s + $"  |  Layers: {left}/{right}";
         }
 
-        // Append current audio filename as a new final line when available
         try
         {
             var audioName = _audioProvider?.Invoke();
@@ -584,32 +583,22 @@ public sealed class OverlayTextService : IDisposable
         }
         catch { }
 
-        // Final sanitize for ffmpeg drawtext textfile:
-        // - Remove CRs (keep LFs)
-        // - Escape literal percent signs which drawtext treats as expansion markers
-        //   See: drawtext expansion syntax (e.g., %{localtime}); unescaped % triggers "Stray %" errors.
         s = s.Replace("\r", string.Empty);
+        s = s.Replace("%", "%%");
         return s;
     }
 
     private async Task SafeWriteAsync(string content, CancellationToken ct)
     {
-        // Always write to the same absolute file path computed at construction time
         var path = _textFilePath;
-
-        // Attempt to ensure directory exists before writing
         try { Directory.CreateDirectory(_textFileDir); } catch { }
 
-        // Use a unique temp file per write to avoid races between overlapping writes
         var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
         try
         {
-            // Also ensure parent directory of tmp exists (defensive)
             try { var parent = Path.GetDirectoryName(tmp); if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent); } catch { }
-
             await File.WriteAllTextAsync(tmp, content, Encoding.UTF8, ct);
-            // Move into place; if File.Move with overwrite fails on some FS, fall back to Replace
             try
             {
                 File.Move(tmp, path, overwrite: true);
@@ -623,7 +612,6 @@ public sealed class OverlayTextService : IDisposable
         }
         catch (Exception ex)
         {
-            // Log and attempt to cleanup temp file; don't throw so overlay loop keeps running
             _logger.LogError(ex, "[Overlay] SafeWrite failed");
             try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
         }
@@ -652,7 +640,6 @@ public sealed class OverlayTextService : IDisposable
         public double? SpeedFactor { get; init; } // Speed factor percentage
         public double? Flow { get; init; } // Flow/extrude factor percentage
         public double? Filament { get; init; } // Filament used in mm (legacy field for {filament} token in meters)
-        // New filament metadata fields for enhanced overlay/metadata usage
         public string? FilamentType { get; init; }
         public string? FilamentBrand { get; init; }
         public string? FilamentColor { get; init; }
@@ -673,7 +660,6 @@ public sealed class OverlayTextService : IDisposable
         public double? TotalMm { get; init; }
     }
 
-    // Helpers for case-insensitive JSON value extraction from JsonObject (System.Text.Json.Nodes)
     private static string? TryGetStringCaseInsensitive(System.Text.Json.Nodes.JsonObject obj, string key)
     {
         try
