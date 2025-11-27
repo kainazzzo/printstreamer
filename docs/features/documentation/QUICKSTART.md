@@ -94,36 +94,55 @@ dotnet run -- --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
 The app will automatically start/stop YouTube streams based on print jobs.
 
 ### Use Case 4: Run in Docker?
+
+Before building or running the container, edit `appsettings.Home.json` in the repository root and set your own values (for example: `Stream:Source`, `YouTube:OAuth:ClientId`, `YouTube:OAuth:ClientSecret`, `Moonraker:ApiUrl`, and any other environment-specific settings). The Docker helper expects `appsettings.Home.json` to exist and mounts it read-only into the container.
+
+You can build & run manually:
+
 ```bash
-# Build
+# Build image
 docker build -t printstreamer .
 
 # Run (example, not secure for secrets)
 docker run -p 8080:8080 \
-  printstreamer \
-  --Stream:Source "http://YOUR_PRINTER_IP/webcam/?action=stream" \
-  --YouTube:OAuth:ClientId "YOUR_CLIENT_ID.apps.googleusercontent.com" \
-  --YouTube:OAuth:ClientSecret "YOUR_CLIENT_SECRET" \
-  --Moonraker:ApiUrl "http://YOUR_MOONRAKER_HOST:7125"
+  --name printstreamer \
+  -e "ASPNETCORE_ENVIRONMENT=Home" \
+  -v "$(pwd)/appsettings.Home.json:/app/appsettings.Home.json:ro" \
+  -v "$HOME/.printstreamer:/app/data" \
+  printstreamer
 ```
-**Warning:** Never pass your client secret directly in production! Use Docker secrets or a secrets manager. See `DOCKER_RELEASE.md` for secure deployment.
+
+Or use the provided helper which publishes the project, builds the image and starts the container for you:
+
+```bash
+# Make executable if needed, then run
+./scripts/docker.sh
+
+# Force interactive mode (useful for first-time OAuth)
+INTERACTIVE=1 ./scripts/docker.sh
+
+# Override defaults (example)
+HOST_PORT=9090 DOTNET_IMAGE=myregistry/printstreamer:latest ./scripts/docker.sh
+```
+
+Notes about the helper script (`scripts/docker.sh`):
+- It requires `docker` on your PATH and will fail if `appsettings.Home.json` is missing.
+- It automatically mounts `~/.printstreamer` into the container so tokens and state persist across runs.
+- It prints a fully-quoted `docker run` command before executing so you can inspect or copy it.
+- To pass a one-time OAuth code for non-interactive auth, set `YOUTUBE_OAUTH_CODE` in the environment.
+
+**Warning:** Never store or pass client secrets insecurely in production. Use Docker secrets, a secrets manager, or the secure guidelines in `DOCKER_RELEASE.md`.
 
 #### Interactive OAuth inside Docker
-On first-time YouTube authentication, the app may print an authorization URL and wait for you to paste the code. To make this work inside Docker:
+For the initial YouTube OAuth flow, the container may need interactive input. The helper script supports this:
 
-- Use the helper script which enables interactive mode when a TTY is present and persists your token to `tokens/youtube_token.json`:
-
-```bash
-./scripts/run.sh
-```
-
-- If your environment doesn't allocate a TTY automatically, force interactive mode:
+- Run interactively (allocates a TTY) so the app can display an auth URL and accept a pasted code:
 
 ```bash
-INTERACTIVE=1 ./scripts/run.sh
+INTERACTIVE=1 ./scripts/docker.sh
 ```
 
-The first run will ask you to open a link and paste a code; the resulting token is saved to `tokens/youtube_token.json` so future runs are headless.
+- The helper ensures `~/.printstreamer/tokens` exists and will persist the OAuth token there (the script creates `~/.printstreamer/youtube_reuse_store.json` and the `tokens` directory when needed). After the first interactive authorization the token is saved to your host `~/.printstreamer` so future runs can be headless.
 
 ---
 
