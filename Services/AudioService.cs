@@ -46,22 +46,31 @@ namespace PrintStreamer.Services
 
         private string _folder;
         private List<AudioTrack> _library = new();
-        private readonly ConcurrentQueue<string> _queue = new();
-        private string? _current;
+private readonly ConcurrentQueue<string> _queue = new();
+private readonly object _queueLock = new();
+private string? _current;
+private string _lastPlayedFile = string.Empty;
     private bool _playing;
     private bool _shuffle;
     private RepeatMode _repeat = RepeatMode.All; // default to repeat all
     // index into the library for rotation
     private int _libraryIndex = -1;
 
-        public AudioService(IConfiguration config)
-        {
-            _config = config;
-            _folder = _config.GetValue<string>("Audio:Folder") ?? "audio";
-            _folder = System.IO.Path.GetFullPath(System.IO.Path.Combine(Directory.GetCurrentDirectory(), _folder));
-            EnsureFolder();
-            Rescan();
-        }
+public AudioService(IConfiguration config)
+{
+    _config = config;
+    _folder = _config.GetValue<string>("Audio:Folder") ?? "audio";
+    _folder = System.IO.Path.GetFullPath(System.IO.Path.Combine(Directory.GetCurrentDirectory(), _folder));
+    EnsureFolder();
+
+    // initialize persistence path for last-played state
+    _lastPlayedFile = System.IO.Path.Combine(_folder, "last_played.txt");
+
+    Rescan();
+
+    // Try to restore last-played track; if not available pick a random one
+    RestoreLastPlayed();
+}
 
         private void EnsureFolder()
         {
@@ -114,35 +123,104 @@ namespace PrintStreamer.Services
                 }
             }
 
-            System.Threading.Interlocked.Exchange(ref _libraryIndex, -1);
-        }
-
-        public AudioState GetState()
-        {
-            return new AudioState
+            // If there's no currently selected track, initialize the rotating index to a random position
+            // (store r-1 so the next Interlocked.Increment yields r). This prevents always starting at the first track after restart.
+            if (sorted.Count > 0)
             {
-                IsPlaying = _playing,
-                Current = _current is string p ? System.IO.Path.GetFileName(p) : null,
-                Queue = _queue.ToArray().Select(p => System.IO.Path.GetFileName(p)).ToList(),
-                Shuffle = _shuffle,
-                Repeat = _repeat
-            };
-        }
-
-        public void Enqueue(params string[] names)
-        {
-            if (names == null || names.Length == 0) return;
-            var map = _library.ToDictionary(t => t.Name, t => t.Path, StringComparer.OrdinalIgnoreCase);
-            foreach (var n in names)
+                var r = System.Security.Cryptography.RandomNumberGenerator.GetInt32(sorted.Count);
+                System.Threading.Interlocked.Exchange(ref _libraryIndex, r - 1);
+            }
+            else
             {
-                if (map.TryGetValue(n, out var path)) _queue.Enqueue(path);
+                System.Threading.Interlocked.Exchange(ref _libraryIndex, -1);
             }
         }
 
-        public void ClearQueue()
+private void SaveLastPlayed()
+{
+    try
+    {
+        if (string.IsNullOrWhiteSpace(_lastPlayedFile)) return;
+        if (string.IsNullOrWhiteSpace(_current))
         {
-            while (_queue.TryDequeue(out _)) { }
+            if (System.IO.File.Exists(_lastPlayedFile)) System.IO.File.Delete(_lastPlayedFile);
+            return;
         }
+
+        // Write absolute path of current track
+        System.IO.File.WriteAllText(_lastPlayedFile, _current);
+    }
+    catch { }
+}
+
+private void RestoreLastPlayed()
+{
+    try
+    {
+        if (string.IsNullOrWhiteSpace(_lastPlayedFile)) return;
+
+        if (System.IO.File.Exists(_lastPlayedFile))
+        {
+            var saved = System.IO.File.ReadAllText(_lastPlayedFile).Trim();
+            if (!string.IsNullOrWhiteSpace(saved))
+            {
+                // If the saved path is present in the library, restore it
+                var idx = _library.FindIndex(t => string.Equals(t.Path, saved, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0)
+                {
+                    _current = _library[idx].Path;
+                    _playing = false;
+                    System.Threading.Interlocked.Exchange(ref _libraryIndex, idx);
+                    return;
+                }
+            }
+        }
+
+        // saved track not found -> pick a random track if library available and persist it
+        if (_library.Count > 0)
+        {
+            var idx = System.Security.Cryptography.RandomNumberGenerator.GetInt32(_library.Count);
+            _current = _library[idx].Path;
+            _playing = false;
+            System.Threading.Interlocked.Exchange(ref _libraryIndex, idx);
+            SaveLastPlayed();
+        }
+    }
+    catch { }
+}
+
+public AudioState GetState()
+{
+    return new AudioState
+    {
+        IsPlaying = _playing,
+        Current = _current is string p ? System.IO.Path.GetFileName(p) : null,
+        Queue = _queue.ToArray().Select(p => System.IO.Path.GetFileName(p)).ToList(),
+        Shuffle = _shuffle,
+        Repeat = _repeat
+    };
+}
+
+public void Enqueue(params string[] names)
+{
+    if (names == null || names.Length == 0) return;
+    var map = _library.ToDictionary(t => t.Name, t => t.Path, StringComparer.OrdinalIgnoreCase);
+    lock (_queueLock)
+    {
+        foreach (var n in names)
+        {
+            if (map.TryGetValue(n, out var path)) _queue.Enqueue(path);
+        }
+    }
+}
+
+public void ClearQueue()
+{
+    lock (_queueLock)
+    {
+        while (_queue.TryDequeue(out _)) { }
+    }
+}
 
         public void Play() { _playing = true; }
         public void Pause() { _playing = false; }
@@ -177,6 +255,7 @@ namespace PrintStreamer.Services
             if (match == null || string.IsNullOrWhiteSpace(match.Path)) return false;
             _current = match.Path;
             _playing = true;
+            SaveLastPlayed();
             selectedPath = match.Path;
 
             // Align the rotating library index with the selected track so the next skip works as expected.
@@ -203,6 +282,7 @@ namespace PrintStreamer.Services
             var path = library[idx].Path;
             _current = path;
             _playing = true;
+            SaveLastPlayed();
             System.Threading.Interlocked.Exchange(ref _libraryIndex, idx);
             selectedPath = path;
             return true;
@@ -230,6 +310,7 @@ namespace PrintStreamer.Services
                 path = lib[idx].Path;
                 _current = path;
                 _playing = true;
+                SaveLastPlayed();
                 return true;
             }
 
@@ -239,6 +320,7 @@ namespace PrintStreamer.Services
                 path = qpath;
                 _current = path;
                 _playing = true;
+                SaveLastPlayed();
                 return true;
             }
 
@@ -273,6 +355,7 @@ namespace PrintStreamer.Services
             path = library[nextIdx % library.Count].Path;
             _current = path;
             _playing = true;
+            SaveLastPlayed();
             return true;
         }
 
@@ -280,76 +363,83 @@ namespace PrintStreamer.Services
         /// Try to consume the next item from the explicit queue (if any) and make it the current track.
         /// Returns true when a queued path was found and selected.
         /// </summary>
-        public bool TryConsumeQueue(out string path)
-        {
-            path = string.Empty;
-            if (_queue.TryDequeue(out var qpath))
-            {
-                path = qpath;
-                _current = path;
-                _playing = true;
-                return true;
-            }
-            return false;
-        }
+public bool TryConsumeQueue(out string path)
+{
+    path = string.Empty;
+    if (_queue.TryDequeue(out var qpath))
+    {
+        path = qpath;
+        _current = path;
+        _playing = true;
+        SaveLastPlayed();
+        return true;
+    }
+    return false;
+}
 
         /// <summary>
         /// Remove the queued entry at the given zero-based index. Returns true if removed.
         /// </summary>
-        public bool RemoveFromQueueAt(int index)
+public bool RemoveFromQueueAt(int index)
+{
+    if (index < 0) return false;
+    var tmp = new List<string>();
+    var removed = false;
+    var i = 0;
+    lock (_queueLock)
+    {
+        while (_queue.TryDequeue(out var p))
         {
-            if (index < 0) return false;
-            var tmp = new List<string>();
-            var removed = false;
-            var i = 0;
-            while (_queue.TryDequeue(out var p))
+            if (!removed && i == index)
             {
-                if (!removed && i == index)
-                {
-                    removed = true;
-                }
-                else
-                {
-                    tmp.Add(p);
-                }
-                i++;
+                removed = true;
             }
-            foreach (var item in tmp) _queue.Enqueue(item);
-            return removed;
+            else
+            {
+                tmp.Add(p);
+            }
+            i++;
         }
+        foreach (var item in tmp) _queue.Enqueue(item);
+    }
+    return removed;
+}
 
         /// <summary>
         /// Remove any queued entries that match the provided track names (case-insensitive, compares filename without extension).
         /// Returns the number of removed items.
         /// </summary>
-        public int RemoveFromQueue(params string[] names)
+public int RemoveFromQueue(params string[] names)
+{
+    if (names == null || names.Length == 0) return 0;
+    var lookup = new HashSet<string>(names.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()), StringComparer.OrdinalIgnoreCase);
+    if (lookup.Count == 0) return 0;
+
+    // Rebuild the queue excluding matching items. Use a small lock to avoid concurrent rebuild collisions.
+    var removed = 0;
+    var temp = new List<string>();
+    lock (_queueLock)
+    {
+        while (_queue.TryDequeue(out var p))
         {
-            if (names == null || names.Length == 0) return 0;
-            var lookup = new HashSet<string>(names.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()), StringComparer.OrdinalIgnoreCase);
-            if (lookup.Count == 0) return 0;
-
-            // Rebuild the queue excluding matching items. Use a small lock to avoid concurrent rebuild collisions.
-            var removed = 0;
-            var temp = new List<string>();
-            while (_queue.TryDequeue(out var p))
+            var name = System.IO.Path.GetFileNameWithoutExtension(p) ?? string.Empty;
+            if (lookup.Contains(name))
             {
-                var name = System.IO.Path.GetFileNameWithoutExtension(p) ?? string.Empty;
-                if (lookup.Contains(name))
-                {
-                    removed++;
-                    continue;
-                }
-                temp.Add(p);
+                removed++;
+                continue;
             }
-
-            // Re-enqueue preserved items in original order
-            foreach (var item in temp)
-            {
-                _queue.Enqueue(item);
-            }
-
-            return removed;
+            temp.Add(p);
         }
+
+        // Re-enqueue preserved items in original order
+        foreach (var item in temp)
+        {
+            _queue.Enqueue(item);
+        }
+    }
+
+    return removed;
+}
 
         public string? Current => _current is string p ? System.IO.Path.GetFileName(p) : null;
         public string? CurrentPath => _current;
