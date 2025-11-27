@@ -55,10 +55,20 @@ namespace PrintStreamer.Services
             {
                 if (string.IsNullOrWhiteSpace(_audio.CurrentPath))
                 {
+                    // First attempt to follow existing playback behavior (queue, repeat rules etc.)
                     if (_audio.TryGetNextTrack(out var p) && !string.IsNullOrWhiteSpace(p))
                     {
                         _audio.Play();
                         _logger.LogInformation("[AudioBroadcast] Preloaded initial track: {File}", System.IO.Path.GetFileName(p));
+                    }
+                    else
+                    {
+                        // No explicit next track available; pick a random track to serve as the initial playback
+                        if (_audio.TrySelectRandomTrack(out var rp) && !string.IsNullOrWhiteSpace(rp))
+                        {
+                            _audio.Play();
+                            _logger.LogInformation("[AudioBroadcast] Preloaded initial random track: {File}", System.IO.Path.GetFileName(rp));
+                        }
                     }
                 }
             }

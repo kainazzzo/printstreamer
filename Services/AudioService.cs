@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Configuration;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Collections.Generic;
 
 namespace PrintStreamer.Services
@@ -185,6 +186,25 @@ namespace PrintStreamer.Services
             {
                 System.Threading.Interlocked.Exchange(ref _libraryIndex, idx);
             }
+            return true;
+        }
+
+        /// <summary>
+        /// Select a random track from the library and make it the current track.
+        /// This does not enable shuffle mode; it simply picks one random track and
+        /// aligns the library index so subsequent skips behave as expected.
+        /// </summary>
+        public bool TrySelectRandomTrack(out string? selectedPath)
+        {
+            selectedPath = null;
+            var library = _library;
+            if (library.Count == 0) return false;
+            var idx = RandomNumberGenerator.GetInt32(library.Count);
+            var path = library[idx].Path;
+            _current = path;
+            _playing = true;
+            System.Threading.Interlocked.Exchange(ref _libraryIndex, idx);
+            selectedPath = path;
             return true;
         }
 
