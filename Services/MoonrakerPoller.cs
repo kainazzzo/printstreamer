@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 
 namespace PrintStreamer.Services
 {
-    internal class MoonrakerPoller
+    internal class MoonrakerPoller : IMoonrakerPoller
     {
         public MoonrakerPoller(MoonrakerClient moonrakerClient, YouTubeControlService youTubeControlService, IConfiguration configuration, ILogger<MoonrakerPoller> logger)
         {
@@ -108,8 +108,10 @@ namespace PrintStreamer.Services
         /// </summary>
         public void RegisterPrintStreamOrchestrator(PrintStreamOrchestrator orchestrator)
         {
+          
             // The event handler is async, but the registrar itself does not need to be async.
             PrintStateChanged += async (prev, curr) => await orchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
+        
         }
 
         // Polling loop: query Moonraker and emit PrinterState events for subscribers.

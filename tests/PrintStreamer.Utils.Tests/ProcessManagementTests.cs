@@ -39,7 +39,7 @@ namespace PrintStreamer.Utils.Tests
 
             // Create a test server that simulates the real streaming endpoints
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Stream:Source"] = "http://localhost:8081/webcam/?action=snapshot",
                     ["Overlay:StreamSource"] = "http://127.0.0.1:8080/stream/source",

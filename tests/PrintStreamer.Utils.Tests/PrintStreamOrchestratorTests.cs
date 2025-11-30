@@ -3,12 +3,13 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using PrintStreamer.Models;
 using PrintStreamer.Timelapse;
 using PrintStreamer.Services;
+using PrintStreamer.Interfaces;
 
 namespace PrintStreamer.Utils.Tests
 {
@@ -29,8 +30,15 @@ namespace PrintStreamer.Utils.Tests
             var config = new ConfigurationBuilder().AddInMemoryCollection(inMemory).Build();
 
             var timelapseFake = new FakeTimelapseManager();
+            var streamServiceMock = new Mock<StreamService>(MockBehavior.Loose);
+            var pollingManagerMock = new Mock<YouTubePollingManager>();
+            var youtubeServiceMock = new Mock<YouTubeControlService>();
+            var streamOrchestratorLoggerMock = new Mock<ILogger<StreamOrchestrator>>();
+            var streamOrchestratorMock = new Mock<IStreamOrchestrator>();
+            var moonrakerPollerMock = new Mock<IMoonrakerPoller>();
+            var loggerMock = new Mock<ILogger<PrintStreamOrchestrator>>();
 
-            var orchestrator = new PrintStreamOrchestrator(config, NullLoggerFactory.Instance, timelapseFake);
+            var orchestrator = new PrintStreamOrchestrator(config, timelapseFake, streamOrchestratorMock.Object, moonrakerPollerMock.Object, loggerMock.Object);
 
             var startState = new PrinterState
             {
@@ -81,7 +89,14 @@ namespace PrintStreamer.Utils.Tests
             var config = new ConfigurationBuilder().AddInMemoryCollection(inMemory).Build();
 
             var timelapseFake = new FakeTimelapseManager();
-            var orchestrator = new PrintStreamOrchestrator(config, NullLoggerFactory.Instance, timelapseFake);
+            var streamServiceMock = new Mock<StreamService>(MockBehavior.Loose);
+            var pollingManagerMock = new Mock<YouTubePollingManager>();
+            var youtubeServiceMock = new Mock<YouTubeControlService>();
+            var streamOrchestratorLoggerMock = new Mock<ILogger<StreamOrchestrator>>();
+            var streamOrchestratorMock = new Mock<IStreamOrchestrator>();
+            var moonrakerPollerMock = new Mock<IMoonrakerPoller>();
+            var loggerMock = new Mock<ILogger<PrintStreamOrchestrator>>();
+            var orchestrator = new PrintStreamOrchestrator(config, timelapseFake, streamOrchestratorMock.Object, moonrakerPollerMock.Object, loggerMock.Object);
 
             var startState = new PrinterState {
                 State = "printing",

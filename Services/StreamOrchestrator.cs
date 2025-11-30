@@ -7,7 +7,7 @@ namespace PrintStreamer.Services
     /// Orchestrates streaming operations by coordinating between StreamService, 
     /// YouTubeControlService, and TimelapseManager.
     /// </summary>
-    public class StreamOrchestrator : IDisposable
+    public class StreamOrchestrator : IDisposable, IStreamOrchestrator
     {
         private readonly StreamService _streamService;
         private readonly IConfiguration _config;

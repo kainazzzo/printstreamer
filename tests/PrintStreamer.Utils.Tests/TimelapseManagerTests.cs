@@ -33,7 +33,7 @@ namespace PrintStreamer.Utils.Tests
             // Instead, we'll use a simple configuration that returns values when indexed.
             // Create a real ConfigurationBuilder with InMemory data
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Timelapse:MainFolder"] = _tempTimelapseDir,
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg"
@@ -342,7 +342,7 @@ namespace PrintStreamer.Utils.Tests
             // Simulate app restart by disposing current manager and creating a new one with same configuration
             _sut.Dispose();
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Timelapse:MainFolder"] = _tempTimelapseDir,
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg"
@@ -394,7 +394,7 @@ namespace PrintStreamer.Utils.Tests
             // Dispose and re-create manager
             _sut.Dispose();
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Timelapse:MainFolder"] = _tempTimelapseDir,
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg",
@@ -433,7 +433,7 @@ namespace PrintStreamer.Utils.Tests
             // Dispose and re-create manager with a very small resume threshold (5 seconds)
             _sut.Dispose();
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Timelapse:MainFolder"] = _tempTimelapseDir,
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg",
@@ -474,7 +474,7 @@ namespace PrintStreamer.Utils.Tests
             // Dispose and recreate manager
             _sut.Dispose();
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Timelapse:MainFolder"] = _tempTimelapseDir,
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg"

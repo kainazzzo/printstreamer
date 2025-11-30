@@ -11,6 +11,7 @@ using Moq;
 using PrintStreamer.Models;
 using PrintStreamer.Timelapse;
 using PrintStreamer.Services;
+using PrintStreamer.Interfaces;
 
 namespace PrintStreamer.Utils.Tests
 {
@@ -20,6 +21,10 @@ namespace PrintStreamer.Utils.Tests
         private string? _tempTimelapseDir;
         private Mock<ILogger<TimelapseManager>>? _timelapseManagerLoggerMock;
         private Mock<ILogger<TimelapseService>>? _timelapseServiceLoggerMock;
+        private Mock<MoonrakerClient>? _moonrakerClientMock;
+        private Mock<IStreamOrchestrator>? _streamOrchestratorMock;
+        private Mock<IMoonrakerPoller>? _moonrakerPollerMock;
+        private Mock<ILogger<PrintStreamOrchestrator>>? _orchestratorLoggerMock;
 
         [TestInitialize]
         public void Setup()
@@ -28,6 +33,11 @@ namespace PrintStreamer.Utils.Tests
             Directory.CreateDirectory(_tempTimelapseDir);
             _timelapseManagerLoggerMock = new Mock<ILogger<TimelapseManager>>();
             _timelapseServiceLoggerMock = new Mock<ILogger<TimelapseService>>();
+            var moonrakerClientLoggerMock = new Mock<ILogger<MoonrakerClient>>();
+            _moonrakerClientMock = new Mock<MoonrakerClient>(moonrakerClientLoggerMock.Object);
+            _streamOrchestratorMock = new Mock<IStreamOrchestrator>();
+            _moonrakerPollerMock = new Mock<IMoonrakerPoller>();
+            _orchestratorLoggerMock = new Mock<ILogger<PrintStreamOrchestrator>>();
         }
 
         [TestCleanup]
@@ -46,7 +56,7 @@ namespace PrintStreamer.Utils.Tests
         {
             // Arrange - AutoFinalize = false
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Timelapse:MainFolder"] = _tempTimelapseDir,
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg",
@@ -54,7 +64,7 @@ namespace PrintStreamer.Utils.Tests
                 })
                 .Build();
 
-            var sut = new TimelapseManager(config, _timelapseManagerLoggerMock!.Object, _timelapseServiceLoggerMock!.Object, null!);
+            var sut = new TimelapseManager(config, _timelapseManagerLoggerMock!.Object, _timelapseServiceLoggerMock!.Object, _moonrakerClientMock!.Object);
 
             try
             {
@@ -100,7 +110,7 @@ namespace PrintStreamer.Utils.Tests
             timelapseMock.Setup(m => m.StopTimelapseAsync(sessionName)).ReturnsAsync(dummyVideo);
 
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Timelapse:MainFolder"] = _tempTimelapseDir,
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg",
@@ -110,7 +120,7 @@ namespace PrintStreamer.Utils.Tests
                 })
                 .Build();
 
-            var orchestrator = new PrintStreamOrchestrator(config, _loggerFactoryMock!.Object, timelapseMock.Object, null);
+            var orchestrator = new PrintStreamOrchestrator(config, timelapseMock.Object, _streamOrchestratorMock!.Object, _moonrakerPollerMock!.Object, _orchestratorLoggerMock!.Object);
 
             // Simulate a state where printing and at last layer
             var state = new PrinterState

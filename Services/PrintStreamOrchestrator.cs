@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using PrintStreamer.Models;
 using PrintStreamer.Timelapse;
+using PrintStreamer.Interfaces;
 
 namespace PrintStreamer.Services
 {
@@ -22,9 +23,9 @@ namespace PrintStreamer.Services
         private readonly IConfiguration _config;
         private readonly ILogger<PrintStreamOrchestrator> _logger;
         private readonly ITimelapseManager _timelapseManager;
-        private readonly StreamOrchestrator _streamOrchestrator;
+        private readonly IStreamOrchestrator _streamOrchestrator;
         private readonly Dictionary<string, string?> _sessionJobMap = new();
-        private readonly MoonrakerPoller _moonrakerPoller;
+        private readonly IMoonrakerPoller _moonrakerPoller;
         
         // State tracking
         private PrinterState? _lastPrinterState;
@@ -56,7 +57,7 @@ namespace PrintStreamer.Services
             "idle", "complete", "stopped", "error", "standby"
         };
 
-        public PrintStreamOrchestrator(IConfiguration config, ITimelapseManager timelapseManager, StreamOrchestrator streamOrchestrator, MoonrakerPoller moonrakerPoller, ILogger<PrintStreamOrchestrator> logger)
+        public PrintStreamOrchestrator(IConfiguration config, ITimelapseManager timelapseManager, IStreamOrchestrator streamOrchestrator, IMoonrakerPoller moonrakerPoller, ILogger<PrintStreamOrchestrator> logger)
         {
             _config = config;
 

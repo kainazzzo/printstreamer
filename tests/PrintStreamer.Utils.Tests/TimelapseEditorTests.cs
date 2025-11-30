@@ -15,7 +15,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Moq;
 using printstreamer.Components.Shared;
+using PrintStreamer.Timelapse;
 
 namespace PrintStreamer.Utils.Tests
 {
@@ -26,6 +28,9 @@ namespace PrintStreamer.Utils.Tests
         private HttpClient? _client;
         private string? _tempDir;
         private bool _deleteCalled = false;
+        private Mock<ILogger<TimelapseManager>>? _timelapseManagerLoggerMock;
+        private Mock<ILogger<TimelapseService>>? _timelapseServiceLoggerMock;
+        private Mock<MoonrakerClient>? _moonrakerClientMock;
 
         [TestInitialize]
         public void Setup()
@@ -33,12 +38,16 @@ namespace PrintStreamer.Utils.Tests
             _tempDir = Path.Combine(Path.GetTempPath(), $"timelapse_editor_test_{Guid.NewGuid()}");
             Directory.CreateDirectory(_tempDir);
 
+            _timelapseManagerLoggerMock = new Mock<ILogger<TimelapseManager>>();
+            _timelapseServiceLoggerMock = new Mock<ILogger<TimelapseService>>();
+            var moonrakerClientLoggerMock = new Mock<ILogger<MoonrakerClient>>();
+            _moonrakerClientMock = new Mock<MoonrakerClient>(moonrakerClientLoggerMock.Object);
+
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string> { ["Timelapse:MainFolder"] = _tempDir })
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Timelapse:MainFolder"] = _tempDir })
                 .Build();
 
-            var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
-            var timelapseManager = new PrintStreamer.Timelapse.TimelapseManager(config, loggerFactory, null!);
+            var timelapseManager = new PrintStreamer.Timelapse.TimelapseManager(config, _timelapseManagerLoggerMock.Object, _timelapseServiceLoggerMock.Object, _moonrakerClientMock.Object);
 
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>

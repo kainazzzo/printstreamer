@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Antiforgery;
 using PrintStreamer.Overlay;
 using FastEndpoints;
 using System.Linq;
+using PrintStreamer.Interfaces;
 
 // Moonraker polling and streaming helpers moved to Services/MoonrakerPoller.cs
 
@@ -150,14 +151,14 @@ webBuilder.Services.AddSingleton<WebCamManager>();
 // OBS integration
 webBuilder.Services.AddSingleton<IOBSService, OBSService>();
 webBuilder.Services.AddSingleton<StreamService>();
-webBuilder.Services.AddSingleton<StreamOrchestrator>();
+webBuilder.Services.AddSingleton<IStreamOrchestrator, StreamOrchestrator>();
 webBuilder.Services.AddSingleton<PrintStreamOrchestrator>();
 webBuilder.Services.AddSingleton<AudioService>();
 webBuilder.Services.AddSingleton<AudioBroadcastService>();
 // Printer console service (skeleton)
 webBuilder.Services.AddSingleton<PrinterConsoleService>();
 webBuilder.Services.AddSingleton<OverlayTextService>();
-webBuilder.Services.AddSingleton<MoonrakerPoller>();
+webBuilder.Services.AddSingleton<IMoonrakerPoller, MoonrakerPoller>();
 
 
 // Start the same singleton as a hosted service
