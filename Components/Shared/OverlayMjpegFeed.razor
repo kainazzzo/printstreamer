@@ -1,15 +1,14 @@
 @inject IJSRuntime JS
 @inject NavigationManager Nav
 <div style="flex:1;display:flex;flex-direction:column">
-    <h3 style="margin:6px 0;font-size:1em">Source (raw MJPEG)</h3>
+    <h3 style="margin:6px 0;font-size:1em">Overlay (raw MJPEG)</h3>
     <div class="preview-wide">
-        <img id="mjpeg-overlay" src="/stream/overlay" alt="MJPEG stream"
-            style="max-width:100%;height:auto;display:block" />
+        <img id="mjpeg" src="/stream/overlay" alt="MJPEG stream" />
     </div>
-
+    <p>Direct stream URL: <a href="/stream/overlay" style="color:#66ccff">/stream/overlay</a></p>
     <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
         <!-- audioPreview id reused to leverage existing audioPreview JS helpers in Components/app.js -->
-        <audio id="audioPreview" controls muted autoplay preload="auto" src="/api/audio/stream"
+        <audio id="audioPreview" controls muted autoplay preload="auto" src="/stream/audio"
             style="flex:1;min-width:220px"></audio>
 
         <div style="display:flex;gap:8px;align-items:center">
@@ -24,8 +23,6 @@
                 @(_shuffleEnabled ? "On" : "Off")</button>
         </div>
     </div>
-
-    <p style="margin-top:6px">Direct stream URL: <a href="/stream/overlay" style="color:#66ccff">/stream/overlay</a></p>
 </div>
 
 @code {
