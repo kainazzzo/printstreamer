@@ -12,10 +12,10 @@ namespace PrintStreamer.Endpoints.Api.Live
     public class ForceGoLiveEndpoint : EndpointWithoutRequest<object>
     {
         private readonly ILogger<ForceGoLiveEndpoint> _logger;
-        private readonly StreamOrchestrator _orchestrator;
+        private readonly IStreamOrchestrator _orchestrator;
         private readonly YouTubeControlService _ytService;
 
-        public ForceGoLiveEndpoint(ILogger<ForceGoLiveEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService ytService)
+        public ForceGoLiveEndpoint(ILogger<ForceGoLiveEndpoint> logger, IStreamOrchestrator orchestrator, YouTubeControlService ytService)
         {
             _logger = logger;
             _orchestrator = orchestrator;

@@ -176,7 +176,7 @@ namespace PrintStreamer.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse of progress");
+                        _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse of progress");
                     }
                 }
 
@@ -243,7 +243,7 @@ namespace PrintStreamer.Services
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "[PrintStreamOrchestrator] Error handling printer state change");
+                _logger.LogError(ex, "[PrintStreamOrchestrator] Error handling printer state change");
             }
         }
 
@@ -314,7 +314,7 @@ namespace PrintStreamer.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse manager after starting session");
+                        _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse manager after starting session");
                     }
                 }
                 else
@@ -325,7 +325,7 @@ namespace PrintStreamer.Services
 
                 // Start YouTube broadcast if enabled
                 bool autoBroadcastEnabled = _config.GetValue<bool?>("YouTube:LiveBroadcast:Enabled") ?? true;
-                if (autoBroadcastEnabled && !(_streamOrchestrator?.IsBroadcastActive ?? MoonrakerPoller.IsBroadcastActive))
+                if (autoBroadcastEnabled && !_streamOrchestrator.IsBroadcastActive)
                 {
                     try
                     {
@@ -368,7 +368,7 @@ namespace PrintStreamer.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Error starting broadcast");
+                        _logger.LogError(ex, "[PrintStreamOrchestrator] Error starting broadcast");
                     }
                 }
                 else if (!autoBroadcastEnabled)
@@ -378,7 +378,7 @@ namespace PrintStreamer.Services
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to start print stream");
+                _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to start print stream");
             }
         }
 
@@ -459,7 +459,7 @@ namespace PrintStreamer.Services
             if (!forceFinalizeActiveSession)
             {
                 bool endStreamAfterPrint = _config.GetValue<bool?>("YouTube:LiveBroadcast:EndStreamAfterPrint") ?? true;
-                if (endStreamAfterPrint && (_streamOrchestrator?.IsBroadcastActive ?? MoonrakerPoller.IsBroadcastActive))
+                if (endStreamAfterPrint && _streamOrchestrator.IsBroadcastActive)
                 {
                     try
                     {
@@ -484,10 +484,10 @@ namespace PrintStreamer.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Error stopping broadcast");
+                        _logger.LogError(ex, "[PrintStreamOrchestrator] Error stopping broadcast");
                     }
                 }
-                else if ((_streamOrchestrator?.IsBroadcastActive ?? MoonrakerPoller.IsBroadcastActive))
+                else if (_streamOrchestrator.IsBroadcastActive)
                 {
                     _logger.LogInformation("[PrintStreamOrchestrator] Leaving broadcast running (EndStreamAfterPrint=false)");
                 }
@@ -560,7 +560,7 @@ namespace PrintStreamer.Services
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to finalize timelapse: {Session}", sessionName);
+                _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to finalize timelapse: {Session}", sessionName);
             }
         }
 

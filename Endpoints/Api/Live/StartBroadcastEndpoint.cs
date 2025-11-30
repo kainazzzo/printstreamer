@@ -9,9 +9,9 @@ namespace PrintStreamer.Endpoints.Api.Live
 {
     public class StartBroadcastEndpoint : EndpointWithoutRequest<object>
     {
-        private readonly StreamOrchestrator _orchestrator;
+        private readonly IStreamOrchestrator _orchestrator;
 
-        public StartBroadcastEndpoint(StreamOrchestrator orchestrator)
+        public StartBroadcastEndpoint(IStreamOrchestrator orchestrator)
         {
             _orchestrator = orchestrator;
         }

@@ -11,10 +11,10 @@ namespace PrintStreamer.Endpoints.Api.Live
     public class DebugEndpoint : EndpointWithoutRequest<object>
     {
         private readonly ILogger<DebugEndpoint> _logger;
-        private readonly StreamOrchestrator _orchestrator;
+        private readonly IStreamOrchestrator _orchestrator;
         private readonly YouTubeControlService _yt;
 
-        public DebugEndpoint(ILogger<DebugEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService yt)
+        public DebugEndpoint(ILogger<DebugEndpoint> logger, IStreamOrchestrator orchestrator, YouTubeControlService yt)
         {
             _logger = logger;
             _orchestrator = orchestrator;

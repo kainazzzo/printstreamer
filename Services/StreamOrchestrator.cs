@@ -31,7 +31,7 @@ namespace PrintStreamer.Services
             _logger = logger;
             _pollingManager = pollingManager;
             _youtubeService = youtubeService;
-            
+
             // Start background health check timer (runs every 10 seconds when broadcasting)
             _healthCheckTimer = new Timer(
                 callback: _ => _ = MonitorStreamHealthAsync(),
@@ -89,9 +89,9 @@ namespace PrintStreamer.Services
         {
             lock (_lock)
             {
-                    _endStreamAfterSong = enabled;
-                }
-                _logger.LogInformation("[Orchestrator] End stream after song: {Enabled}", (enabled ? "enabled" : "disabled"));
+                _endStreamAfterSong = enabled;
+            }
+            _logger.LogInformation("[Orchestrator] End stream after song: {Enabled}", (enabled ? "enabled" : "disabled"));
         }
 
         /// <summary>
@@ -107,6 +107,8 @@ namespace PrintStreamer.Services
                 }
             }
         }
+
+        bool IStreamOrchestrator.IsEndStreamAfterSongEnabled { get => IsEndStreamAfterSongEnabled; }
 
         /// <summary>
         /// Called when an audio track finishes. If end-after-song is enabled, stops the broadcast.
@@ -426,7 +428,7 @@ namespace PrintStreamer.Services
 
             string? broadcastId = null;
             string? rtmpUrl = null;
-            
+
             lock (_lock)
             {
                 if (!string.IsNullOrWhiteSpace(_currentBroadcastId))
@@ -449,15 +451,15 @@ namespace PrintStreamer.Services
                 if (!_streamService.IsStreaming)
                 {
                     _consecutiveHealthCheckFailures++;
-                    _logger.LogWarning("[Orchestrator] Health check #{Count}: Stream is not running (broadcast={BroadcastId})", 
+                    _logger.LogWarning("[Orchestrator] Health check #{Count}: Stream is not running (broadcast={BroadcastId})",
                         _consecutiveHealthCheckFailures, broadcastId);
 
                     // After 3 consecutive failures, attempt auto-restart
                     if (_consecutiveHealthCheckFailures >= MAX_CONSECUTIVE_FAILURES && !string.IsNullOrWhiteSpace(rtmpUrl))
                     {
-                        _logger.LogWarning("[Orchestrator] Stream crashed ({Count} checks). Auto-restarting with same broadcast...", 
+                        _logger.LogWarning("[Orchestrator] Stream crashed ({Count} checks). Auto-restarting with same broadcast...",
                             _consecutiveHealthCheckFailures);
-                        
+
                         try
                         {
                             // Restart stream with same RTMP URL (reuse broadcast)

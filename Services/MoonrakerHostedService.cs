@@ -1,13 +1,15 @@
+using PrintStreamer.Interfaces;
+
 namespace PrintStreamer.Services
 {
     internal class MoonrakerHostedService : IDisposable
     {
-        private readonly MoonrakerPoller _pollerService;
+        private readonly IMoonrakerPoller _pollerService;
         private readonly ILogger<MoonrakerHostedService> _logger;
         private Task? _executingTask;
         private CancellationTokenSource? _cts;
 
-        public MoonrakerHostedService(MoonrakerPoller pollerService, ILogger<MoonrakerHostedService> logger)
+        public MoonrakerHostedService(IMoonrakerPoller pollerService, ILogger<MoonrakerHostedService> logger)
         {
             _pollerService = pollerService ?? throw new ArgumentNullException(nameof(pollerService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));

@@ -9,9 +9,9 @@ namespace PrintStreamer.Endpoints.Api.Live
 {
     public class RepairEndpoint : EndpointWithoutRequest<object>
     {
-        private readonly StreamOrchestrator _orchestrator;
+        private readonly IStreamOrchestrator _orchestrator;
 
-        public RepairEndpoint(StreamOrchestrator orchestrator)
+        public RepairEndpoint(IStreamOrchestrator orchestrator)
         {
             _orchestrator = orchestrator;
         }

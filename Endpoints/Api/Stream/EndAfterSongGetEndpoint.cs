@@ -9,9 +9,9 @@ namespace PrintStreamer.Endpoints.Api.Stream
 {
     public class EndAfterSongGetEndpoint : EndpointWithoutRequest<object>
     {
-        private readonly StreamOrchestrator _orchestrator;
+        private readonly IStreamOrchestrator _orchestrator;
 
-        public EndAfterSongGetEndpoint(StreamOrchestrator orchestrator)
+        public EndAfterSongGetEndpoint(IStreamOrchestrator orchestrator)
         {
             _orchestrator = orchestrator;
         }

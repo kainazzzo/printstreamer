@@ -12,10 +12,10 @@ namespace PrintStreamer.Endpoints.Api.Live
     public class ChatEndpoint : Endpoint<ChatMessageRequest>
     {
         private readonly ILogger<ChatEndpoint> _logger;
-        private readonly StreamOrchestrator _orchestrator;
+        private readonly IStreamOrchestrator _orchestrator;
         private readonly YouTubeControlService _yt;
 
-        public ChatEndpoint(ILogger<ChatEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService yt)
+        public ChatEndpoint(ILogger<ChatEndpoint> logger, IStreamOrchestrator orchestrator, YouTubeControlService yt)
         {
             _logger = logger;
             _orchestrator = orchestrator;

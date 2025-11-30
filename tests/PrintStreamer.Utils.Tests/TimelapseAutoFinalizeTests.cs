@@ -88,7 +88,6 @@ namespace PrintStreamer.Utils.Tests
             }
             finally
             {
-                sut.Dispose();
             }
         }
 

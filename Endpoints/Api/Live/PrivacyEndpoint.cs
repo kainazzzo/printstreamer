@@ -13,10 +13,10 @@ namespace PrintStreamer.Endpoints.Api.Live
     public class PrivacyEndpoint : Endpoint<PrivacyRequest>
     {
         private readonly ILogger<PrivacyEndpoint> _logger;
-        private readonly StreamOrchestrator _orchestrator;
+        private readonly IStreamOrchestrator _orchestrator;
         private readonly YouTubeControlService _ytService;
 
-        public PrivacyEndpoint(ILogger<PrivacyEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService ytService)
+        public PrivacyEndpoint(ILogger<PrivacyEndpoint> logger, IStreamOrchestrator orchestrator, YouTubeControlService ytService)
         {
             _logger = logger;
             _orchestrator = orchestrator;

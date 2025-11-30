@@ -9,6 +9,14 @@ namespace PrintStreamer.Services
         /// Gets whether a YouTube broadcast is currently active
         /// </summary>
         bool IsBroadcastActive { get; }
+        bool IsEndStreamAfterSongEnabled { get; }
+        string? CurrentBroadcastId { get; }
+        bool IsStreaming { get; }
+        bool IsWaitingForIngestion { get; }
+
+        Task<bool> EnsureStreamingHealthyAsync(CancellationToken cancellationToken);
+        Task OnAudioTrackFinishedAsync();
+        void SetEndStreamAfterSong(bool enabled);
 
         /// <summary>
         /// Starts a YouTube broadcast

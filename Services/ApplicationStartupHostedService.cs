@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using PrintStreamer.Services;
 using PrintStreamer.Timelapse;
 using PrintStreamer.Overlay;
+using PrintStreamer.Interfaces;
 
 namespace PrintStreamer.Services;
 
@@ -15,13 +16,13 @@ internal class ApplicationStartupHostedService : IHostedService
 {
     private readonly ILogger<ApplicationStartupHostedService> _logger;
     private readonly IConfiguration _config;
-    private readonly StreamOrchestrator _orchestrator;
+    private readonly IStreamOrchestrator _orchestrator;
     private readonly AudioBroadcastService _audioBroadcast;
     private readonly PrintStreamOrchestrator _printStreamOrchestrator;
     private readonly OverlayTextService _overlayTextSvc;
     private readonly StreamService _streamService;
-    private readonly TimelapseManager _timelapseManager;
-    private readonly MoonrakerPoller _moonrakerPoller;
+    private readonly ITimelapseManager _timelapseManager;
+    private readonly IMoonrakerPoller _moonrakerPoller;
     private readonly PrinterConsoleService _printerConsoleService;
     private readonly IHostApplicationLifetime _lifetime;
 
@@ -32,13 +33,13 @@ internal class ApplicationStartupHostedService : IHostedService
     public ApplicationStartupHostedService(
         ILogger<ApplicationStartupHostedService> logger,
         IConfiguration config,
-        StreamOrchestrator orchestrator,
+        IStreamOrchestrator orchestrator,
         AudioBroadcastService audioBroadcast,
         PrintStreamOrchestrator printStreamOrchestrator,
         OverlayTextService overlayTextSvc,
         StreamService streamService,
         TimelapseManager timelapseManager,
-        MoonrakerPoller moonrakerPoller,
+        IMoonrakerPoller moonrakerPoller,
         PrinterConsoleService printerConsoleService,
         IHostApplicationLifetime lifetime)
     {
@@ -163,7 +164,6 @@ internal class ApplicationStartupHostedService : IHostedService
         {
             _logger.LogInformation("Application shutting down...");
             // Cleanup will be handled by individual services' disposal
-            _timelapseManager?.Dispose();
         });
 
         // Start local stream AFTER the web server is listening (to avoid race condition)

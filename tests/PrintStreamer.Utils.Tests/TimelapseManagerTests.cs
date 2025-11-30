@@ -57,7 +57,6 @@ namespace PrintStreamer.Utils.Tests
         [TestCleanup]
         public void Cleanup()
         {
-            _sut?.Dispose();
             if (Directory.Exists(_tempTimelapseDir))
             {
                 try
@@ -263,21 +262,6 @@ namespace PrintStreamer.Utils.Tests
         }
 
         [TestMethod]
-        public void Dispose_CleansUpResources()
-        {
-            // Arrange
-            var sessionName = "dispose_test";
-            var sessionResult = _sut.StartTimelapseAsync(sessionName).GetAwaiter().GetResult();
-
-            // Act
-            _sut.Dispose();
-
-            // Assert - should not throw after dispose
-            var activeNames = _sut.GetActiveSessionNames();
-            Assert.IsNotNull(activeNames);
-        }
-
-        [TestMethod]
         public void MultipleActiveSessions_AreTrackedIndependently()
         {
             // Arrange
@@ -340,7 +324,6 @@ namespace PrintStreamer.Utils.Tests
             File.WriteAllBytes(sampleFrame, new byte[] { 1, 2, 3 });
 
             // Simulate app restart by disposing current manager and creating a new one with same configuration
-            _sut.Dispose();
             var config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -391,8 +374,7 @@ namespace PrintStreamer.Utils.Tests
             metaJson["moonraker_filename"] = "different_name.gcode";
             File.WriteAllText(Path.Combine(outputDir, "timelapse_metadata.json"), metaJson.ToJsonString());
 
-            // Dispose and re-create manager
-            _sut.Dispose();
+            // recreate manager
             var config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -430,8 +412,6 @@ namespace PrintStreamer.Utils.Tests
             metaJson["session_name"] = startedSession;
             File.WriteAllText(Path.Combine(outputDir, "timelapse_metadata.json"), metaJson.ToJsonString());
 
-            // Dispose and re-create manager with a very small resume threshold (5 seconds)
-            _sut.Dispose();
             var config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -471,8 +451,7 @@ namespace PrintStreamer.Utils.Tests
             metaJson["moonraker_filename"] = jobFilename;
             File.WriteAllText(Path.Combine(outputDir, "timelapse_metadata.json"), metaJson.ToJsonString());
 
-            // Dispose and recreate manager
-            _sut.Dispose();
+            // recreate manager
             var config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {

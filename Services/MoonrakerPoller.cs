@@ -33,12 +33,6 @@ namespace PrintStreamer.Services
         private readonly IConfiguration _configuration;
         private readonly ILogger<MoonrakerPoller> _logger;
 
-
-        /// <summary>
-        /// Simple compatibility flag. The real broadcast state is managed elsewhere.
-        /// </summary>
-        public static bool IsBroadcastActive => false;
-
         /// <summary>
         /// Create a live broadcast using YouTubeControlService if registered.
         /// Returns (success, message, broadcastId).
