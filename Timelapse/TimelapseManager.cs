@@ -12,7 +12,7 @@ namespace PrintStreamer.Timelapse
     {
     private readonly IConfiguration _config;
     private readonly ILogger<TimelapseManager> _logger;
-    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<TimelapseService> _timelapseServiceLogger;
     private readonly MoonrakerClient _moonrakerClient;
     private readonly string _mainTimelapseDir;
     private readonly ConcurrentDictionary<string, TimelapseSession> _activeSessions = new();
@@ -20,11 +20,11 @@ namespace PrintStreamer.Timelapse
     private bool _disposed = false;
     private readonly bool _verboseLogs;
 
-    public TimelapseManager(IConfiguration config, ILoggerFactory loggerFactory, MoonrakerClient moonrakerClient)
+    public TimelapseManager(IConfiguration config, ILogger<TimelapseManager> logger, ILogger<TimelapseService> timelapseServiceLogger, MoonrakerClient moonrakerClient)
     {
         _config = config;
-        _loggerFactory = loggerFactory;
-        _logger = loggerFactory.CreateLogger<TimelapseManager>();
+        _logger = logger;
+        _timelapseServiceLogger = timelapseServiceLogger;
         _moonrakerClient = moonrakerClient;
         _mainTimelapseDir = config.GetValue<string>("Timelapse:MainFolder") ?? Path.Combine(Directory.GetCurrentDirectory(), "timelapse");
         Directory.CreateDirectory(_mainTimelapseDir);
@@ -120,12 +120,12 @@ namespace PrintStreamer.Timelapse
         if (!string.IsNullOrWhiteSpace(existingFolderName))
         {
             // Reuse existing folder explicitly
-            service = new TimelapseService(_mainTimelapseDir, existingFolderName, _loggerFactory.CreateLogger<TimelapseService>(), reuseExisting: true);
+            service = new TimelapseService(_mainTimelapseDir, existingFolderName, _timelapseServiceLogger, reuseExisting: true);
             actualFolderName = existingFolderName;
         }
         else
         {
-            service = new TimelapseService(_mainTimelapseDir, sanitizedBase, _loggerFactory.CreateLogger<TimelapseService>());
+            service = new TimelapseService(_mainTimelapseDir, sanitizedBase, _timelapseServiceLogger);
             actualFolderName = Path.GetFileName(service.OutputDir) ?? sanitizedBase;
         }
 

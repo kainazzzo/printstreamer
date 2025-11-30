@@ -11,7 +11,6 @@ namespace PrintStreamer.Services
     {
         private readonly StreamService _streamService;
         private readonly IConfiguration _config;
-        private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<StreamOrchestrator> _logger;
         private readonly YouTubePollingManager _pollingManager;
         private readonly YouTubeControlService _youtubeService;
@@ -25,14 +24,13 @@ namespace PrintStreamer.Services
         private int _consecutiveHealthCheckFailures = 0;
         private const int MAX_CONSECUTIVE_FAILURES = 3;
 
-        public StreamOrchestrator(StreamService streamService, IConfiguration config, ILoggerFactory loggerFactory, YouTubePollingManager pollingManager, YouTubeControlService youtubeService)
+        public StreamOrchestrator(StreamService streamService, IConfiguration config, ILogger<StreamOrchestrator> logger, YouTubePollingManager pollingManager, YouTubeControlService youtubeService)
         {
             _streamService = streamService;
             _config = config;
-            _loggerFactory = loggerFactory;
+            _logger = logger;
             _pollingManager = pollingManager;
             _youtubeService = youtubeService;
-            _logger = loggerFactory.CreateLogger<StreamOrchestrator>();
             
             // Start background health check timer (runs every 10 seconds when broadcasting)
             _healthCheckTimer = new Timer(
@@ -190,7 +188,7 @@ namespace PrintStreamer.Services
             // Start stream with RTMP output
             try
             {
-                await _streamService.StartStreamAsync(fullRtmpUrl, null, cancellationToken);
+                await _streamService.StartStreamAsync(fullRtmpUrl, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -268,7 +266,7 @@ namespace PrintStreamer.Services
                     }
 
                     // Restart the stream with current mode (RTMP when broadcasting; otherwise local-only)
-                    await _streamService.StartStreamAsync(rtmp, null, cancellationToken);
+                    await _streamService.StartStreamAsync(rtmp, cancellationToken);
 
                     // If broadcasting, nudge ingestion; if it fails, end broadcast but keep local stream
                     if (!string.IsNullOrWhiteSpace(bid))
@@ -332,7 +330,7 @@ namespace PrintStreamer.Services
             // Ensure local stream is running after ending broadcast
             try
             {
-                await _streamService.StartStreamAsync(null, null, cancellationToken);
+                await _streamService.StartStreamAsync(null, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -407,7 +405,7 @@ namespace PrintStreamer.Services
         public async Task StartLocalStreamAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("[Orchestrator] Starting local stream");
-            await _streamService.StartStreamAsync(null, null, cancellationToken);
+            await _streamService.StartStreamAsync(null, cancellationToken);
         }
 
         /// <summary>
@@ -463,7 +461,7 @@ namespace PrintStreamer.Services
                         try
                         {
                             // Restart stream with same RTMP URL (reuse broadcast)
-                            await _streamService.StartStreamAsync(rtmpUrl, null, CancellationToken.None);
+                            await _streamService.StartStreamAsync(rtmpUrl, CancellationToken.None);
                             _consecutiveHealthCheckFailures = 0;
                             _logger.LogInformation("[Orchestrator] Stream restarted successfully. Broadcast still active: {BroadcastId}", broadcastId);
                         }

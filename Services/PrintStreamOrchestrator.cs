@@ -20,7 +20,6 @@ namespace PrintStreamer.Services
     internal class PrintStreamOrchestrator : IDisposable
     {
         private readonly IConfiguration _config;
-        private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<PrintStreamOrchestrator> _logger;
         private readonly ITimelapseManager _timelapseManager;
         private readonly StreamOrchestrator _streamOrchestrator;
@@ -57,16 +56,13 @@ namespace PrintStreamer.Services
             "idle", "complete", "stopped", "error", "standby"
         };
 
-        public PrintStreamOrchestrator(IConfiguration config, ILoggerFactory loggerFactory, ITimelapseManager timelapseManager, StreamOrchestrator streamOrchestrator, MoonrakerPoller moonrakerPoller)
+        public PrintStreamOrchestrator(IConfiguration config, ITimelapseManager timelapseManager, StreamOrchestrator streamOrchestrator, MoonrakerPoller moonrakerPoller, ILogger<PrintStreamOrchestrator> logger)
         {
             _config = config;
-            _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
-            // Use a NullLogger explicitly to avoid test-time ILogger implementations throwing inside Log calls.
-            // Tests may provide mocked or partial ILoggerFactory instances whose created loggers can throw
-            // NullReferenceException when invoked; using NullLogger here ensures logging calls are no-ops and safe.
-            _logger = NullLogger<PrintStreamOrchestrator>.Instance;
+
             _timelapseManager = timelapseManager;
             _streamOrchestrator = streamOrchestrator;
+            _logger = logger;
             
             _offlineGrace = _config.GetValue<TimeSpan?>("Timelapse:OfflineGracePeriod") ?? TimeSpan.FromMinutes(10);
             _idleFinalizeDelay = _config.GetValue<TimeSpan?>("Timelapse:IdleFinalizeDelay") ?? TimeSpan.FromSeconds(20);
@@ -236,7 +232,7 @@ namespace PrintStreamer.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger?.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse manager after starting session");
+                        _logger.LogError(ex, "[PrintStreamOrchestrator] Failed to notify timelapse manager after starting session");
                     }
                 }
 
@@ -351,7 +347,7 @@ namespace PrintStreamer.Services
                         else
                         {
                             _logger.LogInformation("[PrintStreamOrchestrator] Starting YouTube broadcast via MoonrakerPoller (fallback)...");
-                            var (success, m, b) = await _moonrakerPoller.StartBroadcastAsync(_config, _loggerFactory, cancellationToken);
+                            var (success, m, b) = await _moonrakerPoller.StartBroadcastAsync(cancellationToken);
                             created = success;
                             message = m;
                             broadcastId = b;

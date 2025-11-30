@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Streamers
 {
-	class FfmpegStreamer : IStreamer
+	public class FfmpegStreamer : IStreamer
 
 	{
 		private readonly string _source;

@@ -17,18 +17,19 @@ namespace PrintStreamer.Services
     private readonly MoonrakerClient _moonrakerClient;
         private IStreamer? _currentStreamer;
         private CancellationTokenSource? _currentCts;
-        private OverlayTextService? _overlayService;
+        private readonly OverlayTextService _overlayService;
         private bool _disposed = false;
         private readonly ILogger<StreamService> _logger;
-        private readonly ILoggerFactory _loggerFactory;
+        private readonly ILogger<FfmpegStreamer> _ffmpegLogger;
 
-        public StreamService(IConfiguration config, AudioService audioService, ILogger<StreamService> logger, ILoggerFactory loggerFactory, MoonrakerClient moonrakerClient)
+        public StreamService(IConfiguration config, AudioService audioService, ILogger<StreamService> logger, MoonrakerClient moonrakerClient, OverlayTextService overlayService, ILogger<FfmpegStreamer> ffmpegLogger)
         {
             _config = config;
             _audioService = audioService;
             _logger = logger;
-            _loggerFactory = loggerFactory;
+            _ffmpegLogger = ffmpegLogger;
             _moonrakerClient = moonrakerClient;
+            _overlayService = overlayService;
         }
 
         /// <summary>
@@ -49,9 +50,8 @@ namespace PrintStreamer.Services
         /// Start a new stream. If one is already running, it will be stopped first.
         /// </summary>
         /// <param name="rtmpUrl">Optional RTMP URL (e.g., rtmp://a.rtmp.youtube.com/live2/streamkey). If null, local preview only.</param>
-        /// <param name="overlayProvider">Optional metadata provider for overlay text</param>
         /// <param name="cancellationToken">Cancellation token</param>
-        public async Task StartStreamAsync(string? rtmpUrl, ITimelapseMetadataProvider? overlayProvider, CancellationToken cancellationToken)
+        public async Task StartStreamAsync(string? rtmpUrl, CancellationToken cancellationToken)
         {
             IStreamer? oldStreamer = null;
             CancellationTokenSource? oldCts = null;
@@ -67,7 +67,6 @@ namespace PrintStreamer.Services
                 // Clear current state immediately
                 _currentStreamer = null;
                 _currentCts = null;
-                _overlayService = null;
             }
 
             // Stop old stream outside the lock
@@ -115,16 +114,13 @@ namespace PrintStreamer.Services
 
             // Setup overlay options only when NOT using the pre-composited overlay endpoint
             FfmpegOverlayOptions? overlayOptions = null;
-            OverlayTextService? newOverlayService = null;
             if (!serveEnabled && (_config.GetValue<bool?>("Overlay:Enabled") ?? false))
             {
                 try
                 {
-                    newOverlayService = new OverlayTextService(_config, overlayProvider, () => _audioService.Current, _loggerFactory.CreateLogger<OverlayTextService>(), _moonrakerClient);
-                    newOverlayService.Start();
                     overlayOptions = new FfmpegOverlayOptions
                     {
-                        TextFile = newOverlayService.TextFilePath,
+                        TextFile = _overlayService.TextFilePath,
                         FontFile = _config.GetValue<string>("Overlay:FontFile") ?? "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
                         FontSize = _config.GetValue<int?>("Overlay:FontSize") ?? 22,
                         FontColor = _config.GetValue<string>("Overlay:FontColor") ?? "white",
@@ -139,19 +135,18 @@ namespace PrintStreamer.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "[StreamService] Failed to start overlay (ffmpeg)");
+                    _logger.LogError(ex, "[StreamService] Failed to setup overlay (ffmpeg)");
                 }
             }
 
             // Create new streamer
-            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl, _loggerFactory.CreateLogger<FfmpegStreamer>());
+            var streamer = new FfmpegStreamer(source, rtmpUrl, targetFps, bitrateKbps, overlayOptions, audioUrl, _ffmpegLogger);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             lock (_lock)
             {
                 _currentStreamer = streamer;
                 _currentCts = cts;
-                _overlayService = newOverlayService;
             }
 
             // Start streaming in background
@@ -196,7 +191,6 @@ namespace PrintStreamer.Services
 
                 _currentStreamer = null;
                 _currentCts = null;
-                _overlayService = null;
             }
 
             if (streamer == null)
@@ -223,11 +217,9 @@ namespace PrintStreamer.Services
             {
                 try { _currentCts?.Cancel(); } catch { }
                 try { _currentStreamer?.Stop(); } catch { }
-                try { _overlayService?.Dispose(); } catch { }
 
                 _currentStreamer = null;
                 _currentCts = null;
-                _overlayService = null;
             }
         }
     }

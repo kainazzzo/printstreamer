@@ -181,7 +181,7 @@ internal class ApplicationStartupHostedService : IHostedService
                         if (!_streamService.IsStreaming)
                         {
                             _logger.LogInformation("Starting local preview stream");
-                            await _streamService.StartStreamAsync(null, null, CancellationToken.None);
+                            await _streamService.StartStreamAsync(null, CancellationToken.None);
                         }
                     }
                     catch (Exception ex)

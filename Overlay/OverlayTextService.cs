@@ -36,10 +36,10 @@ public sealed class OverlayTextService : IDisposable
 
     public string TextFilePath => _textFilePath;
 
-    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider, Func<string?>? audioProvider, ILogger<OverlayTextService> logger, MoonrakerClient moonrakerClient)
+    public OverlayTextService(IConfiguration config, ITimelapseMetadataProvider? timelapseProvider, AudioService audioService, ILogger<OverlayTextService> logger, MoonrakerClient moonrakerClient)
     {
         _tlProvider = timelapseProvider;
-        _audioProvider = audioProvider;
+        _audioProvider = () => audioService.Current;
         _logger = logger;
         _moonrakerClient = moonrakerClient;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };

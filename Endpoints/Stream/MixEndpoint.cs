@@ -12,12 +12,12 @@ namespace PrintStreamer.Endpoints.Stream
     public class MixEndpoint : EndpointWithoutRequest<object>
     {
         private readonly IConfiguration _config;
-        private readonly ILoggerFactory _loggerFactory;
+        private readonly ILogger<MixStreamer> _mixStreamerLogger;
 
-        public MixEndpoint(IConfiguration config, ILoggerFactory loggerFactory)
+        public MixEndpoint(IConfiguration config, ILogger<MixStreamer> mixStreamerLogger)
         {
             _config = config;
-            _loggerFactory = loggerFactory;
+            _mixStreamerLogger = mixStreamerLogger;
         }
         public override void Configure()
         {
@@ -29,7 +29,7 @@ namespace PrintStreamer.Endpoints.Stream
         {
             try
             {
-                var streamer = new MixStreamer(_config, HttpContext, _loggerFactory.CreateLogger<MixStreamer>());
+                var streamer = new MixStreamer(_config, HttpContext, _mixStreamerLogger);
                 await streamer.StartAsync(ct);
             }
             catch (System.Exception ex)

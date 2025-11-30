@@ -11,7 +11,7 @@ namespace PrintStreamer.Streamers
     /// Per-request MJPEG overlay streamer that mirrors the ffmpeg filter style used in FfmpegStreamer
     /// (drawbox background + drawtext with expansion=none), but writes multipart MJPEG to the HTTP response.
     /// </summary>
-    internal sealed class OverlayMjpegStreamer : IStreamer
+    public sealed class OverlayMjpegStreamer : IStreamer
     {
         private readonly IConfiguration _config;
         private readonly Overlay.OverlayTextService _overlayText;

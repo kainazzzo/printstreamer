@@ -12,7 +12,7 @@ namespace PrintStreamer.Streamers
     /// Reads from /stream/overlay (video) and /stream/audio (audio).
     /// Outputs MP4 format suitable for RTMP or local recording.
     /// </summary>
-    internal sealed class MixStreamer : IStreamer
+    public sealed class MixStreamer : IStreamer
     {
         private readonly IConfiguration _config;
         private readonly HttpContext _ctx;

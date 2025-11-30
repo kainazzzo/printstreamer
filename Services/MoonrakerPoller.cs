@@ -43,12 +43,11 @@ namespace PrintStreamer.Services
         /// Create a live broadcast using YouTubeControlService if registered.
         /// Returns (success, message, broadcastId).
         /// </summary>
-        public async Task<(bool success, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
+        public async Task<(bool success, string? message, string? broadcastId)> StartBroadcastAsync(CancellationToken cancellationToken)
         {
-            var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             if (_youTubeControlService == null)
             {
-                logger.LogWarning("StartBroadcastAsync: YouTubeControlService not registered");
+                _logger.LogWarning("StartBroadcastAsync: YouTubeControlService not registered");
                 return (false, "YouTube service unavailable", null);
             }
 
@@ -68,7 +67,7 @@ namespace PrintStreamer.Services
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "StartBroadcastAsync failed");
+                _logger.LogWarning(ex, "StartBroadcastAsync failed");
                 return (false, ex.Message, null);
             }
         }
@@ -76,11 +75,10 @@ namespace PrintStreamer.Services
         /// <summary>
         /// Stop a broadcast. Compatibility shim that currently returns not-implemented.
         /// </summary>
-        public static Task<(bool ok, string? message)> StopBroadcastAsync(IConfiguration config, CancellationToken cancellationToken, ILoggerFactory loggerFactory)
+        public static Task<(bool ok, string? message)> StopBroadcastAsync(IConfiguration config, CancellationToken cancellationToken, ILogger logger)
         {
-            var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             logger.LogWarning("StopBroadcastAsync: Not implemented in MoonrakerPoller compatibility shim");
-            return Task.FromResult((false, "Not implemented"));
+            return Task.FromResult((false, (string?)"Not implemented"));
         }
 
         // Events fired when printer state changes (for PrintStreamOrchestrator to subscribe to)
@@ -100,9 +98,8 @@ namespace PrintStreamer.Services
         /// Cancel the current streamer (if any) and start a new one using the provided configuration.
         /// This is kept as a no-op: the poller does not own encoders or orchestrate ffmpeg.
         /// </summary>
-        public static void RestartCurrentStreamerWithConfig(IConfiguration config, ILoggerFactory loggerFactory)
+        public static void RestartCurrentStreamerWithConfig(IConfiguration config, ILogger logger)
         {
-            var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             logger.LogInformation("Restart requested — delegate to StreamOrchestrator (poller no-op)");
         }
 

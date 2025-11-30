@@ -36,7 +36,7 @@ namespace PrintStreamer.Endpoints.Api.Camera
                 try
                 {
                     await _streamService.StopStreamAsync();
-                    await _streamService.StartStreamAsync(null, null, ct);
+                    await _streamService.StartStreamAsync(null, ct);
                 }
                 catch (System.Exception ex)
                 {

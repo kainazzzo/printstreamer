@@ -18,14 +18,16 @@ namespace PrintStreamer.Utils.Tests
     public class TimelapseAutoFinalizeTests
     {
         private string? _tempTimelapseDir;
-        private Mock<ILoggerFactory>? _loggerFactoryMock;
+        private Mock<ILogger<TimelapseManager>>? _timelapseManagerLoggerMock;
+        private Mock<ILogger<TimelapseService>>? _timelapseServiceLoggerMock;
 
         [TestInitialize]
         public void Setup()
         {
             _tempTimelapseDir = Path.Combine(Path.GetTempPath(), $"timelapse_autofinalize_{Guid.NewGuid()}");
             Directory.CreateDirectory(_tempTimelapseDir);
-            _loggerFactoryMock = new Mock<ILoggerFactory>();
+            _timelapseManagerLoggerMock = new Mock<ILogger<TimelapseManager>>();
+            _timelapseServiceLoggerMock = new Mock<ILogger<TimelapseService>>();
         }
 
         [TestCleanup]
@@ -52,7 +54,7 @@ namespace PrintStreamer.Utils.Tests
                 })
                 .Build();
 
-            var sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+            var sut = new TimelapseManager(config, _timelapseManagerLoggerMock!.Object, _timelapseServiceLoggerMock!.Object, null!);
 
             try
             {

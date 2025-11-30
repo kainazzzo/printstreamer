@@ -159,6 +159,7 @@ webBuilder.Services.AddSingleton<PrinterConsoleService>();
 webBuilder.Services.AddSingleton<OverlayTextService>();
 webBuilder.Services.AddSingleton<MoonrakerPoller>();
 
+
 // Start the same singleton as a hosted service
 webBuilder.Services.AddHostedService<ApplicationStartupHostedService>();
 

@@ -30,7 +30,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 {
                     _logger.LogInformation("Restarting active stream to pick up audio setting change");
                     await _streamService.StopStreamAsync();
-                    await _streamService.StartStreamAsync(null, null, ct);
+                    await _streamService.StartStreamAsync(null, ct);
                 }
             }
             catch (System.Exception ex) { _logger.LogError(ex, "Failed to restart stream after audio toggle"); }

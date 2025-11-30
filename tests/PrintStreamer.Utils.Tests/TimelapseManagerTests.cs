@@ -14,7 +14,8 @@ namespace PrintStreamer.Utils.Tests
     public class TimelapseManagerTests
     {
         private Mock<IConfiguration>? _configMock;
-        private Mock<ILoggerFactory>? _loggerFactoryMock;
+        private Mock<ILogger<TimelapseManager>>? _timelapseManagerLoggerMock;
+        private Mock<ILogger<TimelapseService>>? _timelapseServiceLoggerMock;
         private TimelapseManager? _sut;
         private string? _tempTimelapseDir;
 
@@ -25,7 +26,8 @@ namespace PrintStreamer.Utils.Tests
             Directory.CreateDirectory(_tempTimelapseDir);
 
             _configMock = new Mock<IConfiguration>();
-            _loggerFactoryMock = new Mock<ILoggerFactory>();
+            _timelapseManagerLoggerMock = new Mock<ILogger<TimelapseManager>>();
+            _timelapseServiceLoggerMock = new Mock<ILogger<TimelapseService>>();
 
             // Since GetValue is an extension method, we can't mock it directly.
             // Instead, we'll use a simple configuration that returns values when indexed.
@@ -49,7 +51,7 @@ namespace PrintStreamer.Utils.Tests
 
             // MoonrakerClient requires HTTP clients, so we pass null and let it handle gracefully
             // The tests don't use features that require MoonrakerClient anyway
-            _sut = new TimelapseManager(config, _loggerFactoryMock.Object, null!);
+            _sut = new TimelapseManager(config, _timelapseManagerLoggerMock.Object, _timelapseServiceLoggerMock.Object, null!);
         }
 
         [TestCleanup]
@@ -346,7 +348,7 @@ namespace PrintStreamer.Utils.Tests
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg"
                 })
                 .Build();
-            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+            _sut = new TimelapseManager(config, _timelapseManagerLoggerMock!.Object, _timelapseServiceLoggerMock!.Object, null!);
 
             // Act - start timelapse again for same job name (representing a restart)
             var resumed = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
@@ -398,7 +400,7 @@ namespace PrintStreamer.Utils.Tests
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg",
                 })
                 .Build();
-            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+            _sut = new TimelapseManager(config, _timelapseManagerLoggerMock!.Object, _timelapseServiceLoggerMock!.Object, null!);
 
             // Act - attempt to start timelapse for the same job filename
             var resumed = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
@@ -438,7 +440,7 @@ namespace PrintStreamer.Utils.Tests
                     ["Timelapse:ResumeWithinSeconds"] = "5"
                 })
                 .Build();
-            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+            _sut = new TimelapseManager(config, _timelapseManagerLoggerMock!.Object, _timelapseServiceLoggerMock!.Object, null!);
 
             // Act - attempt to start timelapse for the same job filename
             var resumed = _sut.StartTimelapseAsync(jobSafe).GetAwaiter().GetResult();
@@ -478,7 +480,7 @@ namespace PrintStreamer.Utils.Tests
                     ["Stream:Source"] = "http://localhost:8080/stream.mjpeg"
                 })
                 .Build();
-            _sut = new TimelapseManager(config, _loggerFactoryMock!.Object, null!);
+            _sut = new TimelapseManager(config, _timelapseManagerLoggerMock!.Object, _timelapseServiceLoggerMock!.Object, null!);
 
             // Act - supply the moonraker filename as the second parameter
             var resumed = _sut.StartTimelapseAsync(jobSafe, jobFilename).GetAwaiter().GetResult();
