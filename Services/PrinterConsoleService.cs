@@ -34,7 +34,7 @@ namespace PrintStreamer.Services
     /// helpers to send commands safely. Uses a WebSocket subscription with HTTP polling
     /// fallback, keeps an in-memory ring buffer, and exposes simple quick-action helpers.
     /// </summary>
-    public class PrinterConsoleService : IHostedService, IDisposable
+    public class PrinterConsoleService : IDisposable
     {
         private readonly ILogger<PrinterConsoleService> _log;
         private readonly IConfiguration _cfg;

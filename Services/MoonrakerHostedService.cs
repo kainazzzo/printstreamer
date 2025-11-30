@@ -1,6 +1,6 @@
 namespace PrintStreamer.Services
 {
-    internal class MoonrakerHostedService : IHostedService, IDisposable
+    internal class MoonrakerHostedService : IDisposable
     {
         private readonly MoonrakerPoller _pollerService;
         private readonly ILogger<MoonrakerHostedService> _logger;

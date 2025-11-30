@@ -152,7 +152,6 @@ webBuilder.Services.AddSingleton<IOBSService, OBSService>();
 webBuilder.Services.AddSingleton<StreamService>();
 webBuilder.Services.AddSingleton<StreamOrchestrator>();
 webBuilder.Services.AddSingleton<PrintStreamOrchestrator>();
-webBuilder.Services.AddHostedService<MoonrakerHostedService>();
 webBuilder.Services.AddSingleton<AudioService>();
 webBuilder.Services.AddSingleton<AudioBroadcastService>();
 // Printer console service (skeleton)
@@ -160,9 +159,8 @@ webBuilder.Services.AddSingleton<PrinterConsoleService>();
 webBuilder.Services.AddSingleton<OverlayTextService>();
 webBuilder.Services.AddSingleton<MoonrakerPoller>();
 
-
 // Start the same singleton as a hosted service
-webBuilder.Services.AddHostedService<PrinterConsoleService>();
+webBuilder.Services.AddHostedService<ApplicationStartupHostedService>();
 
 
 // Add Blazor Server services
@@ -221,30 +219,11 @@ if (serveEnabled)
 	webBuilder.Host.ConfigureHostOptions(opts => { opts.ShutdownTimeout = TimeSpan.FromSeconds(3); });
 }
 
-// Expose stream/task variables for shutdown handling
-Task? streamTask = null;
-CancellationTokenSource? streamCts = null;
-TimelapseManager? timelapseManager = null;
+// Application variables are now managed by hosted services
 
 var app = webBuilder.Build();
 
-// Wire up audio track completion callback to orchestrator
-{
-	var orchestrator = app.Services.GetRequiredService<StreamOrchestrator>();
-	var audioBroadcast = app.Services.GetRequiredService<AudioBroadcastService>();
-	audioBroadcast.SetTrackFinishedCallback(() => orchestrator.OnAudioTrackFinishedAsync());
-}
-
-// Wire up PrintStreamOrchestrator to subscribe to PrinterState events from MoonrakerPoller
-{
-	var printStreamOrchestrator = app.Services.GetRequiredService<PrintStreamOrchestrator>();
-	MoonrakerPoller.PrintStateChanged += (prev, curr) =>
-		_ = printStreamOrchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
-}
-
-// StreamOrchestrator is constructed and registered in DI. It should subscribe to
-// MoonrakerPoller events or call Poller helpers as needed. Do not register the
-// orchestrator with the poller here; keep inversion of control (poller -> event pub, orchestrator -> consumer).
+// Service wiring and orchestration setup is now handled by ApplicationStartupHostedService
 
 // Get a logger for the application
 var logger = app.Services.GetRequiredService<ILogger<Program>>();
@@ -293,22 +272,7 @@ if (serveEnabled)
 
 	var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
-	// Resolve managers from DI
-	var webcamManager = app.Services.GetRequiredService<WebCamManager>();
-	// Resolve timelapse manager from DI (registered earlier)
-	timelapseManager = app.Services.GetRequiredService<TimelapseManager>();
-
-	// Architecture Overview:
-	// 1. WebCam Proxy (/stream) - Proxies MJPEG webcam, handles camera simulation
-	// 2. Local Stream - ffmpeg reads /stream for encoding
-	// 3. YouTube Live Broadcast - OAuth creates broadcast, restarts ffmpeg to add RTMP output
-
-	// Stream endpoints are now provided by FastEndpoints (see Endpoints/Stream/*)
-	// Overlay MJPEG endpoint: prefer the new IStreamer-based OverlayMjpegStreamer (per-request)
-	// Fall back to the legacy OverlayMjpegManager if needed (kept registered for compatibility)
-	var overlayTextSvc = app.Services.GetRequiredService<PrintStreamer.Overlay.OverlayTextService>();
-	// Ensure overlay text writer is running
-	try { overlayTextSvc.Start(); } catch { }
+	// Service initialization and startup logic is now handled by ApplicationStartupHostedService
 
 	// Enhanced test page with timelapse management
 	// Blazor pages are now served via MapRazorComponents below
@@ -320,51 +284,7 @@ if (serveEnabled)
 	app.MapRazorComponents<PrintStreamer.App>()
 		.AddInteractiveServerRenderMode();
 
-	// Handle graceful shutdown - this will run regardless of mode since the host is started below
-	var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
-	lifetime.ApplicationStopping.Register(() =>
-	{
-		var logger = app.Services.GetRequiredService<ILogger<Program>>();
-		logger.LogInformation("Shutting down...");
-		streamCts?.Cancel();
-		timelapseManager?.Dispose();
-	});
-
-	// Start local stream AFTER the web server is listening (to avoid race condition)
-	lifetime.ApplicationStarted.Register(() =>
-	{
-		if (config.GetValue<bool?>("Stream:Local:Enabled") ?? false)
-		{
-			var logger = app.Services.GetRequiredService<ILogger<Program>>();
-			logger.LogInformation("Web server ready, starting local preview stream...");
-			// Start a local stream on startup for preview
-			// Ensure audio broadcaster is constructed so the API audio endpoint is available
-			try
-			{
-				// Resolve the AudioBroadcastService (constructor will start its internal feed/supervisor)
-				var _ = app.Services.GetRequiredService<AudioBroadcastService>();
-			}
-			catch { }
-
-			// Small delay to give the audio feed a moment to start before ffmpeg connects
-			Task.Delay(500).ContinueWith(async _ =>
-			{
-				try
-				{
-					var streamService = app.Services.GetRequiredService<StreamService>();
-					if (!streamService.IsStreaming)
-					{
-						logger.LogInformation("Starting local preview stream");
-						await streamService.StartStreamAsync(null, null, CancellationToken.None);
-					}
-				}
-				catch (Exception ex)
-				{
-					logger.LogError(ex, "Failed to start local preview");
-				}
-			});
-		}
-	});
+	// Application lifecycle management is now handled by ApplicationStartupHostedService
 
 	// Serve Blazor component assets (CSS, JS)
 	var componentsFolder = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Components"));
@@ -382,21 +302,13 @@ if (serveEnabled)
 
 }
 
-// Start the host so IHostedService instances (MoonrakerHostedService) are started in all modes
+// Start the host so IHostedService instances are started in all modes
 await app.RunAsync();
 
 // (ProxyUtil helper defined at top of file)
 
-// If serve UI was enabled, wait for the background stream task (if any) to complete and clean up
-if (serveEnabled)
-{
-	if (streamTask != null)
-	{
-		await streamTask;
-	}
-	timelapseManager?.Dispose();
-}
-// Poll/stream behavior is handled by MoonrakerHostedService when configured
+// Application cleanup is now handled by hosted services
+// Poll/stream behavior and console monitoring are handled by ApplicationStartupHostedService when configured
 
 // Note: test-mode helper removed. The app now always runs the host and poller.
 
