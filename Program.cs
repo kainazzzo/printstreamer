@@ -146,6 +146,8 @@ webBuilder.Services.AddSingleton<YouTubePollingManager>();
 // YouTube API client (singleton to avoid repeated authentication and instance creation)
 webBuilder.Services.AddSingleton<YouTubeControlService>();
 webBuilder.Services.AddSingleton<WebCamManager>();
+// OBS integration
+webBuilder.Services.AddSingleton<IOBSService, OBSService>();
 webBuilder.Services.AddSingleton<StreamService>();
 webBuilder.Services.AddSingleton<StreamOrchestrator>();
 webBuilder.Services.AddSingleton<PrintStreamOrchestrator>();

@@ -13,6 +13,7 @@
     <PackageReference Include="FastEndpoints" Version="7.0.0" />
     <PackageReference Include="FastEndpoints.Swagger" Version="7.0.0" />
     <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.1" />
+    <PackageReference Include="obs-websocket-dotnet" Version="5.0.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.8.0" />
     <PackageReference Include="Hellang.Middleware.ProblemDetails" Version="6.1.0" />
     <PackageReference Include="Scrutor" Version="4.0.0" />
