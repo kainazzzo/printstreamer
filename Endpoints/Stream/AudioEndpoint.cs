@@ -11,21 +11,28 @@ namespace PrintStreamer.Endpoints.Stream
 {
     public class AudioEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _config;
+        private readonly ILogger<AudioEndpoint> _logger;
+        private readonly AudioBroadcastService _broadcaster;
+
+        public AudioEndpoint(IConfiguration config, ILogger<AudioEndpoint> logger, AudioBroadcastService broadcaster)
+        {
+            _config = config;
+            _logger = logger;
+            _broadcaster = broadcaster;
+        }
         public override void Configure()
         {
-            Get("/stream/audio");
-            Get("/api/audio/stream");
+            Get("/api/audio/stream", "/stream/audio");
             AllowAnonymous();
         }
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var enabled = cfg.GetValue<bool?>("Audio:Enabled") ?? true;
+            var enabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
             if (!enabled)
             {
-                var logger = HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
-                await StreamHelpers.StreamSilentAudioAsync(HttpContext, logger, ct);
+                await StreamHelpers.StreamSilentAudioAsync(HttpContext, _logger, ct);
                 return;
             }
 
@@ -35,19 +42,17 @@ namespace PrintStreamer.Endpoints.Stream
             HttpContext.Response.Headers["Pragma"] = "no-cache";
             await HttpContext.Response.Body.FlushAsync(ct);
 
-            var broadcaster = HttpContext.RequestServices.GetRequiredService<AudioBroadcastService>();
             try
             {
-                await foreach (var chunk in broadcaster.Stream(ct))
+                await foreach (var chunk in _broadcaster.Stream(ct))
                 {
                     await HttpContext.Response.Body.WriteAsync(chunk, ct);
                 }
             }
             catch (OperationCanceledException) { }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
-                var logger = HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
-                logger.LogError(ex, "Client stream error");
+                _logger.LogError(ex, "Client stream error");
             }
         }
     }

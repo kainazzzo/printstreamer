@@ -1,13 +1,13 @@
 namespace PrintStreamer.Services
 {
-    public class MoonrakerHostedService : IHostedService, IDisposable
+    internal class MoonrakerHostedService : IHostedService, IDisposable
     {
-        private readonly MoonrakerPollerService _pollerService;
+        private readonly MoonrakerPoller _pollerService;
         private readonly ILogger<MoonrakerHostedService> _logger;
         private Task? _executingTask;
         private CancellationTokenSource? _cts;
 
-        public MoonrakerHostedService(MoonrakerPollerService pollerService, ILogger<MoonrakerHostedService> logger)
+        public MoonrakerHostedService(MoonrakerPoller pollerService, ILogger<MoonrakerHostedService> logger)
         {
             _pollerService = pollerService ?? throw new ArgumentNullException(nameof(pollerService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -22,7 +22,7 @@ namespace PrintStreamer.Services
                 try
                 {
                     _logger.LogInformation("MoonrakerHostedService starting poller");
-                    await _pollerService.StartPollingAsync(token);
+                    await _pollerService.PollAndStreamJobsAsync(token);;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {

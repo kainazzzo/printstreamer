@@ -9,6 +9,13 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 {
     public class TimelapsesEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly TimelapseManager _timelapseManager;
+
+        public TimelapsesEndpoint(TimelapseManager timelapseManager)
+        {
+            _timelapseManager = timelapseManager;
+        }
+
         public override void Configure()
         {
             Get("/api/timelapses");
@@ -17,8 +24,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var timelapseManager = HttpContext.RequestServices.GetRequiredService<TimelapseManager>();
-            var timelapses = timelapseManager.GetAllTimelapses();
+            var timelapses = _timelapseManager.GetAllTimelapses();
             HttpContext.Response.StatusCode = 200;
             await HttpContext.Response.WriteAsJsonAsync(timelapses, ct);
         }

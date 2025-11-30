@@ -9,17 +9,21 @@ namespace PrintStreamer.Endpoints.Stream
 {
     public class StreamProxyEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly WebCamManager _webcamManager;
+
+        public StreamProxyEndpoint(WebCamManager webcamManager)
+        {
+            _webcamManager = webcamManager;
+        }
         public override void Configure()
         {
-            Get("/stream");
             Get("/stream/source");
             AllowAnonymous();
         }
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var webcamManager = HttpContext.RequestServices.GetRequiredService<WebCamManager>();
-            await webcamManager.HandleStreamRequest(HttpContext);
+            await _webcamManager.HandleStreamRequest(HttpContext);
         }
     }
 }

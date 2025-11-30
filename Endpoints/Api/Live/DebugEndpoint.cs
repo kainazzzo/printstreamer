@@ -10,6 +10,17 @@ namespace PrintStreamer.Endpoints.Api.Live
 {
     public class DebugEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly ILogger<DebugEndpoint> _logger;
+        private readonly StreamOrchestrator _orchestrator;
+        private readonly YouTubeControlService _yt;
+
+        public DebugEndpoint(ILogger<DebugEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService yt)
+        {
+            _logger = logger;
+            _orchestrator = orchestrator;
+            _yt = yt;
+        }
+
         public override void Configure()
         {
             Get("/api/live/debug");
@@ -18,26 +29,23 @@ namespace PrintStreamer.Endpoints.Api.Live
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<DebugEndpoint>>();
             try
             {
-                var orchestrator = HttpContext.RequestServices.GetRequiredService<StreamOrchestrator>();
-                if (!orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(orchestrator.CurrentBroadcastId))
+                if (!_orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(_orchestrator.CurrentBroadcastId))
                 {
                     HttpContext.Response.StatusCode = 400;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "No active broadcast" }, ct);
                     return;
                 }
-                var bid = orchestrator.CurrentBroadcastId!;
-                var yt = HttpContext.RequestServices.GetRequiredService<YouTubeControlService>();
-                logger.LogInformation("HTTP /api/live/debug request received");
-                if (!await yt.AuthenticateAsync(ct))
+                var bid = _orchestrator.CurrentBroadcastId!;
+                _logger.LogInformation("HTTP /api/live/debug request received");
+                if (!await _yt.AuthenticateAsync(ct))
                 {
                     HttpContext.Response.StatusCode = 401;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "YouTube authentication failed" }, ct);
                     return;
                 }
-                await yt.LogBroadcastAndStreamResourcesAsync(bid, null, ct);
+                await _yt.LogBroadcastAndStreamResourcesAsync(bid, null, ct);
                 HttpContext.Response.StatusCode = 200;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = true }, ct);
             }

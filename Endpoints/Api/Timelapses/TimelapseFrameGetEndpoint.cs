@@ -10,6 +10,13 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 {
     public class TimelapseFrameGetEndpoint : Endpoint<TimelapseNameFileRequest>
     {
+        private readonly TimelapseManager _timelapseManager;
+
+        public TimelapseFrameGetEndpoint(TimelapseManager timelapseManager)
+        {
+            _timelapseManager = timelapseManager;
+        }
+
         public override void Configure()
         {
             Get("/api/timelapses/{name}/frames/{filename}");
@@ -20,8 +27,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
         {
             try
             {
-                var timelapseManager = HttpContext.RequestServices.GetRequiredService<TimelapseManager>();
-                var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, req.Name);
+                var timelapseDir = Path.Combine(_timelapseManager.TimelapseDirectory, req.Name);
                 var filePath = Path.Combine(timelapseDir, req.Filename);
 
                 try

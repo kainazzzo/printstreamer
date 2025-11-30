@@ -10,6 +10,16 @@ namespace PrintStreamer.Endpoints.Api.Camera
 {
     public class CameraOffEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly WebCamManager _webcamManager;
+        private readonly StreamService _streamService;
+        private readonly ILogger<CameraOffEndpoint> _logger;
+
+        public CameraOffEndpoint(WebCamManager webcamManager, StreamService streamService, ILogger<CameraOffEndpoint> logger)
+        {
+            _webcamManager = webcamManager;
+            _streamService = streamService;
+            _logger = logger;
+        }
         public override void Configure()
         {
             Post("/api/camera/off");
@@ -18,25 +28,22 @@ namespace PrintStreamer.Endpoints.Api.Camera
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var webcamManager = HttpContext.RequestServices.GetRequiredService<WebCamManager>();
-            var streamService = HttpContext.RequestServices.GetRequiredService<StreamService>();
-            webcamManager.SetDisabled(true);
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<CameraOffEndpoint>>();
-            logger.LogInformation("Camera simulation: disabled (camera off)");
-            if (streamService.IsStreaming)
+            _webcamManager.SetDisabled(true);
+            _logger.LogInformation("Camera simulation: disabled (camera off)");
+            if (_streamService.IsStreaming)
             {
                 try
                 {
-                    await streamService.StopStreamAsync();
-                    await streamService.StartStreamAsync(null, null, ct);
+                    await _streamService.StopStreamAsync();
+                    await _streamService.StartStreamAsync(null, null, ct);
                 }
                 catch (System.Exception ex)
                 {
-                    logger.LogError(ex, "Failed to restart stream");
+                    _logger.LogError(ex, "Failed to restart stream");
                 }
             }
             HttpContext.Response.StatusCode = 200;
-            await HttpContext.Response.WriteAsJsonAsync(new { disabled = webcamManager.IsDisabled }, ct);
+            await HttpContext.Response.WriteAsJsonAsync(new { disabled = _webcamManager.IsDisabled }, ct);
         }
     }
 }

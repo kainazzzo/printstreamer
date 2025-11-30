@@ -12,6 +12,16 @@ namespace PrintStreamer.Endpoints.Stream
 {
     public class OverlayEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _config;
+        private readonly Overlay.OverlayTextService _overlayText;
+        private readonly ILoggerFactory _loggerFactory;
+
+        public OverlayEndpoint(IConfiguration config, Overlay.OverlayTextService overlayText, ILoggerFactory loggerFactory)
+        {
+            _config = config;
+            _overlayText = overlayText;
+            _loggerFactory = loggerFactory;
+        }
         public override void Configure()
         {
             Get("/stream/overlay");
@@ -22,10 +32,7 @@ namespace PrintStreamer.Endpoints.Stream
         {
             try
             {
-                var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-                var overlayText = HttpContext.RequestServices.GetRequiredService<OverlayTextService>();
-                var logger = HttpContext.RequestServices.GetRequiredService<ILogger<OverlayMjpegStreamer>>();
-                var streamer = new OverlayMjpegStreamer(cfg, overlayText, HttpContext, logger);
+                var streamer = new OverlayMjpegStreamer(_config, _overlayText, HttpContext, _loggerFactory.CreateLogger<OverlayMjpegStreamer>());
                 await streamer.StartAsync(ct);
             }
             catch (System.Exception ex)

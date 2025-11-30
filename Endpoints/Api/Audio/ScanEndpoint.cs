@@ -2,13 +2,14 @@ using FastEndpoints;
 using Microsoft.AspNetCore.Http;
 using System.Threading.Tasks;
 using System.Threading;
-using Microsoft.Extensions.DependencyInjection;
 using PrintStreamer.Services;
 
 namespace PrintStreamer.Endpoints.Api.Audio
 {
     public class ScanEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly AudioService _audio;
+        public ScanEndpoint(AudioService audio) { _audio = audio; }
         public override void Configure()
         {
             Post("/api/audio/scan");
@@ -17,8 +18,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var audio = HttpContext.RequestServices.GetRequiredService<AudioService>();
-            audio.Rescan();
+            _audio.Rescan();
             HttpContext.Response.StatusCode = 200;
             await HttpContext.Response.WriteAsJsonAsync(new { success = true }, ct);
         }

@@ -2,7 +2,6 @@ using FastEndpoints;
 using Microsoft.AspNetCore.Http;
 using System.Threading.Tasks;
 using System.Threading;
-using Microsoft.Extensions.DependencyInjection;
 using PrintStreamer.Services;
 using System.IO;
 using System.Collections.Generic;
@@ -12,6 +11,8 @@ namespace PrintStreamer.Endpoints.Api.Audio
 {
     public class RemoveFromQueueEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly AudioService _audio;
+        public RemoveFromQueueEndpoint(AudioService audio) { _audio = audio; }
         public override void Configure()
         {
             Post("/api/audio/queue/remove");
@@ -54,8 +55,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                     return;
                 }
 
-                var audio = HttpContext.RequestServices.GetRequiredService<AudioService>();
-                var removed = audio.RemoveFromQueue(names.ToArray());
+                var removed = _audio.RemoveFromQueue(names.ToArray());
                 await HttpContext.Response.WriteAsJsonAsync(new { success = true, removed }, ct);
             }
             catch (System.Exception ex)

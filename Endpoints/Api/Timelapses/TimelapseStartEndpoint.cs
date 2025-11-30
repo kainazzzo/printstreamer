@@ -9,6 +9,13 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 {
     public class TimelapseStartEndpoint : Endpoint<TimelapseNameRequest>
     {
+        private readonly TimelapseManager _timelapseManager;
+
+        public TimelapseStartEndpoint(TimelapseManager timelapseManager)
+        {
+            _timelapseManager = timelapseManager;
+        }
+
         public override void Configure()
         {
             Post("/api/timelapses/{name}/start");
@@ -19,8 +26,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
         {
             try
             {
-                var timelapseManager = HttpContext.RequestServices.GetRequiredService<TimelapseManager>();
-                var sessionName = await timelapseManager.StartTimelapseAsync(req.Name);
+                var sessionName = await _timelapseManager.StartTimelapseAsync(req.Name);
                 if (sessionName != null)
                 {
                     HttpContext.Response.StatusCode = 200;

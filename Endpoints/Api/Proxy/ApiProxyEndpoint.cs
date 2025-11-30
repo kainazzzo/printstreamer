@@ -10,6 +10,15 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 {
     public class ApiProxyEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<ApiProxyEndpoint> _logger;
+
+        public ApiProxyEndpoint(IConfiguration cfg, ILogger<ApiProxyEndpoint> logger)
+        {
+            _cfg = cfg;
+            _logger = logger;
+        }
+
         public override void Configure()
         {
             Get("/api/{**path}");
@@ -25,9 +34,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
         public override async Task HandleAsync(CancellationToken ct)
         {
             var path = Route<string?>("path") ?? string.Empty;
-            var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<ApiProxyEndpoint>>();
-            var moonrakerBase = cfg.GetValue<string>("Moonraker:BaseUrl");
+            var moonrakerBase = _cfg.GetValue<string>("Moonraker:BaseUrl");
             if (string.IsNullOrWhiteSpace(moonrakerBase))
             {
                 HttpContext.Response.StatusCode = 404;
@@ -35,7 +42,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
                 return;
             }
 
-            logger.LogDebug("Proxy /api/{Path} -> {Target}", path, moonrakerBase);
+            _logger.LogDebug("Proxy /api/{Path} -> {Target}", path, moonrakerBase);
             try
             {
                 await ProxyUtil.ProxyRequest(HttpContext, moonrakerBase!, "api/" + path);
@@ -46,7 +53,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
             }
             catch (System.Exception ex)
             {
-                logger.LogWarning(ex, "API proxy error for {Path} to {Target}", path, moonrakerBase);
+                _logger.LogWarning(ex, "API proxy error for {Path} to {Target}", path, moonrakerBase);
                 if (!HttpContext.Response.HasStarted)
                 {
                     HttpContext.Response.StatusCode = 502;

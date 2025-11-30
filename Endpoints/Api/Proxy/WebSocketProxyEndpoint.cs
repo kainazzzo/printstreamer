@@ -13,6 +13,15 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 {
     public class WebSocketProxyEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<WebSocketProxyEndpoint> _logger;
+
+        public WebSocketProxyEndpoint(IConfiguration cfg, ILogger<WebSocketProxyEndpoint> logger)
+        {
+            _cfg = cfg;
+            _logger = logger;
+        }
+
         public override void Configure()
         {
             Get("/websocket");
@@ -21,9 +30,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<WebSocketProxyEndpoint>>();
-            var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var moonrakerBase = cfg.GetValue<string>("Moonraker:BaseUrl");
+            var moonrakerBase = _cfg.GetValue<string>("Moonraker:BaseUrl");
             if (string.IsNullOrWhiteSpace(moonrakerBase))
             {
                 HttpContext.Response.StatusCode = 404;
@@ -57,7 +64,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
                 try
                 {
                     var hdrNames = string.Join(",", HttpContext.Request.Headers.Select(h => h.Key).Where(k => allowed.Contains(k, StringComparer.OrdinalIgnoreCase)).ToArray());
-                    logger.LogDebug("Forwarding request headers to upstream (names): {HeaderNames}", hdrNames);
+                    _logger.LogDebug("Forwarding request headers to upstream (names): {HeaderNames}", hdrNames);
                 }
                 catch { }
 
@@ -75,7 +82,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
                     {
                         var defaultOrigin = HttpContext.Request.Scheme + "://" + HttpContext.Request.Host.Value;
                         upstream.Options.SetRequestHeader("Origin", defaultOrigin);
-                        logger.LogDebug("Set default Origin header for upstream: {Origin}", defaultOrigin);
+                        _logger.LogDebug("Set default Origin header for upstream: {Origin}", defaultOrigin);
                     }
                     catch { }
                 }
@@ -96,7 +103,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
                     }
                 }
 
-                logger.LogDebug("Connecting upstream attempt {Attempt}/{MaxAttempts} {UpstreamUri} (Origin={Origin})", attempt, maxAttempts, upstreamUri, HttpContext.Request.Headers["Origin"]);
+                _logger.LogDebug("Connecting upstream attempt {Attempt}/{MaxAttempts} {UpstreamUri} (Origin={Origin})", attempt, maxAttempts, upstreamUri, HttpContext.Request.Headers["Origin"]);
                 try
                 {
                     using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -109,12 +116,12 @@ namespace PrintStreamer.Endpoints.Api.Proxy
                 {
                     if (ct.IsCancellationRequested)
                     {
-                        logger.LogDebug("Client aborted websocket request while connecting to upstream {UpstreamUri}", upstreamUri);
+                        _logger.LogDebug("Client aborted websocket request while connecting to upstream {UpstreamUri}", upstreamUri);
                         try { upstream.Dispose(); } catch { }
                         return;
                     }
                     lastConnectEx = oce;
-                    logger.LogWarning(oce, "Upstream connect attempt {Attempt} timed out for {UpstreamUri}", attempt, upstreamUri);
+                    _logger.LogWarning(oce, "Upstream connect attempt {Attempt} timed out for {UpstreamUri}", attempt, upstreamUri);
                     try { upstream.Dispose(); } catch { }
                     upstream = null;
                     if (attempt < maxAttempts)
@@ -126,7 +133,7 @@ namespace PrintStreamer.Endpoints.Api.Proxy
                 catch (Exception ex)
                 {
                     lastConnectEx = ex;
-                    logger.LogWarning(ex, "Upstream connect attempt {Attempt} failed for {UpstreamUri}", attempt, upstreamUri);
+                    _logger.LogWarning(ex, "Upstream connect attempt {Attempt} failed for {UpstreamUri}", attempt, upstreamUri);
                     try { upstream.Dispose(); } catch { }
                     upstream = null;
                     if (attempt < maxAttempts)
@@ -141,11 +148,11 @@ namespace PrintStreamer.Endpoints.Api.Proxy
             {
                 if (lastConnectEx is OperationCanceledException && ct.IsCancellationRequested)
                 {
-                    logger.LogDebug("Aborted upstream websocket connect after downstream cancellation: {UpstreamUri}", upstreamUri);
+                    _logger.LogDebug("Aborted upstream websocket connect after downstream cancellation: {UpstreamUri}", upstreamUri);
                     return;
                 }
 
-                logger.LogWarning(lastConnectEx, "Upstream connect failed after {Attempts} attempts: {UpstreamUri}", maxAttempts, upstreamUri);
+                _logger.LogWarning(lastConnectEx, "Upstream connect failed after {Attempts} attempts: {UpstreamUri}", maxAttempts, upstreamUri);
                 using var downstreamErr = await HttpContext.WebSockets.AcceptWebSocketAsync();
                 try
                 {
@@ -162,16 +169,16 @@ namespace PrintStreamer.Endpoints.Api.Proxy
                 return;
             }
 
-            logger.LogInformation("Upstream WebSocket connected. Upstream chosen subprotocol: {SubProtocol}", upstream.SubProtocol ?? "<none>");
+            _logger.LogInformation("Upstream WebSocket connected. Upstream chosen subprotocol: {SubProtocol}", upstream.SubProtocol ?? "<none>");
             using var downstream = await HttpContext.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol);
-            logger.LogDebug("Upstream connected, starting bidirectional tunnel (subprotocol={SubProtocol})", upstream.SubProtocol);
+            _logger.LogDebug("Upstream connected, starting bidirectional tunnel (subprotocol={SubProtocol})", upstream.SubProtocol);
 
             var cts2 = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var pump1 = ProxyUtil.PumpWebSocket(downstream, upstream, cts2.Token);
             var pump2 = ProxyUtil.PumpWebSocket(upstream, downstream, cts2.Token);
             await Task.WhenAny(pump1, pump2);
             cts2.Cancel();
-            logger.LogDebug("Tunnel closed");
+            _logger.LogDebug("Tunnel closed");
         }
     }
 }

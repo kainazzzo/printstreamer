@@ -11,6 +11,13 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 {
     public class TimelapseFramesEndpoint : Endpoint<TimelapseNameRequest>
     {
+        private readonly TimelapseManager _timelapseManager;
+
+        public TimelapseFramesEndpoint(TimelapseManager timelapseManager)
+        {
+            _timelapseManager = timelapseManager;
+        }
+
         public override void Configure()
         {
             Get("/api/timelapses/{name}/frames");
@@ -21,8 +28,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
         {
             try
             {
-                var timelapseManager = HttpContext.RequestServices.GetRequiredService<TimelapseManager>();
-                var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, req.Name);
+                var timelapseDir = Path.Combine(_timelapseManager.TimelapseDirectory, req.Name);
                 if (!Directory.Exists(timelapseDir))
                 {
                     HttpContext.Response.StatusCode = 404;

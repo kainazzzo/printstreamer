@@ -9,6 +9,13 @@ namespace PrintStreamer.Endpoints.Api.Camera
 {
     public class GetCameraEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly WebCamManager _webcamManager;
+
+        public GetCameraEndpoint(WebCamManager webcamManager)
+        {
+            _webcamManager = webcamManager;
+        }
+        
         public override void Configure()
         {
             Get("/api/camera");
@@ -17,9 +24,8 @@ namespace PrintStreamer.Endpoints.Api.Camera
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var webcamManager = HttpContext.RequestServices.GetRequiredService<WebCamManager>();
             HttpContext.Response.StatusCode = 200;
-            await HttpContext.Response.WriteAsJsonAsync(new { disabled = webcamManager.IsDisabled }, ct);
+            await HttpContext.Response.WriteAsJsonAsync(new { disabled = _webcamManager.IsDisabled }, ct);
         }
     }
 }

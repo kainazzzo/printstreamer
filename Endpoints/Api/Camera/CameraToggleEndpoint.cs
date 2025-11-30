@@ -10,6 +10,17 @@ namespace PrintStreamer.Endpoints.Api.Camera
 {
     public class CameraToggleEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly WebCamManager _webcamManager;
+        private readonly StreamService _streamService;
+        private readonly ILogger<CameraToggleEndpoint> _logger;
+
+        public CameraToggleEndpoint(WebCamManager webcamManager, StreamService streamService, ILogger<CameraToggleEndpoint> logger)
+        {
+            _webcamManager = webcamManager;
+            _streamService = streamService;
+            _logger = logger;
+        }
+
         public override void Configure()
         {
             Post("/api/camera/toggle");
@@ -18,22 +29,19 @@ namespace PrintStreamer.Endpoints.Api.Camera
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var webcamManager = HttpContext.RequestServices.GetRequiredService<WebCamManager>();
-            var streamService = HttpContext.RequestServices.GetRequiredService<StreamService>();
-            webcamManager.Toggle();
-            var newVal = webcamManager.IsDisabled;
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<CameraToggleEndpoint>>();
-            logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
-            if (streamService.IsStreaming)
+            _webcamManager.Toggle();
+            var newVal = _webcamManager.IsDisabled;
+            _logger.LogInformation("Camera simulation: toggled -> disabled={IsDisabled}", newVal);
+            if (_streamService.IsStreaming)
             {
                 try
                 {
-                    await streamService.StopStreamAsync();
-                    await streamService.StartStreamAsync(null, null, ct);
+                    await _streamService.StopStreamAsync();
+                    await _streamService.StartStreamAsync(null, null, ct);
                 }
                 catch (System.Exception ex)
                 {
-                    logger.LogError(ex, "Failed to restart stream");
+                    _logger.LogError(ex, "Failed to restart stream");
                 }
             }
             HttpContext.Response.StatusCode = 200;

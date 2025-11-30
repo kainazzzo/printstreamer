@@ -9,11 +9,17 @@ namespace PrintStreamer.Endpoints.Api.YouTube
 {
     public class PollingStatusEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly YouTubePollingManager _pollingManager;
+
+        public PollingStatusEndpoint(YouTubePollingManager pollingManager)
+        {
+            _pollingManager = pollingManager;
+        }
+
         public override void Configure() { Get("/api/youtube/polling/status"); AllowAnonymous(); }
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var pm = HttpContext.RequestServices.GetRequiredService<YouTubePollingManager>();
-            var stats = pm.GetStats();
+            var stats = _pollingManager.GetStats();
             HttpContext.Response.StatusCode = 200;
             await HttpContext.Response.WriteAsJsonAsync(stats, ct);
         }

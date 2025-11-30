@@ -10,6 +10,17 @@ namespace PrintStreamer.Endpoints.Api.Live
 {
     public class StatusEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly ILogger<StatusEndpoint> _logger;
+        private readonly StreamOrchestrator _orchestrator;
+        private readonly YouTubeControlService _ytService;
+
+        public StatusEndpoint(ILogger<StatusEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService ytService)
+        {
+            _logger = logger;
+            _orchestrator = orchestrator;
+            _ytService = ytService;
+        }
+
         public override void Configure()
         {
             Get("/api/live/status");
@@ -18,25 +29,22 @@ namespace PrintStreamer.Endpoints.Api.Live
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<StatusEndpoint>>();
             try
             {
-                var orchestrator = HttpContext.RequestServices.GetRequiredService<StreamOrchestrator>();
-                var isLive = orchestrator.IsBroadcastActive;
-                var broadcastId = orchestrator.CurrentBroadcastId;
-                var streamerRunning = orchestrator.IsStreaming;
-                var waitingForIngestion = orchestrator.IsWaitingForIngestion;
+                var isLive = _orchestrator.IsBroadcastActive;
+                var broadcastId = _orchestrator.CurrentBroadcastId;
+                var streamerRunning = _orchestrator.IsStreaming;
+                var waitingForIngestion = _orchestrator.IsWaitingForIngestion;
                 string? privacy = null;
 
                 if (isLive && !string.IsNullOrWhiteSpace(broadcastId))
                 {
                     try
                     {
-                        var yt = HttpContext.RequestServices.GetRequiredService<YouTubeControlService>();
-                        logger.LogInformation("HTTP /api/live/status request received");
-                        if (await yt.AuthenticateAsync(ct))
+                        _logger.LogInformation("HTTP /api/live/status request received");
+                        if (await _ytService.AuthenticateAsync(ct))
                         {
-                            privacy = await yt.GetBroadcastPrivacyAsync(broadcastId, ct);
+                            privacy = await _ytService.GetBroadcastPrivacyAsync(broadcastId, ct);
                         }
                     }
                     catch

@@ -10,6 +10,13 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 {
     public class FallbackBlackEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly ILogger<FallbackBlackEndpoint> _logger;
+
+        public FallbackBlackEndpoint(ILogger<FallbackBlackEndpoint> logger)
+        {
+            _logger = logger;
+        }
+
         public override void Configure()
         {
             Get("/fallback_black.jpg");
@@ -18,7 +25,6 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<FallbackBlackEndpoint>>();
             var fallbackPath = Path.Combine(Directory.GetCurrentDirectory(), "fallback_black.jpg");
             if (File.Exists(fallbackPath))
             {

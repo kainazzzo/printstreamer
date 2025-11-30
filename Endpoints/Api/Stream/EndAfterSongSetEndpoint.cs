@@ -9,16 +9,22 @@ namespace PrintStreamer.Endpoints.Api.Stream
 {
     public class EndAfterSongSetEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly StreamOrchestrator _orchestrator;
+
+        public EndAfterSongSetEndpoint(StreamOrchestrator orchestrator)
+        {
+            _orchestrator = orchestrator;
+        }
+
         public override void Configure() { Post("/api/stream/end-after-song"); AllowAnonymous(); }
         public override async Task HandleAsync(CancellationToken ct)
         {
             var ctx = HttpContext;
             try
             {
-                var orchestrator = ctx.RequestServices.GetRequiredService<StreamOrchestrator>();
                 var enabledStr = ctx.Request.Query["enabled"].ToString();
                 var enabled = string.Equals(enabledStr, "true", System.StringComparison.OrdinalIgnoreCase) || enabledStr == "1";
-                orchestrator.SetEndStreamAfterSong(enabled);
+                _orchestrator.SetEndStreamAfterSong(enabled);
                 ctx.Response.StatusCode = 200;
                 await ctx.Response.WriteAsJsonAsync(new { success = true, enabled }, ct);
             }

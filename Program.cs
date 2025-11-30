@@ -139,6 +139,7 @@ webBuilder.Services.AddSingleton<TimelapseManager>();
 webBuilder.Services.AddSingleton<ITimelapseManager, TimelapseManager>();
 // Expose TimelapseManager as ITimelapseMetadataProvider for overlay text enrichment
 webBuilder.Services.AddSingleton<ITimelapseMetadataProvider, TimelapseManager>();
+
 // YouTube API polling manager with configuration
 webBuilder.Services.Configure<YouTubePollingOptions>(
 	webBuilder.Configuration.GetSection(YouTubePollingOptions.SectionName));
@@ -151,24 +152,18 @@ webBuilder.Services.AddSingleton<IOBSService, OBSService>();
 webBuilder.Services.AddSingleton<StreamService>();
 webBuilder.Services.AddSingleton<StreamOrchestrator>();
 webBuilder.Services.AddSingleton<PrintStreamOrchestrator>();
-webBuilder.Services.AddSingleton<MoonrakerPollerService>();
 webBuilder.Services.AddHostedService<MoonrakerHostedService>();
 webBuilder.Services.AddSingleton<AudioService>();
 webBuilder.Services.AddSingleton<AudioBroadcastService>();
 // Printer console service (skeleton)
 webBuilder.Services.AddSingleton<PrinterConsoleService>();
+webBuilder.Services.AddSingleton<OverlayTextService>();
+webBuilder.Services.AddSingleton<MoonrakerPoller>();
+
+
 // Start the same singleton as a hosted service
-webBuilder.Services.AddHostedService(sp => sp.GetRequiredService<PrinterConsoleService>());
-// Overlay text generator (reads Moonraker, writes text for ffmpeg drawtext)
-webBuilder.Services.AddSingleton(sp =>
-{
-	var cfg = sp.GetRequiredService<IConfiguration>();
-	var tl = sp.GetService<ITimelapseMetadataProvider>();
-	var audio = sp.GetRequiredService<AudioService>();
-	var overlayLogger = sp.GetRequiredService<ILogger<OverlayTextService>>();
-	var moonrakerClient = sp.GetRequiredService<MoonrakerClient>();
-	return new OverlayTextService(cfg, tl, () => audio.Current, overlayLogger, moonrakerClient);
-});
+webBuilder.Services.AddHostedService<PrinterConsoleService>();
+
 
 // Add Blazor Server services
 webBuilder.Services.AddRazorComponents()
@@ -233,27 +228,6 @@ TimelapseManager? timelapseManager = null;
 
 var app = webBuilder.Build();
 
-ProxyUtil.Logger = app.Services.GetRequiredService<ILogger<Program>>();
-// Provide DI-created MoonrakerClient to the static poller so it can query printer state
-try
-{
-	MoonrakerPoller.SetMoonrakerClient(app.Services.GetRequiredService<MoonrakerClient>());
-}
-catch
-{
-	// If registration fails for any reason, continue startup but log via proxy logger
-	ProxyUtil.Logger?.LogWarning("Failed to register MoonrakerClient with MoonrakerPoller");
-}
-// Register DI-provided YouTubeControlService for use in the static poller helpers.
-try
-{
-	MoonrakerPoller.SetYouTubeControlService(app.Services.GetRequiredService<YouTubeControlService>());
-}
-catch
-{
-	ProxyUtil.Logger?.LogWarning("Failed to register YouTubeControlService with MoonrakerPoller");
-}
-
 // Wire up audio track completion callback to orchestrator
 {
 	var orchestrator = app.Services.GetRequiredService<StreamOrchestrator>();
@@ -264,7 +238,7 @@ catch
 // Wire up PrintStreamOrchestrator to subscribe to PrinterState events from MoonrakerPoller
 {
 	var printStreamOrchestrator = app.Services.GetRequiredService<PrintStreamOrchestrator>();
-	PrintStreamer.Services.MoonrakerPoller.PrintStateChanged += (prev, curr) =>
+	MoonrakerPoller.PrintStateChanged += (prev, curr) =>
 		_ = printStreamOrchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
 }
 
@@ -336,98 +310,6 @@ if (serveEnabled)
 	// Ensure overlay text writer is running
 	try { overlayTextSvc.Start(); } catch { }
 
-	// Route handled by FastEndpoints: Endpoints/Stream/OverlayEndpoint.cs
-
-	// Timelapse frames listing moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseFramesEndpoint.cs
-
-	// Timelapse frame delete moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseFrameDeleteEndpoint.cs
-
-	// Mix stream handled by FastEndpoints: Endpoints/Stream/MixEndpoint.cs
-
-	// Helper function to capture single JPEG from a stream URL
-
-	// Overlay coords handled by FastEndpoints: Endpoints/Stream/OverlayCoordsEndpoint.cs
-	// Capture endpoints moved to FastEndpoints: Endpoints/Stream/*
-
-	// Capture endpoints moved to FastEndpoints: Endpoints/Stream/Capture*Endpoint.cs
-
-	// Serve the fallback black JPEG via FastEndpoint: Endpoints/Api/Proxy/FallbackBlackEndpoint.cs
-
-	// Camera simulation control endpoints moved to FastEndpoints: Endpoints/Api/Camera/*
-
-	// Camera on endpoint moved to FastEndpoint: Endpoints/Api/Camera/CameraOnEndpoint.cs
-
-	// Camera off endpoint moved to FastEndpoint: Endpoints/Api/Camera/CameraOffEndpoint.cs
-
-	// Camera toggle endpoint moved to FastEndpoint: Endpoints/Api/Camera/CameraToggleEndpoint.cs
-
-	// Audio enabled toggle moved to FastEndpoint: Endpoints/Api/Audio/AudioEnabledEndpoint.cs
-
-	// Reverse proxy for Mainsail/Fluidd is now implemented as FastEndpoints: Endpoints/Api/Proxy/ProxyMainsailEndpoint.cs and ProxyFluiddEndpoint.cs
-
-	// Some UI bundles emit absolute-root URLs like /assets/*, /img/*, /manifest.webmanifest, /sw.js.
-	// We route these to the correct UI based on the Referer so they work under a prefix.
-	// Absolute-root asset handling moved to FastEndpoint: Endpoints/Api/Proxy/AbsRootFilesEndpoint.cs
-
-	// Support absolute-root UI asset paths (e.g., /mainsail/assets/...) moved to FastEndpoint: Endpoints/Api/Proxy/UiRootProxyEndpoint.cs
-
-	// Same-origin Moonraker HTTP proxy endpoints + WebSocket tunnel
-	string? moonrakerBase = config.GetValue<string>("Moonraker:BaseUrl");
-	if (!string.IsNullOrWhiteSpace(moonrakerBase))
-	{
-		var httpMethods = new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" };
-
-		// Moonraker path proxies and websocket tunnel moved to FastEndpoints: Endpoints/Api/Proxy/MoonrakerProxyEndpoint.cs and WebSocketProxyEndpoint.cs
-	}
-
-	// Config APIs moved to FastEndpoints: Endpoints/Api/Config/*
-	// State endpoint: Endpoints/Api/Config/GetConfigStateEndpoint.cs
-
-	// Auto-broadcast endpoint moved to FastEndpoints: Endpoints/Api/Config/AutoBroadcastEndpoint.cs
-
-	// Auto-upload endpoint moved to FastEndpoints: Endpoints/Api/Config/AutoUploadEndpoint.cs
-
-	// End-stream-after-print toggles moved to FastEndpoints: Endpoints/Api/Config/EndStreamAfterPrintEndpoint.cs
-
-	// Timelapse list endpoint moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapsesEndpoint.cs
-
-	// Live start endpoint moved to FastEndpoints: Endpoints/Api/Live/StartBroadcastEndpoint.cs
-
-	// Live force-go-live endpoint moved to FastEndpoints: Endpoints/Api/Live/ForceGoLiveEndpoint.cs
-
-	// Live debug endpoint moved to FastEndpoints: Endpoints/Api/Live/DebugEndpoint.cs
-
-	// Live status endpoint moved to FastEndpoints: Endpoints/Api/Live/StatusEndpoint.cs
-
-	// Live stop endpoint moved to FastEndpoints: Endpoints/Api/Live/StopBroadcastEndpoint.cs
-
-	// Live privacy endpoint moved to FastEndpoints: Endpoints/Api/Live/PrivacyEndpoint.cs
-
-	// Live chat endpoint moved to FastEndpoints: Endpoints/Api/Live/ChatEndpoint.cs
-
-	// Live repair endpoint moved to FastEndpoints: Endpoints/Api/Live/RepairEndpoint.cs
-
-	// End stream after current song finishes
-	// Set end-after-song endpoint moved to FastEndpoints: Endpoints/Api/Stream/EndAfterSongSetEndpoint.cs
-
-	// Get end-after-song status
-	// Get end-after-song endpoint moved to FastEndpoints: Endpoints/Api/Stream/EndAfterSongGetEndpoint.cs
-
-	// Timelapse start endpoint moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseStartEndpoint.cs
-
-	// Timelapse stop endpoint moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseStopEndpoint.cs
-
-	// Timelapse frame download moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseFrameGetEndpoint.cs
-
-	// Timelapse generate moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseGenerateEndpoint.cs
-
-	// Timelapse upload moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseUploadEndpoint.cs
-
-	// Timelapse delete endpoint moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseDeleteEndpoint.cs
-
-	// Read timelapse metadata (small helper endpoint used by the UI to refresh a single card)
-	// Timelapse metadata endpoint moved to FastEndpoints: Endpoints/Api/Timelapses/TimelapseMetadataEndpoint.cs
-
 	// Enhanced test page with timelapse management
 	// Blazor pages are now served via MapRazorComponents below
 
@@ -437,61 +319,6 @@ if (serveEnabled)
 
 	app.MapRazorComponents<PrintStreamer.App>()
 		.AddInteractiveServerRenderMode();
-
-	// Get current configuration moved to FastEndpoint: Endpoints/Api/Config/GetConfigEndpoint.cs
-
-	// Upstream health endpoint moved to FastEndpoint: Endpoints/Health/UpstreamHealthEndpoint.cs
-
-	// Save configuration
-	// Save configuration moved to FastEndpoint: Endpoints/Api/Config/SaveConfigEndpoint.cs
-
-	// Reset configuration to defaults
-	// Reset configuration moved to FastEndpoint: Endpoints/Api/Config/ResetConfigEndpoint.cs
-
-	// Audio API: basic audio endpoints moved to FastEndpoints in Endpoints/Api/Audio
-	// Tracks endpoint: Endpoints/Api/Audio/TracksEndpoint.cs
-
-	// Audio state endpoint moved to FastEndpoints: Endpoints/Api/Audio/StateEndpoint.cs
-
-	// Audio set folder endpoint moved to FastEndpoints: Endpoints/Api/Audio/SetFolderEndpoint.cs
-
-	// Audio scan endpoint moved to FastEndpoints: Endpoints/Api/Audio/ScanEndpoint.cs
-
-/* Upload a single audio file (multipart/form-data, field name "file") into the configured audio folder.
-   Enhanced diagnostics and robust streaming to capture detailed failures when copying streams.
-   - Logs request sizes and file metadata
-   - Ensures destination folder is absolute and writable (best-effort test)
-   - Uses explicit stream copy with buffered copy to capture more precise exception context
-   - Triggers audio.Rescan() on success
-*/
-	// Audio upload endpoint moved to FastEndpoints: Endpoints/Api/Audio/UploadEndpoint.cs
-
-	// Audio queue endpoint moved to FastEndpoints: Endpoints/Api/Audio/QueueEndpoint.cs
-
-
-	// Audio clear list endpoint moved to FastEndpoints: Endpoints/Api/Audio/ClearQueueEndpoint.cs
-
-	// Audio remove from queue endpoint moved to FastEndpoints: Endpoints/Api/Audio/RemoveFromQueueEndpoint.cs
-
-	// Audio playback endpoints moved to FastEndpoints: Endpoints/Api/Audio/PlaybackEndpoints.cs (play/pause/toggle)
-	// Audio playback endpoints moved to FastEndpoints: Endpoints/Api/Audio/PlaybackEndpoints.cs (next/prev)
-	// Audio shuffle/repeat endpoints moved to FastEndpoints: Endpoints/Api/Audio/ShuffleRepeatEndpoints.cs
-
-	// Audio preview endpoint moved to FastEndpoints: Endpoints/Api/Audio/PreviewEndpoint.cs
-
-	// Audio play-track endpoint moved to FastEndpoints: Endpoints/Api/Audio/PlayTrackEndpoint.cs
-
-	// Audio stream endpoint moved to FastEndpoints/Stream: Endpoints/Stream/AudioEndpoint.cs (handles /stream/audio and /api/audio/stream)
-
-	// Audio broadcast status endpoint moved to FastEndpoints: Endpoints/Api/Audio/BroadcastStatusEndpoint.cs
-
-	// Audio stream endpoint moved to FastEndpoints/Stream: Endpoints/Stream/AudioEndpoint.cs (handles /stream/audio and /api/audio/stream)
-
-	// Silent audio helper has been moved to Endpoints/Stream/StreamHelpers.StreamSilentAudioAsync
-
-	// YouTube polling endpoints moved to FastEndpoints: Endpoints/Api/YouTube/*
-
-	app.Logger.LogInformation("Starting proxy server on http://0.0.0.0:8080/stream");
 
 	// Handle graceful shutdown - this will run regardless of mode since the host is started below
 	var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();

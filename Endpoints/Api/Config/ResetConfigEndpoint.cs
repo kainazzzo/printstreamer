@@ -1,21 +1,22 @@
 using FastEndpoints;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
-using System.Threading.Tasks;
-using System.Threading;
-using Microsoft.Extensions.Configuration;
-using System.IO;
 
 namespace PrintStreamer.Endpoints.Api.Config
 {
     public class ResetConfigEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _config;
+        private readonly ILogger<ResetConfigEndpoint> _logger;
+
+        public ResetConfigEndpoint(IConfiguration config, ILogger<ResetConfigEndpoint> logger)
+        {
+            _config = config;
+            _logger = logger;
+        }
+
         public override void Configure() { Post("/api/config/reset"); AllowAnonymous(); }
         public override async Task HandleAsync(CancellationToken ct)
         {
             var ctx = HttpContext;
-            var logger = ctx.RequestServices.GetRequiredService<ILogger<ResetConfigEndpoint>>();
-            var config = ctx.RequestServices.GetRequiredService<IConfiguration>();
             try
             {
                 var defaultConfig = new
@@ -32,13 +33,13 @@ namespace PrintStreamer.Endpoints.Api.Config
                 var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = null };
                 var jsonString = System.Text.Json.JsonSerializer.Serialize(defaultConfig, options);
                 await File.WriteAllTextAsync(appSettingsPath, jsonString);
-                logger.LogInformation("Configuration reset to defaults");
+                _logger.LogInformation("Configuration reset to defaults");
                 ctx.Response.StatusCode = 200;
                 await ctx.Response.WriteAsJsonAsync(new { success = true, message = "Configuration reset to defaults" }, ct);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
-                logger.LogError(ex, "Error resetting configuration: {Message}", ex.Message);
+                _logger.LogError(ex, "Error resetting configuration: {Message}", ex.Message);
                 ctx.Response.StatusCode = 500;
                 await ctx.Response.WriteAsJsonAsync(new { success = false, error = ex.Message }, ct);
             }

@@ -2,7 +2,6 @@ using FastEndpoints;
 using Microsoft.AspNetCore.Http;
 using System.Threading.Tasks;
 using System.Threading;
-using Microsoft.Extensions.DependencyInjection;
 using PrintStreamer.Services;
 using System.IO;
 using System.Collections.Generic;
@@ -12,6 +11,8 @@ namespace PrintStreamer.Endpoints.Api.Audio
 {
     public class QueueEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly AudioService _audio;
+        public QueueEndpoint(AudioService audio) { _audio = audio; }
         public override void Configure()
         {
             Post("/api/audio/queue");
@@ -46,8 +47,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                     }
                 }
                 names.AddRange(HttpContext.Request.Query["name"].Where(s => !string.IsNullOrEmpty(s)).Select(s => s!));
-                var audio = HttpContext.RequestServices.GetRequiredService<AudioService>();
-                audio.Enqueue(names.ToArray());
+                _audio.Enqueue(names.ToArray());
                 HttpContext.Response.StatusCode = 200;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = true, queued = names.Count }, ct);
             }

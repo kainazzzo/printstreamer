@@ -8,6 +8,15 @@ namespace PrintStreamer.Endpoints.Config
 {
     public class GetConfigStateEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly ILogger<GetConfigStateEndpoint> _logger;
+        private readonly IConfiguration _config;
+
+        public GetConfigStateEndpoint(ILogger<GetConfigStateEndpoint> logger, IConfiguration config)
+        {
+            _logger = logger;
+            _config = config;
+        }
+
         public override void Configure()
         {
             Get("/api/config/state");
@@ -16,13 +25,10 @@ namespace PrintStreamer.Endpoints.Config
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var config = HttpContext.RequestServices.GetService(typeof(IConfiguration)) as IConfiguration;
-
-            var autoBroadcastEnabled = config?.GetValue<bool>("YouTube:LiveBroadcast:Enabled");
-            var autoUploadEnabled = config?.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
-            var endStreamAfterPrintEnabled = config?.GetValue<bool?>("YouTube:LiveBroadcast:EndStreamAfterPrint") ?? false;
-            var audioEnabled = config?.GetValue<bool?>("Audio:Enabled") ?? true;
-
+            var autoBroadcastEnabled = _config.GetValue<bool>("YouTube:LiveBroadcast:Enabled");
+            var autoUploadEnabled = _config.GetValue<bool>("YouTube:TimelapseUpload:Enabled");
+            var endStreamAfterPrintEnabled = _config.GetValue<bool?>("YouTube:LiveBroadcast:EndStreamAfterPrint") ?? false;
+            var audioEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
             var result = new {
                 autoBroadcastEnabled,
                 autoUploadEnabled,

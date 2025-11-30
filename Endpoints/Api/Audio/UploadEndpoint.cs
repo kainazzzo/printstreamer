@@ -2,7 +2,6 @@ using FastEndpoints;
 using Microsoft.AspNetCore.Http;
 using System.Threading.Tasks;
 using System.Threading;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using PrintStreamer.Services;
@@ -14,6 +13,10 @@ namespace PrintStreamer.Endpoints.Api.Audio
 {
     public class UploadEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly ILogger<UploadEndpoint> _logger;
+        private readonly AudioService _audio;
+        private readonly IConfiguration _config;
+        public UploadEndpoint(ILogger<UploadEndpoint> logger, AudioService audio, IConfiguration config) { _logger = logger; _audio = audio; _config = config; }
         public override void Configure()
         {
             Post("/api/audio/upload");
@@ -22,7 +25,6 @@ namespace PrintStreamer.Endpoints.Api.Audio
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
             try
             {
                 // Allow larger uploads per request
@@ -33,15 +35,15 @@ namespace PrintStreamer.Endpoints.Api.Audio
                     if (maxReqFeature != null && !maxReqFeature.IsReadOnly)
                     {
                         maxReqFeature.MaxRequestBodySize = maxUploadBytes;
-                        logger.LogDebug("Set per-request MaxRequestBodySize={MaxBytes}", maxUploadBytes);
+                        _logger.LogDebug("Set per-request MaxRequestBodySize={MaxBytes}", maxUploadBytes);
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger.LogDebug(ex, "Could not set per-request MaxRequestBodySize (continuing)");
+                    _logger.LogDebug(ex, "Could not set per-request MaxRequestBodySize (continuing)");
                 }
 
-                logger.LogDebug("Incoming upload: Content-Length={ContentLength}, HasForm={HasForm}", HttpContext.Request.ContentLength, HttpContext.Request.HasFormContentType);
+                _logger.LogDebug("Incoming upload: Content-Length={ContentLength}, HasForm={HasForm}", HttpContext.Request.ContentLength, HttpContext.Request.HasFormContentType);
                 if (!HttpContext.Request.HasFormContentType)
                 {
                     HttpContext.Response.StatusCode = 400;
@@ -53,14 +55,14 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 var file = form.Files["file"] ?? form.Files.FirstOrDefault();
                 if (file == null || file.Length == 0)
                 {
-                    logger.LogWarning("Upload request missing file");
+                    _logger.LogWarning("Upload request missing file");
                     HttpContext.Response.StatusCode = 400;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "No file provided" }, ct);
                     return;
                 }
 
                 var origFileName = Path.GetFileName(file.FileName ?? "upload");
-                logger.LogInformation("Upload received: name={FileName}, length={Length}, contentType={ContentType}", origFileName, file.Length, file.ContentType);
+                _logger.LogInformation("Upload received: name={FileName}, length={Length}, contentType={ContentType}", origFileName, file.Length, file.ContentType);
 
                 if (string.IsNullOrWhiteSpace(origFileName))
                 {
@@ -73,7 +75,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 var ext = Path.GetExtension(origFileName).ToLowerInvariant();
                 if (!Array.Exists(allowedExt, a => a == ext))
                 {
-                    logger.LogWarning("Rejected upload with unsupported extension: {Ext}", ext);
+                    _logger.LogWarning("Rejected upload with unsupported extension: {Ext}", ext);
                     HttpContext.Response.StatusCode = 400;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = $"Unsupported file extension '{ext}'" }, ct);
                     return;
@@ -82,22 +84,20 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 const long maxBytes = 200L * 1024L * 1024L;
                 if (file.Length > maxBytes)
                 {
-                    logger.LogWarning("Rejected upload too large: {Length} > {Max}", file.Length, maxBytes);
+                    _logger.LogWarning("Rejected upload too large: {Length} > {Max}", file.Length, maxBytes);
                     HttpContext.Response.StatusCode = 400;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "File too large" }, ct);
                     return;
                 }
 
-                var audio = HttpContext.RequestServices.GetRequiredService<AudioService>();
-                var folder = audio.Folder;
+                var folder = _audio.Folder;
                 if (string.IsNullOrWhiteSpace(folder))
                 {
-                    var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-                    folder = cfg.GetValue<string>("Audio:Folder") ?? "audio";
+                    folder = _config.GetValue<string>("Audio:Folder") ?? "audio";
                 }
 
                 folder = Path.GetFullPath(folder);
-                logger.LogDebug("Resolved audio folder: {Folder}", folder);
+                _logger.LogDebug("Resolved audio folder: {Folder}", folder);
 
                 try
                 {
@@ -105,7 +105,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 }
                     catch (Exception ex)
                 {
-                    logger.LogError(ex, "Failed to create audio folder: {Folder}", folder);
+                    _logger.LogError(ex, "Failed to create audio folder: {Folder}", folder);
                     HttpContext.Response.StatusCode = 500;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "Failed to create destination folder" }, ct);
                     return;
@@ -119,7 +119,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Audio folder not writable: {Folder}", folder);
+                    _logger.LogError(ex, "Audio folder not writable: {Folder}", folder);
                     HttpContext.Response.StatusCode = 500;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "Destination folder not writable" }, ct);
                     return;
@@ -141,7 +141,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 {
                     await using var destFs = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
                     await using var src = file.OpenReadStream();
-                    logger.LogDebug("Starting copy: srcLength={SrcLen}, destPath={Dest}", src.Length, destPath);
+                    _logger.LogDebug("Starting copy: srcLength={SrcLen}, destPath={Dest}", src.Length, destPath);
 
                     var buffer = new byte[64 * 1024];
                     int read;
@@ -153,11 +153,11 @@ namespace PrintStreamer.Endpoints.Api.Audio
                     }
 
                     await destFs.FlushAsync(ct);
-                    logger.LogInformation("Copy complete: wrote {Bytes} bytes to {Dest}", total, destPath);
+                    _logger.LogInformation("Copy complete: wrote {Bytes} bytes to {Dest}", total, destPath);
                 }
                     catch (OperationCanceledException oce)
                 {
-                    logger.LogWarning(oce, "Upload canceled while copying to disk: {Dest}", destPath);
+                    _logger.LogWarning(oce, "Upload canceled while copying to disk: {Dest}", destPath);
                     try { if (File.Exists(destPath)) File.Delete(destPath); } catch { }
                     HttpContext.Response.StatusCode = 499; // client closed request (best-effort)
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "Upload canceled" }, ct);
@@ -165,7 +165,7 @@ namespace PrintStreamer.Endpoints.Api.Audio
                 }
                     catch (Exception ex)
                 {
-                    logger.LogError(ex, "Failed while copying uploaded file to {Dest}", destPath);
+                    _logger.LogError(ex, "Failed while copying uploaded file to {Dest}", destPath);
                     try { if (File.Exists(destPath)) File.Delete(destPath); } catch { }
                     HttpContext.Response.StatusCode = 500;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "Failed saving file: " + ex.Message }, ct);
@@ -174,21 +174,21 @@ namespace PrintStreamer.Endpoints.Api.Audio
 
                 try
                 {
-                    audio.Rescan();
+                    _audio.Rescan();
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Rescan failed after upload; uploaded file saved at {Path}", destPath);
+                    _logger.LogWarning(ex, "Rescan failed after upload; uploaded file saved at {Path}", destPath);
                 }
 
-                logger.LogInformation("Uploaded audio file saved: {Path}", destPath);
+                _logger.LogInformation("Uploaded audio file saved: {Path}", destPath);
                 HttpContext.Response.StatusCode = 200;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = true, filename = destName, path = destPath }, ct);
                 return;
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Unhandled error in /api/audio/upload");
+                _logger.LogError(ex, "Unhandled error in /api/audio/upload");
                 HttpContext.Response.StatusCode = 500;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = ex.Message }, ct);
                 return;

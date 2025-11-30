@@ -11,6 +11,14 @@ namespace PrintStreamer.Endpoints.Stream
 {
     public class OverlayCoordsEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _config;
+        private readonly Overlay.OverlayTextService _overlayText;
+
+        public OverlayCoordsEndpoint(IConfiguration config, Overlay.OverlayTextService overlayText)
+        {
+            _config = config;
+            _overlayText = overlayText;
+        }
         public override void Configure()
         {
             Get("/stream/overlay/coords");
@@ -19,11 +27,9 @@ namespace PrintStreamer.Endpoints.Stream
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var config = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var overlayText = HttpContext.RequestServices.GetRequiredService<OverlayTextService>();
-            var fontSize = config.GetValue<int?>("Overlay:FontSize") ?? 16;
-            var boxHeight = config.GetValue<int?>("Overlay:BoxHeight") ?? 75;
-            var layout = OverlayLayout.Calculate(config, overlayText.TextFilePath, fontSize, boxHeight);
+            var fontSize = _config.GetValue<int?>("Overlay:FontSize") ?? 16;
+            var boxHeight = _config.GetValue<int?>("Overlay:BoxHeight") ?? 75;
+            var layout = OverlayLayout.Calculate(_config, _overlayText.TextFilePath, fontSize, boxHeight);
             var result = new
             {
                 drawbox = new { x = layout.DrawboxX, y = layout.DrawboxY },

@@ -9,6 +9,13 @@ namespace PrintStreamer.Endpoints.Api.Live
 {
     public class RepairEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly StreamOrchestrator _orchestrator;
+
+        public RepairEndpoint(StreamOrchestrator orchestrator)
+        {
+            _orchestrator = orchestrator;
+        }
+
         public override void Configure()
         {
             Post("/api/live/repair");
@@ -19,8 +26,7 @@ namespace PrintStreamer.Endpoints.Api.Live
         {
             try
             {
-                var orchestrator = HttpContext.RequestServices.GetRequiredService<StreamOrchestrator>();
-                var ok = await orchestrator.EnsureStreamingHealthyAsync(ct);
+                var ok = await _orchestrator.EnsureStreamingHealthyAsync(ct);
                 HttpContext.Response.StatusCode = 200;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = ok }, ct);
             }

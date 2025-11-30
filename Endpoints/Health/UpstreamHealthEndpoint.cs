@@ -12,6 +12,15 @@ namespace PrintStreamer.Endpoints.Health
 {
     public class UpstreamHealthEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly ILogger<UpstreamHealthEndpoint> _logger;
+        private readonly IConfiguration _config;
+
+        public UpstreamHealthEndpoint(ILogger<UpstreamHealthEndpoint> logger, IConfiguration config)
+        {
+            _logger = logger;
+            _config = config;
+        }
+
         public override void Configure()
         {
             Get("/api/health/upstream");
@@ -20,11 +29,9 @@ namespace PrintStreamer.Endpoints.Health
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var cfg = HttpContext.RequestServices.GetService(typeof(IConfiguration)) as IConfiguration;
-            var logger = HttpContext.RequestServices.GetService(typeof(ILogger<Program>)) as ILogger<Program>;
-            var mainsail = cfg?.GetValue<string>("PrinterUI:MainsailUrl");
-            var fluidd = cfg?.GetValue<string>("PrinterUI:FluiddUrl");
-            var moon = cfg?.GetValue<string>("Moonraker:BaseUrl");
+            var mainsail = _config.GetValue<string>("PrinterUI:MainsailUrl");
+            var fluidd = _config.GetValue<string>("PrinterUI:FluiddUrl");
+            var moon = _config.GetValue<string>("Moonraker:BaseUrl");
             var results = new Dictionary<string, object?>();
 
             async Task<object> ProbeHttp(string? url)

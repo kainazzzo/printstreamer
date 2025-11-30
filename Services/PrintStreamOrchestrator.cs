@@ -23,8 +23,9 @@ namespace PrintStreamer.Services
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<PrintStreamOrchestrator> _logger;
         private readonly ITimelapseManager _timelapseManager;
-        private readonly StreamOrchestrator? _streamOrchestrator;
+        private readonly StreamOrchestrator _streamOrchestrator;
         private readonly Dictionary<string, string?> _sessionJobMap = new();
+        private readonly MoonrakerPoller _moonrakerPoller;
         
         // State tracking
         private PrinterState? _lastPrinterState;
@@ -56,7 +57,7 @@ namespace PrintStreamer.Services
             "idle", "complete", "stopped", "error", "standby"
         };
 
-        public PrintStreamOrchestrator(IConfiguration config, ILoggerFactory loggerFactory, ITimelapseManager timelapseManager, StreamOrchestrator? streamOrchestrator = null)
+        public PrintStreamOrchestrator(IConfiguration config, ILoggerFactory loggerFactory, ITimelapseManager timelapseManager, StreamOrchestrator streamOrchestrator, MoonrakerPoller moonrakerPoller)
         {
             _config = config;
             _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
@@ -72,6 +73,7 @@ namespace PrintStreamer.Services
             _lastLayerOffset = _config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
             _lastLayerRemainingSeconds = _config.GetValue<int?>("Timelapse:LastLayerRemainingSeconds") ?? 30;
             _lastLayerProgressPercent = _config.GetValue<double?>("Timelapse:LastLayerProgressPercent") ?? 98.5;
+            _moonrakerPoller = moonrakerPoller;
         }
 
         /// <summary>
@@ -349,7 +351,7 @@ namespace PrintStreamer.Services
                         else
                         {
                             _logger.LogInformation("[PrintStreamOrchestrator] Starting YouTube broadcast via MoonrakerPoller (fallback)...");
-                            var (success, m, b) = await MoonrakerPoller.StartBroadcastAsync(_config, _loggerFactory, cancellationToken);
+                            var (success, m, b) = await _moonrakerPoller.StartBroadcastAsync(_config, _loggerFactory, cancellationToken);
                             created = success;
                             message = m;
                             broadcastId = b;
@@ -467,20 +469,13 @@ namespace PrintStreamer.Services
                         bool stopped = false;
                         string? stopMessage = null;
 
-                        if (_streamOrchestrator != null)
-                        {
+                        
                             var (ok, msg) = await _streamOrchestrator.StopBroadcastAsync(cancellationToken);
                             stopped = ok;
                             stopMessage = msg;
                             if (stopped) _logger.LogInformation("[PrintStreamOrchestrator] Broadcast stopped");
-                        }
-                        else
-                        {
-                            var (ok, msg) = await MoonrakerPoller.StopBroadcastAsync(_config, cancellationToken, _loggerFactory);
-                            stopped = ok;
-                            stopMessage = msg;
-                            if (stopped) _logger.LogInformation("[PrintStreamOrchestrator] Broadcast stopped (via MoonrakerPoller)");
-                        }
+                      
+                        
                         if (stopped)
                         {
                             _logger.LogInformation("[PrintStreamOrchestrator] Broadcast stopped");

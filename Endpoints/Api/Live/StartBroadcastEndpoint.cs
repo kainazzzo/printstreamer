@@ -9,6 +9,13 @@ namespace PrintStreamer.Endpoints.Api.Live
 {
     public class StartBroadcastEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly StreamOrchestrator _orchestrator;
+
+        public StartBroadcastEndpoint(StreamOrchestrator orchestrator)
+        {
+            _orchestrator = orchestrator;
+        }
+
         public override void Configure()
         {
             Post("/api/live/start");
@@ -19,8 +26,7 @@ namespace PrintStreamer.Endpoints.Api.Live
         {
             try
             {
-                var orchestrator = HttpContext.RequestServices.GetRequiredService<StreamOrchestrator>();
-                var (ok, message, broadcastId) = await orchestrator.StartBroadcastAsync(ct);
+                var (ok, message, broadcastId) = await _orchestrator.StartBroadcastAsync(ct);
                 if (ok)
                 {
                     HttpContext.Response.StatusCode = 200;

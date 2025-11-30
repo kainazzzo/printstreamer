@@ -12,6 +12,17 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 {
     public class TimelapseUploadEndpoint : Endpoint<TimelapseNameRequest>
     {
+        private readonly ILogger<TimelapseUploadEndpoint> _logger;
+        private readonly TimelapseManager _timelapseManager;
+        private readonly YouTubeControlService _ytService;
+
+        public TimelapseUploadEndpoint(ILogger<TimelapseUploadEndpoint> logger, TimelapseManager timelapseManager, YouTubeControlService ytService)
+        {
+            _logger = logger;
+            _timelapseManager = timelapseManager;
+            _ytService = ytService;
+        }
+
         public override void Configure()
         {
             Post("/api/timelapses/{name}/upload");
@@ -20,11 +31,9 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 
         public override async Task HandleAsync(TimelapseNameRequest req, CancellationToken ct)
         {
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<TimelapseUploadEndpoint>>();
             try
             {
-                var timelapseManager = HttpContext.RequestServices.GetRequiredService<TimelapseManager>();
-                var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, req.Name);
+                var timelapseDir = Path.Combine(_timelapseManager.TimelapseDirectory, req.Name);
                 if (!Directory.Exists(timelapseDir))
                 {
                     HttpContext.Response.StatusCode = 404;
@@ -41,19 +50,18 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
                 }
 
                 var videoPath = videoFiles[0];
-                var ytService = HttpContext.RequestServices.GetRequiredService<YouTubeControlService>();
-                logger.LogInformation("HTTP /api/timelapses/{Name}/upload request received", req.Name);
-                logger.LogDebug("Timelapse dir: {TimelapseDir}; video: {VideoPath}", timelapseDir, videoPath);
-                if (!await ytService.AuthenticateAsync(ct))
+                _logger.LogInformation("HTTP /api/timelapses/{Name}/upload request received", req.Name);
+                _logger.LogDebug("Timelapse dir: {TimelapseDir}; video: {VideoPath}", timelapseDir, videoPath);
+                if (!await _ytService.AuthenticateAsync(ct))
                 {
                     HttpContext.Response.StatusCode = 401;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "YouTube authentication failed" }, ct);
                     return;
                 }
 
-                logger.LogInformation("Starting YouTube upload for timelapse {Name}", req.Name);
-                var videoId = await ytService.UploadTimelapseVideoAsync(videoPath, req.Name, ct, true);
-                logger.LogInformation("YouTube upload result videoId={VideoId}", videoId);
+                _logger.LogInformation("Starting YouTube upload for timelapse {Name}", req.Name);
+                var videoId = await _ytService.UploadTimelapseVideoAsync(videoPath, req.Name, ct, true);
+                _logger.LogInformation("YouTube upload result videoId={VideoId}", videoId);
 
                 if (!string.IsNullOrEmpty(videoId))
                 {
@@ -68,7 +76,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
                     }
                     catch (System.Exception ex)
                     {
-                        logger.LogWarning(ex, "Failed to save YouTube URL to metadata: {Message}", ex.Message);
+                        _logger.LogWarning(ex, "Failed to save YouTube URL to metadata: {Message}", ex.Message);
                     }
 
                     HttpContext.Response.StatusCode = 200;
@@ -81,8 +89,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
             }
             catch (System.Exception ex)
             {
-                var logger2 = HttpContext.RequestServices.GetRequiredService<ILogger<TimelapseUploadEndpoint>>();
-                logger2.LogError(ex, "Error uploading timelapse: {Message}", ex.Message);
+                _logger.LogError(ex, "Error uploading timelapse: {Message}", ex.Message);
                 HttpContext.Response.StatusCode = 500;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = ex.Message }, ct);
             }

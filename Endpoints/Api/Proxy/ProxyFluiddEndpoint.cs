@@ -10,20 +10,26 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 {
     public class ProxyFluiddEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<ProxyFluiddEndpoint> _logger;
+
+        public ProxyFluiddEndpoint(IConfiguration cfg, ILogger<ProxyFluiddEndpoint> logger)
+        {
+            _cfg = cfg;
+            _logger = logger;
+        }
+
         public override void Configure()
         {
-            Get("/proxy/fluidd/{**path}");
-            Get("/proxy/fluidd");
+            Get("/proxy/fluidd/{**path}", "/proxy/fluidd");
             AllowAnonymous();
         }
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<ProxyFluiddEndpoint>>();
-            var target = cfg.GetValue<string>("PrinterUI:FluiddUrl");
+            var target = _cfg.GetValue<string>("PrinterUI:FluiddUrl");
             var path = Route<string?>("path");
-            logger.LogDebug("GET /proxy/fluidd/{Path} -> target={Target}", path ?? "", target ?? "NOT CONFIGURED");
+            _logger.LogDebug("GET /proxy/fluidd/{Path} -> target={Target}", path ?? "", target ?? "NOT CONFIGURED");
             if (string.IsNullOrWhiteSpace(target))
             {
                 HttpContext.Response.StatusCode = 404;

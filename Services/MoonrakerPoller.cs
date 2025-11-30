@@ -13,31 +13,26 @@ using System.Threading.Tasks;
 
 namespace PrintStreamer.Services
 {
-    internal static class MoonrakerPoller
+    internal class MoonrakerPoller
     {
-        private static MoonrakerClient? _moonrakerClient;
-
-        /// <summary>
-        /// Register a shared MoonrakerClient instance (from DI). The poller is static so it
-        /// cannot use constructor injection; callers should set the client at startup.
-        /// </summary>
-        public static void SetMoonrakerClient(MoonrakerClient client)
+        public MoonrakerPoller(MoonrakerClient moonrakerClient, YouTubeControlService youTubeControlService, IConfiguration configuration, ILogger<MoonrakerPoller> logger)
         {
-            _moonrakerClient = client;
+            _moonrakerClient = moonrakerClient;
+            _youTubeControlService = youTubeControlService;
+            _configuration = configuration;
+            _logger = logger;
         }
+
+        private MoonrakerClient? _moonrakerClient;
 
         // Compatibility helpers for older callers that expect MoonrakerPoller to provide
         // basic YouTube broadcast helpers. These are thin shims that delegate to the
         // DI-provided YouTubeControlService when available.
-        private static YouTubeControlService? _youTubeControlService;
+        private YouTubeControlService _youTubeControlService;
 
-        /// <summary>
-        /// Register a YouTubeControlService instance (from DI) for compatibility shims.
-        /// </summary>
-        public static void SetYouTubeControlService(YouTubeControlService svc)
-        {
-            _youTubeControlService = svc;
-        }
+        private readonly IConfiguration _configuration;
+        private readonly ILogger<MoonrakerPoller> _logger;
+
 
         /// <summary>
         /// Simple compatibility flag. The real broadcast state is managed elsewhere.
@@ -48,7 +43,7 @@ namespace PrintStreamer.Services
         /// Create a live broadcast using YouTubeControlService if registered.
         /// Returns (success, message, broadcastId).
         /// </summary>
-        public static async Task<(bool success, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
+        public async Task<(bool success, string? message, string? broadcastId)> StartBroadcastAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
         {
             var logger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
             if (_youTubeControlService == null)
@@ -114,25 +109,24 @@ namespace PrintStreamer.Services
         /// <summary>
         /// Register a PrintStreamOrchestrator to handle printer state changes.
         /// </summary>
-        public static void RegisterPrintStreamOrchestrator(PrintStreamOrchestrator orchestrator)
+        public void RegisterPrintStreamOrchestrator(PrintStreamOrchestrator orchestrator)
         {
             // The event handler is async, but the registrar itself does not need to be async.
             PrintStateChanged += async (prev, curr) => await orchestrator.HandlePrinterStateChangedAsync(prev, curr, CancellationToken.None);
         }
 
         // Polling loop: query Moonraker and emit PrinterState events for subscribers.
-        public static async Task PollAndStreamJobsAsync(IConfiguration config, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
+        public async Task PollAndStreamJobsAsync(CancellationToken cancellationToken)
         {
-            var watcherLogger = loggerFactory.CreateLogger(nameof(MoonrakerPoller));
-            var moonrakerBase = config.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125/";
-            var apiKey = config.GetValue<string>("Moonraker:ApiKey");
-            var authHeader = config.GetValue<string>("Moonraker:AuthHeader");
+            var moonrakerBase = _configuration.GetValue<string>("Moonraker:BaseUrl") ?? "http://localhost:7125/";
+            var apiKey = _configuration.GetValue<string>("Moonraker:ApiKey");
+            var authHeader = _configuration.GetValue<string>("Moonraker:AuthHeader");
             var basePollInterval = TimeSpan.FromSeconds(10); // configurable if desired
             var fastPollInterval = TimeSpan.FromSeconds(2); // faster polling near completion
             string? lastJobFilename = null;
             string? lastCompletedJobFilename = null; // used for final upload/title if app shuts down post-completion
-            var offlineGrace = config.GetValue<TimeSpan?>("Timelapse:OfflineGracePeriod") ?? TimeSpan.FromMinutes(10);
-            var idleFinalizeDelay = config.GetValue<TimeSpan?>("Timelapse:IdleFinalizeDelay") ?? TimeSpan.FromSeconds(20);
+            var offlineGrace = _configuration.GetValue<TimeSpan?>("Timelapse:OfflineGracePeriod") ?? TimeSpan.FromMinutes(10);
+            var idleFinalizeDelay = _configuration.GetValue<TimeSpan?>("Timelapse:IdleFinalizeDelay") ?? TimeSpan.FromSeconds(20);
             var activeStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "printing",
@@ -193,12 +187,12 @@ namespace PrintStreamer.Services
                         var currentLayer = info?.CurrentLayer;
                         var totalLayers = info?.TotalLayers;
 
-                        watcherLogger.LogDebug("[Watcher] Poll result - Filename: '{Filename}', State: '{State}', Progress: {Progress}%, Remaining: {Remaining}, Layer: {Layer}/{Total}",
+                        _logger.LogDebug("[Watcher] Poll result - Filename: '{Filename}', State: '{State}', Progress: {Progress}%, Remaining: {Remaining}, Layer: {Layer}/{Total}",
                             currentJob, state, progressPct?.ToString("F1") ?? "n/a", remaining?.ToString() ?? "n/a",
                             currentLayer?.ToString() ?? "n/a", totalLayers?.ToString() ?? "n/a");
 
                         // Fire PrinterState events for subscribers (e.g., PrintStreamOrchestrator)
-                        UpdateAndFirePrinterStateEvents(watcherLogger, state, currentJob, jobQueueId, progressPct, remaining, currentLayer, totalLayers);
+                        UpdateAndFirePrinterStateEvents(state, currentJob, jobQueueId, progressPct, remaining, currentLayer, totalLayers);
 
                         if (isPrinting || (!string.IsNullOrWhiteSpace(state) && activeStates.Contains(state)))
                         {
@@ -226,7 +220,7 @@ namespace PrintStreamer.Services
                             !string.Equals(currentJob, lastJobFilename, StringComparison.OrdinalIgnoreCase))
                         {
                             forceFinalizeActiveSession = true;
-                            watcherLogger.LogInformation("[Watcher] Detected job change while printing. Previous job: {PreviousJob}, new job: {CurrentJob}. Preparing to finalize previous job.", lastJobFilename, currentJob);
+                            _logger.LogInformation("[Watcher] Detected job change while printing. Previous job: {PreviousJob}, new job: {CurrentJob}. Preparing to finalize previous job.", lastJobFilename, currentJob);
                         }
 
                         if (isPrinting)
@@ -243,7 +237,7 @@ namespace PrintStreamer.Services
                             var jobLabel = !string.IsNullOrWhiteSpace(currentJob)
                                 ? currentJob
                                 : (!string.IsNullOrWhiteSpace(lastJobFilename) ? lastJobFilename! : fallbackJobName);
-                            watcherLogger.LogInformation("[Watcher] New print job detected: {Job}", currentJob ?? "(unknown)");
+                            _logger.LogInformation("[Watcher] New print job detected: {Job}", currentJob ?? "(unknown)");
                             if (!string.IsNullOrWhiteSpace(currentJob)) lastJobFilename = currentJob;
                             jobMissingSince = null;
                             idleStateSince = null;
@@ -253,7 +247,7 @@ namespace PrintStreamer.Services
                         else if ((forceFinalizeActiveSession || !isPrinting))
                         {
                             var now = DateTime.UtcNow;
-                            var layerOffset = config.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
+                            var layerOffset = _configuration.GetValue<int?>("Timelapse:LastLayerOffset") ?? 1;
                             if (layerOffset < 0) layerOffset = 0;
 
                             bool layersComplete = currentLayer.HasValue && totalLayers.HasValue && totalLayers.Value > 0 &&
@@ -269,7 +263,7 @@ namespace PrintStreamer.Services
                             {
                                 if (!waitingForResumeLogged)
                                 {
-                                    watcherLogger.LogDebug("[Watcher] Holding timelapse open (state={State}, progress={Progress}%, idleFor={Idle}, jobMissingFor={JobMissing}, offlineFor={Offline}).",
+                                    _logger.LogDebug("[Watcher] Holding timelapse open (state={State}, progress={Progress}%, idleFor={Idle}, jobMissingFor={JobMissing}, offlineFor={Offline}).",
                                         state ?? "n/a",
                                         progressPct?.ToString("F1") ?? "n/a",
                                         idleStateSince.HasValue ? FormatTimeSpan(now - idleStateSince.Value) : "n/a",
@@ -285,11 +279,11 @@ namespace PrintStreamer.Services
                                 var jobLogName = lastJobFilename ?? "(unknown)";
                                 if (forceFinalizeActiveSession)
                                 {
-                                    watcherLogger.LogInformation("[Watcher] Finalizing active timelapse session before starting new job: {Job}", jobLogName);
+                                    _logger.LogInformation("[Watcher] Finalizing active timelapse session before starting new job: {Job}", jobLogName);
                                 }
                                 else
                                 {
-                                    watcherLogger.LogInformation("[Watcher] Print job finished: {Job}", jobLogName);
+                                    _logger.LogInformation("[Watcher] Print job finished: {Job}", jobLogName);
                                 }
                                 var finishedJobFilename = lastJobFilename;
                                 if (!forceFinalizeActiveSession)
@@ -325,13 +319,13 @@ namespace PrintStreamer.Services
                             if (nearCompletion)
                             {
                                 pollInterval = fastPollInterval;
-                                watcherLogger.LogDebug("[Watcher] Using fast polling ({Seconds}s) - near completion", pollInterval.TotalSeconds);
+                                _logger.LogDebug("[Watcher] Using fast polling ({Seconds}s) - near completion", pollInterval.TotalSeconds);
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        watcherLogger.LogError(ex, "[Watcher] Error");
+                        _logger.LogError(ex, "[Watcher] Error");
                     }
 
                     await Task.Delay(pollInterval, cancellationToken);
@@ -339,16 +333,16 @@ namespace PrintStreamer.Services
             }
             catch (OperationCanceledException)
             {
-                watcherLogger.LogInformation("[Watcher] Polling cancelled by user.");
+                _logger.LogInformation("[Watcher] Polling cancelled by user.");
             }
             catch (Exception ex)
             {
-                watcherLogger.LogError(ex, "[Watcher] Unexpected error");
+                _logger.LogError(ex, "[Watcher] Unexpected error");
             }
             finally
             {
-                watcherLogger.LogInformation("[Watcher] Shutting down...");
-                watcherLogger.LogInformation("[Watcher] Cleanup complete.");
+                _logger.LogInformation("[Watcher] Shutting down...");
+                _logger.LogInformation("[Watcher] Cleanup complete.");
             }
         }
 
@@ -367,8 +361,7 @@ namespace PrintStreamer.Services
         /// <summary>
         /// Create a PrinterState snapshot from Moonraker poll data and fire events if state changed.
         /// </summary>
-        private static void UpdateAndFirePrinterStateEvents(
-            ILogger logger,
+        private void UpdateAndFirePrinterStateEvents(
             string? state,
             string? filename,
             string? jobQueueId,

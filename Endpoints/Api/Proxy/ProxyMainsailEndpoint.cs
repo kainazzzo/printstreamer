@@ -10,20 +10,26 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 {
     public class ProxyMainsailEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<ProxyMainsailEndpoint> _logger;
+
+        public ProxyMainsailEndpoint(IConfiguration cfg, ILogger<ProxyMainsailEndpoint> logger)
+        {
+            _cfg = cfg;
+            _logger = logger;
+        }
+
         public override void Configure()
         {
-            Get("/proxy/mainsail/{**path}");
-            Get("/proxy/mainsail");
+            Get("/proxy/mainsail/{**path}", "/proxy/mainsail");
             AllowAnonymous();
         }
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<ProxyMainsailEndpoint>>();
-            var target = cfg.GetValue<string>("PrinterUI:MainsailUrl");
+            var target = _cfg.GetValue<string>("PrinterUI:MainsailUrl");
             var path = Route<string?>("path");
-            logger.LogDebug("GET /proxy/mainsail/{Path} -> target={Target}", path ?? "", target ?? "NOT CONFIGURED");
+            _logger.LogDebug("GET /proxy/mainsail/{Path} -> target={Target}", path ?? "", target ?? "NOT CONFIGURED");
             if (string.IsNullOrWhiteSpace(target))
             {
                 HttpContext.Response.StatusCode = 404;

@@ -12,6 +12,17 @@ namespace PrintStreamer.Endpoints.Api.Live
 
     public class PrivacyEndpoint : Endpoint<PrivacyRequest>
     {
+        private readonly ILogger<PrivacyEndpoint> _logger;
+        private readonly StreamOrchestrator _orchestrator;
+        private readonly YouTubeControlService _ytService;
+
+        public PrivacyEndpoint(ILogger<PrivacyEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService ytService)
+        {
+            _logger = logger;
+            _orchestrator = orchestrator;
+            _ytService = ytService;
+        }
+
         public override void Configure()
         {
             Post("/api/live/privacy");
@@ -20,11 +31,9 @@ namespace PrintStreamer.Endpoints.Api.Live
 
         public override async Task HandleAsync(PrivacyRequest req, CancellationToken ct)
         {
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<PrivacyEndpoint>>();
             try
             {
-                var orchestrator = HttpContext.RequestServices.GetRequiredService<StreamOrchestrator>();
-                if (!orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(orchestrator.CurrentBroadcastId))
+                if (!_orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(_orchestrator.CurrentBroadcastId))
                 {
                     HttpContext.Response.StatusCode = 400;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "No active broadcast" }, ct);
@@ -37,17 +46,16 @@ namespace PrintStreamer.Endpoints.Api.Live
                     return;
                 }
 
-                var broadcastId = orchestrator.CurrentBroadcastId!;
-                var yt = HttpContext.RequestServices.GetRequiredService<YouTubeControlService>();
-                logger.LogInformation("HTTP /api/live/privacy request received: {Privacy}", req.Privacy);
-                if (!await yt.AuthenticateAsync(ct))
+                var broadcastId = _orchestrator.CurrentBroadcastId!;
+                _logger.LogInformation("HTTP /api/live/privacy request received: {Privacy}", req.Privacy);
+                if (!await _ytService.AuthenticateAsync(ct))
                 {
                     HttpContext.Response.StatusCode = 401;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "YouTube authentication failed" }, ct);
                     return;
                 }
 
-                var ok = await yt.UpdateBroadcastPrivacyAsync(broadcastId, req.Privacy!, ct);
+                var ok = await _ytService.UpdateBroadcastPrivacyAsync(broadcastId, req.Privacy!, ct);
                 HttpContext.Response.StatusCode = 200;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = ok }, ct);
             }

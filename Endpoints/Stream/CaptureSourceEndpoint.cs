@@ -9,6 +9,12 @@ namespace PrintStreamer.Endpoints.Stream
 {
     public class CaptureSourceEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _config;
+
+        public CaptureSourceEndpoint(IConfiguration config)
+        {
+            _config = config;
+        }
         public override void Configure()
         {
             Get("/stream/source/capture");
@@ -17,8 +23,7 @@ namespace PrintStreamer.Endpoints.Stream
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var config = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var source = config.GetValue<string>("Stream:Source") ?? string.Empty;
+            var source = _config.GetValue<string>("Stream:Source") ?? string.Empty;
             await CaptureJpegHelper.TryCaptureJpegFromStreamAsync(HttpContext, source, "stream source", ct);
         }
     }

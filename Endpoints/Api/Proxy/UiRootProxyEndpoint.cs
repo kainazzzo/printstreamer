@@ -10,38 +10,37 @@ namespace PrintStreamer.Endpoints.Api.Proxy
 {
     public class UiRootProxyEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<UiRootProxyEndpoint> _logger;
+
+        public UiRootProxyEndpoint(IConfiguration cfg, ILogger<UiRootProxyEndpoint> logger)
+        {
+            _cfg = cfg;
+            _logger = logger;
+        }
+
         public override void Configure()
         {
             // Accept all common HTTP methods so the UI works under a prefix
-            Get("/mainsail/{**path}");
-            Post("/mainsail/{**path}");
-            Put("/mainsail/{**path}");
-            Patch("/mainsail/{**path}");
-            Delete("/mainsail/{**path}");
-            Head("/mainsail/{**path}");
-            Options("/mainsail/{**path}");
-
-            Get("/fluidd/{**path}");
-            Post("/fluidd/{**path}");
-            Put("/fluidd/{**path}");
-            Patch("/fluidd/{**path}");
-            Delete("/fluidd/{**path}");
-            Head("/fluidd/{**path}");
-            Options("/fluidd/{**path}");
+            Get("/mainsail/{**path}", "/fluidd/{**path}");
+            Post("/mainsail/{**path}", "/fluidd/{**path}");
+            Put("/mainsail/{**path}", "/fluidd/{**path}");
+            Patch("/mainsail/{**path}", "/fluidd/{**path}");
+            Delete("/mainsail/{**path}", "/fluidd/{**path}");
+            Head("/mainsail/{**path}", "/fluidd/{**path}");
+            Options("/mainsail/{**path}", "/fluidd/{**path}");
 
             AllowAnonymous();
         }
 
         public override async Task HandleAsync(CancellationToken ct)
         {
-            var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var logger = HttpContext.RequestServices.GetRequiredService<ILogger<UiRootProxyEndpoint>>();
             var path = Route<string?>("path");
             var route = HttpContext.Request.Path.Value ?? string.Empty;
             string? target = null;
-            if (route.StartsWith("/mainsail", System.StringComparison.OrdinalIgnoreCase)) target = cfg.GetValue<string>("PrinterUI:MainsailUrl");
-            else if (route.StartsWith("/fluidd", System.StringComparison.OrdinalIgnoreCase)) target = cfg.GetValue<string>("PrinterUI:FluiddUrl");
-            logger.LogDebug("{Method} {Route} -> target={Target}", HttpContext.Request.Method, route, target ?? "NOT CONFIGURED");
+            if (route.StartsWith("/mainsail", System.StringComparison.OrdinalIgnoreCase)) target = _cfg.GetValue<string>("PrinterUI:MainsailUrl");
+            else if (route.StartsWith("/fluidd", System.StringComparison.OrdinalIgnoreCase)) target = _cfg.GetValue<string>("PrinterUI:FluiddUrl");
+            _logger.LogDebug("{Method} {Route} -> target={Target}", HttpContext.Request.Method, route, target ?? "NOT CONFIGURED");
             if (string.IsNullOrWhiteSpace(target))
             {
                 HttpContext.Response.StatusCode = 404;

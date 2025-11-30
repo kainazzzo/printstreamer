@@ -9,6 +9,13 @@ namespace PrintStreamer.Endpoints.Api.Live
 {
     public class StopBroadcastEndpoint : EndpointWithoutRequest<object>
     {
+        private readonly StreamOrchestrator _orchestrator;
+
+        public StopBroadcastEndpoint(StreamOrchestrator orchestrator)
+        {
+            _orchestrator = orchestrator;
+        }
+
         public override void Configure()
         {
             Post("/api/live/stop");
@@ -19,8 +26,7 @@ namespace PrintStreamer.Endpoints.Api.Live
         {
             try
             {
-                var orchestrator = HttpContext.RequestServices.GetRequiredService<StreamOrchestrator>();
-                var (ok, message) = await orchestrator.StopBroadcastAsync(ct);
+                var (ok, message) = await _orchestrator.StopBroadcastAsync(ct);
                 if (ok) {
                     HttpContext.Response.StatusCode = 200;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = true }, ct);

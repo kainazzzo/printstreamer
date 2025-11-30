@@ -11,6 +11,13 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
 {
     public class TimelapseDeleteEndpoint : Endpoint<TimelapseNameRequest>
     {
+        private readonly TimelapseManager _timelapseManager;
+
+        public TimelapseDeleteEndpoint(TimelapseManager timelapseManager)
+        {
+            _timelapseManager = timelapseManager;
+        }
+
         public override void Configure()
         {
             Delete("/api/timelapses/{name}");
@@ -21,8 +28,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
         {
             try
             {
-                var timelapseManager = HttpContext.RequestServices.GetRequiredService<TimelapseManager>();
-                var timelapseDir = Path.Combine(timelapseManager.TimelapseDirectory, req.Name);
+                var timelapseDir = Path.Combine(_timelapseManager.TimelapseDirectory, req.Name);
                 if (!Directory.Exists(timelapseDir))
                 {
                     HttpContext.Response.StatusCode = 404;
@@ -30,7 +36,7 @@ namespace PrintStreamer.Endpoints.Api.Timelapses
                     return;
                 }
 
-                if (timelapseManager.GetActiveSessionNames().Contains(req.Name))
+                if (_timelapseManager.GetActiveSessionNames().Contains(req.Name))
                 {
                     HttpContext.Response.StatusCode = 400;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "Cannot delete active timelapse" }, ct);

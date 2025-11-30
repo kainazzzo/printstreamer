@@ -11,6 +11,17 @@ namespace PrintStreamer.Endpoints.Api.Live
 
     public class ChatEndpoint : Endpoint<ChatMessageRequest>
     {
+        private readonly ILogger<ChatEndpoint> _logger;
+        private readonly StreamOrchestrator _orchestrator;
+        private readonly YouTubeControlService _yt;
+
+        public ChatEndpoint(ILogger<ChatEndpoint> logger, StreamOrchestrator orchestrator, YouTubeControlService yt)
+        {
+            _logger = logger;
+            _orchestrator = orchestrator;
+            _yt = yt;
+        }
+
         public override void Configure()
         {
             Post("/api/live/chat");
@@ -21,8 +32,7 @@ namespace PrintStreamer.Endpoints.Api.Live
         {
             try
             {
-                var orchestrator = HttpContext.RequestServices.GetRequiredService<StreamOrchestrator>();
-                if (!orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(orchestrator.CurrentBroadcastId))
+                if (!_orchestrator.IsBroadcastActive || string.IsNullOrWhiteSpace(_orchestrator.CurrentBroadcastId))
                 {
                     HttpContext.Response.StatusCode = 400;
                     await HttpContext.Response.WriteAsJsonAsync(new { success = false, error = "No active broadcast" }, ct);
@@ -36,8 +46,7 @@ namespace PrintStreamer.Endpoints.Api.Live
                     return;
                 }
 
-                var yt = HttpContext.RequestServices.GetRequiredService<YouTubeControlService>();
-                var ok = await yt.SendChatMessageAsync(orchestrator.CurrentBroadcastId!, req.Message, ct);
+                var ok = await _yt.SendChatMessageAsync(_orchestrator.CurrentBroadcastId!, req.Message, ct);
                 HttpContext.Response.StatusCode = 200;
                 await HttpContext.Response.WriteAsJsonAsync(new { success = ok }, ct);
             }
