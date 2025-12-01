@@ -5,10 +5,10 @@
     <!-- Control Buttons with Status -->
     <div class="controls">
         <!-- Camera Toggle Button -->
-            <!-- Camera Toggle Button -->
-        <button class="btn @(CameraEnabled ? "btn-danger" : "btn-success")" @onclick="ToggleCameraClicked" disabled="@(IsCameraBusy)" aria-busy="@(IsCameraBusy)"
-                @onmouseover="OnCameraMouseOver"
-                @onmouseout="OnCameraMouseOut">
+        <!-- Camera Toggle Button -->
+        <button class="btn @(CameraEnabled ? "btn-danger" : "btn-success")" @onclick="ToggleCameraClicked"
+            disabled="@(IsCameraBusy)" aria-busy="@(IsCameraBusy)" @onmouseover="OnCameraMouseOver"
+            @onmouseout="OnCameraMouseOut">
             @if (CameraHover)
             {
                 @if (IsCameraBusy)
@@ -42,12 +42,10 @@
         </button>
 
         <!-- Audio Toggle Button -->
-        <button class="btn @(AudioEnabled ? "btn-danger" : "btn-success")"
-            disabled="@(IsAudioBusy)" aria-busy="@(IsAudioBusy)"
-            @onclick="ToggleAudio"
-                title="@(AudioEnabled ? "Disable audio feed" : "Enable audio feed")"
-                @onmouseover="OnAudioMouseOver"
-                @onmouseout="OnAudioMouseOut">
+        <button class="btn @(AudioEnabled ? "btn-danger" : "btn-success")" disabled="@(IsAudioBusy)"
+            aria-busy="@(IsAudioBusy)" @onclick="ToggleAudio"
+            title="@(AudioEnabled ? "Disable audio feed" : "Enable audio feed")" @onmouseover="OnAudioMouseOver"
+            @onmouseout="OnAudioMouseOut">
             @if (AudioHover)
             {
                 @if (IsAudioBusy)
@@ -80,13 +78,48 @@
             }
         </button>
 
+        <!-- Mix Processing Toggle Button -->
+        <button class="btn @(MixProcessingEnabled ? "btn-danger" : "btn-success")" disabled="@(IsMixProcessingBusy)"
+            aria-busy="@(IsMixProcessingBusy)" @onclick="ToggleMixProcessing"
+            title="@(MixProcessingEnabled ? "Disable mix processing (video+audio combination)" : "Enable mix processing for video+audio stream")"
+            @onmouseover="OnMixProcessingMouseOver" @onmouseout="OnMixProcessingMouseOut">
+            @if (MixProcessingHover)
+            {
+                @if (IsMixProcessingBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🎬</span>
+                }
+                <span class="btn-label">
+                    <span class="btn-title">Mix Processing</span>
+                    <span class="btn-status">@(MixProcessingEnabled ? "Disable" : "Enable")</span>
+                </span>
+            }
+            else
+            {
+                @if (IsMixProcessingBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">🎬</span>
+                }
+                <span class="btn-label">
+                    <span class="btn-title">Mix Processing</span>
+                    <span class="btn-status">@(MixProcessingEnabled ? "ON" : "OFF")</span>
+                </span>
+            }
+        </button>
+
+
         <!-- Go Live / Stop Live Button -->
-        <button class="btn @(IsLive ? "btn-danger" : "btn-success")" 
-            @onclick="ToggleLiveClicked" 
+        <button class="btn @(IsLive ? "btn-danger" : "btn-success")" @onclick="ToggleLiveClicked"
             disabled="@(IsLiveBusy || (!IsLive && (!IsStreamPlaying || IsGoingLive)))"
-            aria-busy="@(IsLiveBusy || IsGoingLive)"
-                @onmouseover="OnLiveMouseOver"
-                @onmouseout="OnLiveMouseOut">
+            aria-busy="@(IsLiveBusy || IsGoingLive)" @onmouseover="OnLiveMouseOver" @onmouseout="OnLiveMouseOut">
             @if (IsGoingLive)
             {
                 <span class="spinner"></span>
@@ -157,14 +190,12 @@
                 }
             }
         </button>
-        
+
         <!-- Auto Broadcast Toggle Button -->
-        <button class="btn @(AutoBroadcastEnabled ? "btn-danger" : "btn-success")" 
-            disabled="@(IsAutoBroadcastBusy)" aria-busy="@(IsAutoBroadcastBusy)"
-            @onclick="ToggleAutoBroadcast"
-                title="@(AutoBroadcastEnabled ? "Disable auto-broadcast" : "Enable auto-broadcast on print start")"
-                @onmouseover="OnAutoBroadcastMouseOver"
-                @onmouseout="OnAutoBroadcastMouseOut">
+        <button class="btn @(AutoBroadcastEnabled ? "btn-danger" : "btn-success")" disabled="@(IsAutoBroadcastBusy)"
+            aria-busy="@(IsAutoBroadcastBusy)" @onclick="ToggleAutoBroadcast"
+            title="@(AutoBroadcastEnabled ? "Disable auto-broadcast" : "Enable auto-broadcast on print start")"
+            @onmouseover="OnAutoBroadcastMouseOver" @onmouseout="OnAutoBroadcastMouseOut">
             @if (AutoBroadcastHover)
             {
                 @if (IsAutoBroadcastBusy)
@@ -189,14 +220,12 @@
                 </span>
             }
         </button>
-        
+
         <!-- Auto Upload Toggle Button -->
-        <button class="btn @(AutoUploadEnabled ? "btn-danger" : "btn-success")" 
-            disabled="@(IsAutoUploadBusy)" aria-busy="@(IsAutoUploadBusy)"
-            @onclick="ToggleAutoUpload"
-                title="@(AutoUploadEnabled ? "Disable auto-upload" : "Enable auto-upload timelapses to YouTube")"
-                @onmouseover="OnAutoUploadMouseOver"
-                @onmouseout="OnAutoUploadMouseOut">
+        <button class="btn @(AutoUploadEnabled ? "btn-danger" : "btn-success")" disabled="@(IsAutoUploadBusy)"
+            aria-busy="@(IsAutoUploadBusy)" @onclick="ToggleAutoUpload"
+            title="@(AutoUploadEnabled ? "Disable auto-upload" : "Enable auto-upload timelapses to YouTube")"
+            @onmouseover="OnAutoUploadMouseOver" @onmouseout="OnAutoUploadMouseOut">
             @if (AutoUploadHover)
             {
                 @if (IsAutoUploadBusy)
@@ -221,14 +250,12 @@
                 </span>
             }
         </button>
-        
+
         <!-- End Stream After Print Toggle Button -->
-        <button class="btn @(EndStreamAfterPrintEnabled ? "btn-danger" : "btn-success")" 
-            disabled="@(IsEndAfterPrintBusy)" aria-busy="@(IsEndAfterPrintBusy)"
-            @onclick="ToggleEndStreamAfterPrint"
-                title="@(EndStreamAfterPrintEnabled ? "Disable end stream after print" : "Enable end stream after print completes")"
-                @onmouseover="OnEndStreamAfterPrintMouseOver"
-                @onmouseout="OnEndStreamAfterPrintMouseOut">
+        <button class="btn @(EndStreamAfterPrintEnabled ? "btn-danger" : "btn-success")"
+            disabled="@(IsEndAfterPrintBusy)" aria-busy="@(IsEndAfterPrintBusy)" @onclick="ToggleEndStreamAfterPrint"
+            title="@(EndStreamAfterPrintEnabled ? "Disable end stream after print" : "Enable end stream after print completes")"
+            @onmouseover="OnEndStreamAfterPrintMouseOver" @onmouseout="OnEndStreamAfterPrintMouseOut">
             @if (EndStreamAfterPrintHover)
             {
                 @if (IsEndAfterPrintBusy)
@@ -253,13 +280,12 @@
                 </span>
             }
         </button>
-        
+
         <!-- End Stream After Song Button -->
-        <button class="btn @(EndStreamAfterSongEnabled ? "btn-danger" : "btn-success")" 
+        <button class="btn @(EndStreamAfterSongEnabled ? "btn-danger" : "btn-success")"
             @onclick="ToggleEndStreamAfterSong"
-                title="@(EndStreamAfterSongEnabled ? "Cancel end after song" : "End stream gracefully after current song finishes")"
-                @onmouseover="OnEndStreamAfterSongMouseOver"
-                @onmouseout="OnEndStreamAfterSongMouseOut"
+            title="@(EndStreamAfterSongEnabled ? "Cancel end after song" : "End stream gracefully after current song finishes")"
+            @onmouseover="OnEndStreamAfterSongMouseOver" @onmouseout="OnEndStreamAfterSongMouseOut"
             disabled="@(IsEndAfterSongBusy || !IsLive)" aria-busy="@(IsEndAfterSongBusy)">
             @if (EndStreamAfterSongHover)
             {
@@ -292,8 +318,9 @@
                 </span>
             }
         </button>
+
     </div>
-    
+
     <!-- Status Message -->
     @if (!string.IsNullOrEmpty(StatusMessage))
     {
@@ -301,27 +328,23 @@
             <span style="color:#66ccff">@StatusMessage</span>
         </div>
     }
-    
+
     <!-- Broadcast URL -->
     @if (!string.IsNullOrEmpty(BroadcastId))
     {
         <div class="broadcast-url">
-            <strong>Live URL:</strong> 
-            <a href="@($"https://www.youtube.com/watch?v={BroadcastId}")" 
-               target="_blank" 
-               style="color:#66ccff;text-decoration:underline">
+            <strong>Live URL:</strong>
+            <a href="@($"https://www.youtube.com/watch?v={BroadcastId}")" target="_blank"
+                style="color:#66ccff;text-decoration:underline">
                 @($"https://www.youtube.com/watch?v={BroadcastId}")
             </a>
         </div>
-        
+
         <!-- Privacy Control -->
         <div class="privacy-control">
             <label for="privacy-select" style="margin-right:8px;font-weight:600">Privacy:</label>
-            <select id="privacy-select" 
-                    @bind="SelectedPrivacy" 
-                    @bind:after="OnPrivacyChanged"
-                    class="privacy-dropdown"
-                    disabled="@IsUpdatingPrivacy">
+            <select id="privacy-select" @bind="SelectedPrivacy" @bind:after="OnPrivacyChanged" class="privacy-dropdown"
+                disabled="@IsUpdatingPrivacy">
                 <option value="public">Public</option>
                 <option value="unlisted">Unlisted</option>
                 <option value="private">Private</option>
@@ -344,7 +367,7 @@
         /* center the control panel horizontally within its container */
         align-items: center;
     }
-    
+
     .controls {
         display: flex;
         flex-wrap: wrap;
@@ -353,10 +376,11 @@
         /* ensure the button group is centered when it doesn't span full width */
         justify-content: center;
     }
-    
+
     .btn {
         /* set a fixed width for all control buttons to prevent layout shift */
-    --control-btn-width: 12rem; /* adjustable: change this value to tweak width */
+        --control-btn-width: 12rem;
+        /* adjustable: change this value to tweak width */
         width: var(--control-btn-width);
         padding: 8px 12px;
         border: none;
@@ -368,15 +392,18 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        justify-content: center; /* center icon + label inside fixed-width button */
+        justify-content: center;
+        /* center icon + label inside fixed-width button */
         /* base background can be overridden per-state via --btn-bg */
         background: var(--btn-bg, #555);
         color: #fff;
-        -webkit-appearance: none; /* prevent platform-native blue on some browsers */
+        -webkit-appearance: none;
+        /* prevent platform-native blue on some browsers */
         appearance: none;
-        -webkit-tap-highlight-color: transparent; /* mobile tap highlight */
+        -webkit-tap-highlight-color: transparent;
+        /* mobile tap highlight */
     }
-    
+
     /* highlight on hover without moving the button
        show the opposite (toggle) color as an outer glow to indicate the action */
     .btn:hover:not(:disabled) {
@@ -387,9 +414,9 @@
         color: #fff !important;
         -webkit-tap-highlight-color: transparent;
         /* much stronger, wider glow using the button's own glow color */
-        box-shadow: 0 24px 80px rgba(0,0,0,0.36), 0 0 64px var(--btn-glow, rgba(255,255,255,0.22));
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36), 0 0 64px var(--btn-glow, rgba(255, 255, 255, 0.22));
         /* add a subtle colored ring to make the highlight obvious */
-        border: 2px solid rgba(255,255,255,0.04);
+        border: 2px solid rgba(255, 255, 255, 0.04);
         outline: 0;
     }
 
@@ -400,47 +427,48 @@
     }
 
     .btn:focus-visible {
-        box-shadow: 0 6px 20px rgba(0,0,0,0.22), 0 0 18px var(--btn-glow, rgba(255,255,255,0.10)) inset;
-        outline: 3px solid var(--btn-glow, rgba(102,204,255,0.20));
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22), 0 0 18px var(--btn-glow, rgba(255, 255, 255, 0.10)) inset;
+        outline: 3px solid var(--btn-glow, rgba(102, 204, 255, 0.20));
     }
 
     /* pressed/depress animation */
     .btn:active:not(:disabled) {
         transform: translateY(2px) scale(0.995);
-        box-shadow: 0 3px 8px rgba(0,0,0,0.35) inset, 0 2px 6px rgba(0,0,0,0.25);
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35) inset, 0 2px 6px rgba(0, 0, 0, 0.25);
         transition: transform 80ms ease, box-shadow 80ms ease;
     }
-    
+
     .btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
     }
-    
+
     .btn-success {
         --btn-bg: #28a745;
         /* glow uses the same hue as the button (green) - increased alpha for visibility */
-        --btn-glow: rgba(40,167,69,0.48);
+        --btn-glow: rgba(40, 167, 69, 0.48);
         background: var(--btn-bg);
     }
 
     .btn-danger {
         --btn-bg: #dc3545;
         /* glow uses the same hue as the button (red) - increased alpha for visibility */
-        --btn-glow: rgba(220,53,69,0.48);
+        --btn-glow: rgba(220, 53, 69, 0.48);
         background: var(--btn-bg);
     }
-    
+
     .icon {
         font-size: 1.5em;
     }
-    
+
     /* Two-line label: title above status */
     .btn-label {
         display: inline-flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        min-width: 8ch; /* reserve enough space for longer labels */
+        min-width: 8ch;
+        /* reserve enough space for longer labels */
         max-width: 18ch;
         line-height: 1.05;
     }
@@ -456,7 +484,7 @@
         font-weight: 800;
         line-height: 1;
     }
-    
+
     .pulse-dot {
         display: inline-block;
         width: 10px;
@@ -465,12 +493,19 @@
         border-radius: 50%;
         animation: pulse 1.5s infinite;
     }
-    
+
     @@keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.3; }
+
+        0%,
+        100% {
+            opacity: 1;
+        }
+
+        50% {
+            opacity: 0.3;
+        }
     }
-    
+
     .spinner {
         display: inline-block;
         width: 14px;
@@ -480,22 +515,25 @@
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
     }
-    
+
     @@keyframes spin {
-        to { transform: rotate(360deg); }
+        to {
+            transform: rotate(360deg);
+        }
     }
-    
-    .status-message, .broadcast-url {
+
+    .status-message,
+    .broadcast-url {
         padding: 8px 0;
     }
-    
+
     .privacy-control {
         display: flex;
         align-items: center;
         gap: 8px;
         padding: 8px 0;
     }
-    
+
     .privacy-dropdown {
         padding: 6px 12px;
         border-radius: 4px;
@@ -507,17 +545,17 @@
         cursor: pointer;
         transition: all 0.2s ease;
     }
-    
+
     .privacy-dropdown:hover:not(:disabled) {
         border-color: #66ccff;
         box-shadow: 0 0 8px rgba(102, 204, 255, 0.3);
     }
-    
+
     .privacy-dropdown:disabled {
         opacity: 0.5;
         cursor: not-allowed;
     }
-    
+
     .privacy-spinner {
         display: inline-block;
         width: 14px;
@@ -541,10 +579,11 @@
     [Parameter] public bool EndStreamAfterPrintEnabled { get; set; }
     [Parameter] public bool EndStreamAfterSongEnabled { get; set; }
     [Parameter] public bool AudioEnabled { get; set; }
+    [Parameter] public bool MixProcessingEnabled { get; set; }
     [Parameter] public string? BroadcastId { get; set; }
     [Parameter] public string? StatusMessage { get; set; }
     [Parameter] public string? CurrentPrivacy { get; set; }
-    
+
     [Parameter] public EventCallback OnGoLive { get; set; }
     [Parameter] public EventCallback OnStopLive { get; set; }
     [Parameter] public EventCallback OnToggleCamera { get; set; }
@@ -553,7 +592,8 @@
     [Parameter] public EventCallback<bool> OnEndStreamAfterPrintChanged { get; set; }
     [Parameter] public EventCallback<bool> OnEndStreamAfterSongChanged { get; set; }
     [Parameter] public EventCallback<bool> OnAudioChanged { get; set; }
-    
+    [Parameter] public EventCallback<bool> OnMixProcessingChanged { get; set; }
+
     private bool CameraHover = false;
     private bool LiveHover = false;
     private bool AutoBroadcastHover = false;
@@ -561,7 +601,8 @@
     private bool EndStreamAfterPrintHover = false;
     private bool EndStreamAfterSongHover = false;
     private bool AudioHover = false;
-    
+    private bool MixProcessingHover = false;
+
     private string SelectedPrivacy = "unlisted";
     private bool IsUpdatingPrivacy = false;
     private string? LastBroadcastId = null;
@@ -572,7 +613,8 @@
     private bool IsAutoUploadBusy = false;
     private bool IsEndAfterPrintBusy = false;
     private bool IsEndAfterSongBusy = false;
-    
+    private bool IsMixProcessingBusy = false;
+
     private void OnCameraMouseOver() => CameraHover = true;
     private void OnCameraMouseOut() => CameraHover = false;
     private void OnLiveMouseOver() => LiveHover = true;
@@ -587,7 +629,9 @@
     private void OnEndStreamAfterSongMouseOut() => EndStreamAfterSongHover = false;
     private void OnAudioMouseOver() => AudioHover = true;
     private void OnAudioMouseOut() => AudioHover = false;
-    
+    private void OnMixProcessingMouseOver() => MixProcessingHover = true;
+    private void OnMixProcessingMouseOut() => MixProcessingHover = false;
+
     protected override void OnParametersSet()
     {
         // Reset privacy selection when broadcast changes or update from current privacy
@@ -602,22 +646,22 @@
             SelectedPrivacy = CurrentPrivacy;
         }
     }
-    
+
     private async Task OnPrivacyChanged()
     {
         if (string.IsNullOrEmpty(BroadcastId) || IsUpdatingPrivacy)
             return;
-            
+
         IsUpdatingPrivacy = true;
         StateHasChanged();
-        
+
         try
         {
             using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
             var requestBody = new { privacy = SelectedPrivacy };
             var response = await client.PostAsJsonAsync("api/live/privacy", requestBody);
             var result = await response.Content.ReadFromJsonAsync<ApiResponse>();
-            
+
             if (result?.Success != true)
             {
                 Logger.LogWarning("Failed to update privacy: {Error}", result?.Error ?? "unknown");
@@ -633,13 +677,13 @@
             StateHasChanged();
         }
     }
-    
+
     private class ApiResponse
     {
         public bool Success { get; set; }
         public string? Error { get; set; }
     }
-    
+
     private async Task ToggleAutoBroadcast()
     {
         if (IsAutoBroadcastBusy)
@@ -652,7 +696,7 @@
             var newValue = !AutoBroadcastEnabled;
             using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
             var response = await client.PostAsync($"api/config/auto-broadcast?enabled={newValue}", null);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 await OnAutoBroadcastChanged.InvokeAsync(newValue);
@@ -668,7 +712,7 @@
             StateHasChanged();
         }
     }
-    
+
     private async Task ToggleAutoUpload()
     {
         if (IsAutoUploadBusy)
@@ -681,7 +725,7 @@
             var newValue = !AutoUploadEnabled;
             using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
             var response = await client.PostAsync($"api/config/auto-upload?enabled={newValue}", null);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 await OnAutoUploadChanged.InvokeAsync(newValue);
@@ -697,7 +741,7 @@
             StateHasChanged();
         }
     }
-    
+
     private async Task ToggleEndStreamAfterPrint()
     {
         if (IsEndAfterPrintBusy)
@@ -710,7 +754,7 @@
             var newValue = !EndStreamAfterPrintEnabled;
             using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
             var response = await client.PostAsync($"api/config/end-stream-after-print?enabled={newValue}", null);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 await OnEndStreamAfterPrintChanged.InvokeAsync(newValue);
@@ -726,7 +770,7 @@
             StateHasChanged();
         }
     }
-    
+
     private async Task ToggleEndStreamAfterSong()
     {
         if (IsEndAfterSongBusy)
@@ -739,7 +783,7 @@
             var newValue = !EndStreamAfterSongEnabled;
             using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
             var response = await client.PostAsync($"api/stream/end-after-song?enabled={newValue}", null);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 await OnEndStreamAfterSongChanged.InvokeAsync(newValue);
@@ -831,6 +875,29 @@
         finally
         {
             IsLiveBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleMixProcessing()
+    {
+        if (IsMixProcessingBusy)
+            return;
+
+        IsMixProcessingBusy = true;
+        StateHasChanged();
+        try
+        {
+            var newValue = !MixProcessingEnabled;
+            await OnMixProcessingChanged.InvokeAsync(newValue);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error toggling mix processing: {Message}", ex.Message);
+        }
+        finally
+        {
+            IsMixProcessingBusy = false;
             StateHasChanged();
         }
     }

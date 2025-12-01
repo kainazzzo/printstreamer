@@ -81,8 +81,8 @@ namespace PrintStreamer.Services
 
             // Prepare stream configuration
             var source = _config.GetValue<string>("Stream:Source");
-            var serveEnabled = _config.GetValue<bool?>("Serve:Enabled") ?? true;
-            if (serveEnabled)
+            var mixEnabled = _config.GetValue<bool?>("Stream:Mix:Enabled") ?? true;
+            if (mixEnabled)
             {
                 // Use the pre-mixed /stream/mix endpoint which combines video+audio from the pipeline
                 // This allows FfmpegStreamer to simply read the mixed stream and broadcast to YouTube
@@ -103,7 +103,7 @@ namespace PrintStreamer.Services
             string? audioUrl = null;
             var useApiAudio = _config.GetValue<bool?>("Stream:Audio:UseApiStream") ?? true;
             var audioFeatureEnabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
-            if (serveEnabled && useApiAudio && audioFeatureEnabled)
+            if (mixEnabled && useApiAudio && audioFeatureEnabled)
             {
                 audioUrl = _config.GetValue<string>("Stream:Audio:Url");
                 if (string.IsNullOrWhiteSpace(audioUrl))
@@ -114,7 +114,7 @@ namespace PrintStreamer.Services
 
             // Setup overlay options only when NOT using the pre-composited overlay endpoint
             FfmpegOverlayOptions? overlayOptions = null;
-            if (!serveEnabled && (_config.GetValue<bool?>("Overlay:Enabled") ?? false))
+            if (!mixEnabled && (_config.GetValue<bool?>("Overlay:Enabled") ?? false))
             {
                 try
                 {

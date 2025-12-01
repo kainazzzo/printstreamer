@@ -19,7 +19,8 @@
         StatusMessage="@statusMessage" CurrentPrivacy="@currentPrivacy" OnGoLive="@GoLive" OnStopLive="@StopLive" OnToggleCamera="@ToggleCamera"
         AudioEnabled="@audioEnabled" OnAudioChanged="@OnAudioChanged"
         OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" 
-        OnEndStreamAfterPrintChanged="@OnEndStreamAfterPrintChanged" OnEndStreamAfterSongChanged="@OnEndStreamAfterSongChanged" />
+        OnEndStreamAfterPrintChanged="@OnEndStreamAfterPrintChanged" OnEndStreamAfterSongChanged="@OnEndStreamAfterSongChanged"
+        MixProcessingEnabled="@mixProcessingEnabled" OnMixProcessingChanged="@((bool e) => OnMixProcessingChanged(e))" />
 
     <StreamContainer>
         <MjpegFeed />
@@ -65,6 +66,7 @@
     private bool endStreamAfterPrintEnabled = true;
     private bool endStreamAfterSongEnabled = false;
     private bool audioEnabled = false;
+    private bool mixProcessingEnabled = true;
     private List<TimelapseInfo>? timelapses = null;
     private HashSet<string> processingTimelapses = new();
     private Timer? refreshTimer;
@@ -382,6 +384,17 @@
                 // New: read audio feature flag so UI can reflect persistent setting
                 try { audioEnabled = configResponse.AudioEnabled; } catch { audioEnabled = false; }
             }
+            // Fetch mix processing state
+            try
+            {
+                using var mixClient = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+                var mixResponse = await mixClient.GetFromJsonAsync<MixStateResponse>("api/stream/mix-enabled");
+                if (mixResponse != null)
+                {
+                    mixProcessingEnabled = mixResponse.Enabled;
+                }
+            }
+            catch { }
         }
         catch (HttpRequestException)
         {
@@ -442,6 +455,33 @@
         else
         {
             await SafeToast("End after song cancelled", "success");
+        }
+    }
+
+    private async Task OnMixProcessingChanged(bool enabled)
+    {
+        mixProcessingEnabled = enabled;
+        StateHasChanged();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/stream/mix-enabled?enabled={enabled}", null);
+            if (response.IsSuccessStatusCode)
+            {
+                await SafeToast($"Mix processing {(enabled ? "enabled" : "disabled")}", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to toggle mix processing", "error");
+                mixProcessingEnabled = !enabled;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error toggling mix processing: {ex.Message}", "error");
+            mixProcessingEnabled = !enabled;
+            StateHasChanged();
         }
     }
 
@@ -691,6 +731,11 @@
         public bool AutoUploadEnabled { get; set; }
         public bool EndStreamAfterPrintEnabled { get; set; }
         public bool AudioEnabled { get; set; }
+    }
+
+    private class MixStateResponse
+    {
+        public bool Enabled { get; set; }
     }
 
     // Adjust live-status polling frequency: fast while going live, slow when stable

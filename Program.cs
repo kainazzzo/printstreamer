@@ -159,10 +159,12 @@ webBuilder.Services.AddSingleton<AudioBroadcastService>();
 webBuilder.Services.AddSingleton<PrinterConsoleService>();
 webBuilder.Services.AddSingleton<OverlayTextService>();
 webBuilder.Services.AddSingleton<IMoonrakerPoller, MoonrakerPoller>();
+webBuilder.Services.AddSingleton<MixStreamHostedService>();
 
 
 // Start the same singleton as a hosted service
 webBuilder.Services.AddHostedService<ApplicationStartupHostedService>();
+webBuilder.Services.AddHostedService(sp => sp.GetRequiredService<MixStreamHostedService>());
 
 
 // Add Blazor Server services
@@ -186,8 +188,8 @@ string? source = config.GetValue<string>("Stream:Source");
 string? oauthClientId = config.GetValue<string>("YouTube:OAuth:ClientId");
 string? oauthClientSecret = config.GetValue<string>("YouTube:OAuth:ClientSecret");
 
-// New: allow serving the web UI by default; set Serve:Enabled=false to disable
-var serveEnabled = config.GetValue<bool?>("Serve:Enabled") ?? true;
+// New: allow serving the web UI by default; set Stream:Mix:Enabled=false to disable
+var mixEnabled = config.GetValue<bool?>("Stream:Mix:Enabled") ?? true;
 
 // Detect OAuth configuration for YouTube live broadcast creation
 bool hasYouTubeOAuth = !string.IsNullOrWhiteSpace(oauthClientId) && !string.IsNullOrWhiteSpace(oauthClientSecret);
@@ -214,7 +216,7 @@ Console.CancelKeyPress += (s, e) =>
 
 // Ensure the WebApplication host is built and run in all modes so IHostedService instances start
 // Configure Kestrel only when we're serving HTTP
-if (serveEnabled)
+if (mixEnabled)
 {
 	webBuilder.WebHost.ConfigureKestrel(options => { options.ListenAnyIP(8080); });
 	// Reduce shutdown timeout to respond faster to Ctrl+C (default is 30 seconds)
@@ -260,7 +262,7 @@ app.Use(async (ctx, next) =>
 	await next();
 });
 
-if (serveEnabled)
+if (mixEnabled)
 {
 	// Enable WebSocket support (required for Mainsail/Fluidd)
 	app.UseWebSockets();
