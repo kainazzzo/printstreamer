@@ -359,6 +359,12 @@ namespace PrintStreamer.Services
                         {
                             if (!_cts.IsCancellationRequested && _audio.IsPlaying)
                             {
+                                // Store the current track before advancing so we can detect if it actually changed
+                                var previousTrack = _audio.CurrentPath;
+
+                                // Give the feed listener a moment to reconnect if needed
+                                await Task.Delay(100, appToken).ConfigureAwait(false);
+
                                 // Invoke track finished callback before advancing to next track
                                 Func<Task>? callback;
                                 lock (_lock)
@@ -378,13 +384,29 @@ namespace PrintStreamer.Services
                                 }
 
                                 // Prefer explicit queue items when advancing between tracks
+                                bool advanced = false;
                                 if (_audio.TryConsumeQueue(out var queued))
                                 {
+                                    advanced = true;
                                     _logger.LogInformation("[AudioBroadcast] Auto-advanced to next queued track: {File}", System.IO.Path.GetFileName(queued));
                                 }
                                 else if (_audio.TryGetNextTrack(out var next))
                                 {
+                                    advanced = true;
                                     _logger.LogInformation("[AudioBroadcast] Auto-advanced to next track: {File}", System.IO.Path.GetFileName(next));
+                                }
+
+                                // If the track didn't actually change (same file selected again, or repeat=one),
+                                // we need to restart ffmpeg so it reconnects and starts the file from the beginning
+                                if (advanced && string.Equals(_audio.CurrentPath, previousTrack, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    _logger.LogInformation("[AudioBroadcast] Track is the same ({File}); will restart ffmpeg on next iteration", System.IO.Path.GetFileName(previousTrack));
+                                    // ffmpeg will naturally restart on the next loop iteration since proc has exited
+                                }
+                                else if (!advanced && !string.IsNullOrWhiteSpace(_audio.CurrentPath) && _audio.IsPlaying)
+                                {
+                                    // Could not advance; retry current track on next iteration
+                                    _logger.LogDebug("[AudioBroadcast] Could not advance track; will retry current track");
                                 }
                             }
                         }
