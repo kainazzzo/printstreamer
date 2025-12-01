@@ -22,32 +22,32 @@ using PrintStreamer.Timelapse;
 namespace PrintStreamer.Utils.Tests
 {
     [TestClass]
-    public class TimelapseEditorTests
+    public class TimelapseEditorTests : BaseTest<TimelapseEditor>
     {
-        private TestServer? _server;
-        private HttpClient? _client;
-        private string? _tempDir;
-        private bool _deleteCalled = false;
-        private Mock<ILogger<TimelapseManager>>? _timelapseManagerLoggerMock;
-        private Mock<ILogger<TimelapseService>>? _timelapseServiceLoggerMock;
-        private Mock<MoonrakerClient>? _moonrakerClientMock;
+        protected TestServer? Server { get; set; }
+        protected HttpClient? Client { get; set; }
+        protected string? TempDir { get; set; }
+        protected bool DeleteCalled { get; set; }
+        protected Mock<ILogger<TimelapseService>>? TimelapseServiceLoggerMock { get; set; }
+        protected Mock<MoonrakerClient>? MoonrakerClientMock { get; set; }
 
         [TestInitialize]
-        public void Setup()
+        public override void TestInitialize()
         {
-            _tempDir = Path.Combine(Path.GetTempPath(), $"timelapse_editor_test_{Guid.NewGuid()}");
-            Directory.CreateDirectory(_tempDir);
+            base.TestInitialize();
 
-            _timelapseManagerLoggerMock = new Mock<ILogger<TimelapseManager>>();
-            _timelapseServiceLoggerMock = new Mock<ILogger<TimelapseService>>();
+            TempDir = Path.Combine(Path.GetTempPath(), $"timelapse_editor_test_{Guid.NewGuid()}");
+            Directory.CreateDirectory(TempDir);
+
+            TimelapseServiceLoggerMock = new Mock<ILogger<TimelapseService>>();
             var moonrakerClientLoggerMock = new Mock<ILogger<MoonrakerClient>>();
-            _moonrakerClientMock = new Mock<MoonrakerClient>(moonrakerClientLoggerMock.Object);
+            MoonrakerClientMock = new Mock<MoonrakerClient>(moonrakerClientLoggerMock.Object);
 
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?> { ["Timelapse:MainFolder"] = _tempDir })
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Timelapse:MainFolder"] = TempDir })
                 .Build();
 
-            var timelapseManager = new PrintStreamer.Timelapse.TimelapseManager(config, _timelapseManagerLoggerMock.Object, _timelapseServiceLoggerMock.Object, _moonrakerClientMock.Object);
+            var timelapseManager = new PrintStreamer.Timelapse.TimelapseManager(config, AutoMock.Mock<ILogger<TimelapseManager>>().Object, TimelapseServiceLoggerMock.Object, MoonrakerClientMock.Object);
 
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>
@@ -81,7 +81,7 @@ namespace PrintStreamer.Utils.Tests
                             var filePath = Path.Combine(dir, filename);
                             if (!File.Exists(filePath)) { context.Response.StatusCode = 404; await context.Response.WriteAsJsonAsync(new { success = false, error = "File not found" }); return; }
                             File.Delete(filePath);
-                            _deleteCalled = true;
+                            DeleteCalled = true;
                             // Reindex
                             var remaining = Directory.GetFiles(dir, "frame_*.jpg").OrderBy(f => f).ToArray();
                             for (int i = 0; i < remaining.Length; i++)
@@ -110,16 +110,17 @@ namespace PrintStreamer.Utils.Tests
                     });
                 });
 
-            _server = new TestServer(builder);
-            _client = _server.CreateClient();
+            Server = new TestServer(builder);
+            Client = Server.CreateClient();
         }
 
         [TestCleanup]
-        public void Cleanup()
+        public new void TestCleanup()
         {
-            _client?.Dispose();
-            _server?.Dispose();
-            if (!string.IsNullOrEmpty(_tempDir) && Directory.Exists(_tempDir)) Directory.Delete(_tempDir, true);
+            Client?.Dispose();
+            Server?.Dispose();
+            if (!string.IsNullOrEmpty(TempDir) && Directory.Exists(TempDir)) Directory.Delete(TempDir, true);
+            base.TestCleanup();
         }
 
         [TestMethod]
@@ -127,20 +128,20 @@ namespace PrintStreamer.Utils.Tests
         {
             // Arrange - create timelapse folder and frames
             var name = "editor_test";
-            var dir = Path.Combine(_tempDir!, name);
+            var dir = Path.Combine(TempDir!, name);
             Directory.CreateDirectory(dir);
             File.WriteAllBytes(Path.Combine(dir, "frame_000000.jpg"), new byte[] { 1 });
             File.WriteAllBytes(Path.Combine(dir, "frame_000001.jpg"), new byte[] { 2 });
             File.WriteAllBytes(Path.Combine(dir, "frame_000002.jpg"), new byte[] { 3 });
 
             // Sanity check server has the three frames
-            var initialList = await _client!.GetStringAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames");
+            var initialList = await Client!.GetStringAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames");
             Assert.IsTrue(initialList.Contains("frame_000002.jpg"), "Sanity check failed: server didn't return initial frames");
 
-            Assert.IsNotNull(_client!.BaseAddress, "Test server's client BaseAddress should be set");
+            Assert.IsNotNull(Client!.BaseAddress, "Test server's client BaseAddress should be set");
             using var ctx = new Bunit.BunitContext();
             // Add the HttpClient from the server to the test DI container so the component uses it
-            ctx.Services.AddSingleton<HttpClient>(_client!);
+            ctx.Services.AddSingleton<HttpClient>(Client!);
 
             // Configure JSInterop for confirm dialogs used by the component
             ctx.JSInterop.Setup<bool>("confirm", _ => true);
@@ -160,13 +161,13 @@ namespace PrintStreamer.Utils.Tests
             middleDelete.Click();
             await Task.Delay(50); // allow the component's Delete call to hit server
             // As a fallback, manually perform the DELETE to ensure server's reindex is triggered if the component didn't call it.
-            var manualDeleteResponse = await _client.DeleteAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames/frame_000001.jpg");
+            var manualDeleteResponse = await Client.DeleteAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames/frame_000001.jpg");
             // Manual delete could return 404 if the component already deleted the file; both are acceptable.
             Assert.IsTrue(manualDeleteResponse.IsSuccessStatusCode || manualDeleteResponse.StatusCode == System.Net.HttpStatusCode.NotFound, $"Unexpected delete response: {manualDeleteResponse.StatusCode}");
-            Assert.IsTrue(_deleteCalled || manualDeleteResponse.IsSuccessStatusCode, "Delete endpoint on the server was not invoked by the component or manual delete failed");
+            Assert.IsTrue(DeleteCalled || manualDeleteResponse.IsSuccessStatusCode, "Delete endpoint on the server was not invoked by the component or manual delete failed");
 
             // After deletion, verify server-side state and re-render the component (simulate user closing and reopening the editor)
-            var serverList = await _client!.GetStringAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames");
+            var serverList = await Client!.GetStringAsync($"/api/timelapses/{Uri.EscapeDataString(name)}/frames");
             Assert.IsFalse(serverList.Contains("frame_000002.jpg"), "Server should have reindexed frames and removed frame_000002.jpg");
             await Task.Delay(200); // allow async work to settle
             cut = ctx.Render<TimelapseEditor>(parameters => parameters.Add(p => p.Name, name));

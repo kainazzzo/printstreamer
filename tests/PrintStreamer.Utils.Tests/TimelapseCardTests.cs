@@ -7,21 +7,22 @@ using System;
 namespace PrintStreamer.Utils.Tests
 {
     [TestClass]
-    public class TimelapseCardTests
+    public class TimelapseCardTests : BaseTest<TimelapseCard>
     {
-        private Bunit.BunitContext ctx = null!;
+        protected Bunit.BunitContext? Ctx { get; set; }
 
         [TestInitialize]
-        public void Setup()
+        public override void TestInitialize()
         {
-            ctx = new Bunit.BunitContext();
+            base.TestInitialize();
+            Ctx = new Bunit.BunitContext();
         }
 
         [TestCleanup]
-        public void Cleanup()
+        public new void TestCleanup()
         {
-            ctx.Dispose();
-            ctx = null!;
+            Ctx?.Dispose();
+            base.TestCleanup();
         }
 
         [TestMethod]
@@ -38,7 +39,7 @@ namespace PrintStreamer.Utils.Tests
             };
 
             // Act
-            var cut = ctx.Render<TimelapseCard>(p => p
+            var cut = Ctx!.Render<TimelapseCard>(p => p
                 .Add(x => x.Timelapse, tl)
                 .Add(x => x.IsProcessing, false)
             );
@@ -67,7 +68,7 @@ namespace PrintStreamer.Utils.Tests
             };
 
             // Act
-            var cut = ctx.Render<TimelapseCard>(p => p
+            var cut = Ctx!.Render<TimelapseCard>(p => p
                 .Add(x => x.Timelapse, tl)
                 .Add(x => x.IsProcessing, false)
             );

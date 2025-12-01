@@ -9,25 +9,23 @@ using PrintStreamer.Services;
 namespace PrintStreamer.Utils.Tests
 {
     [TestClass]
-    public class YouTubeControlServiceTests
+    public class YouTubeControlServiceTests : BaseTest<YouTubeControlService>
     {
         [TestMethod]
         [Ignore("AutoMock test with YouTubeControlService requires internal visibility setup")]
         public void AutoMock_Creates_YouTubeControlService_With_Mocked_Dependencies()
         {
-            // Arrange
-            using var mock = AutoMock.GetLoose();
-
+            // Arrange - Already have AutoMock container from BaseTest
             var configMock = new Mock<IConfiguration>();
             configMock.Setup(c => c[It.IsAny<string>()]).Returns(string.Empty);
 
             var loggerMock = new Mock<ILogger<YouTubeControlService>>();
 
             // Act: AutoMock should construct the YouTubeControlService directly
-            var sut = mock.Create<YouTubeControlService>();
+            Sut = AutoMock.Create<YouTubeControlService>();
 
             // Assert
-            Assert.IsNotNull(sut, "AutoMock failed to construct YouTubeControlService.");
+            Assert.IsNotNull(Sut, "AutoMock failed to construct YouTubeControlService.");
         }
     }
 }

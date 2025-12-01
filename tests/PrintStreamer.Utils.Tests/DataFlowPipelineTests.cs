@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
+using Autofac;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -22,14 +23,12 @@ using Moq;
 namespace PrintStreamer.Utils.Tests
 {
     [TestClass]
-    public class DataFlowPipelineTests
+    public class DataFlowPipelineTests : BaseTest<TestServer>
     {
-        private TestServer? _testServer;
-        private HttpClient? _client;
         private string? _tempDir;
 
         [TestInitialize]
-        public void Setup()
+        public override void TestInitialize()
         {
             _tempDir = Path.Combine(Path.GetTempPath(), $"dataflow_test_{Guid.NewGuid()}");
             Directory.CreateDirectory(_tempDir);
@@ -126,16 +125,14 @@ namespace PrintStreamer.Utils.Tests
                     });
                 });
 
-            _testServer = new TestServer(builder);
-            _client = _testServer.CreateClient();
+            // TestServer is infrastructure for the test, not a service being tested.
+            // It's created directly here, and AutoMock is used for mocking dependencies within services.
+            Sut = new TestServer(builder);
         }
 
         [TestCleanup]
         public void Cleanup()
         {
-            _client?.Dispose();
-            _testServer?.Dispose();
-
             if (Directory.Exists(_tempDir))
             {
                 try
@@ -174,7 +171,7 @@ namespace PrintStreamer.Utils.Tests
         public async Task StreamSourceCapture_ReturnsValidJpeg()
         {
             // Act
-            var response = await _client.GetAsync("/stream/source/capture");
+            var response = await Sut.CreateClient().GetAsync("/stream/source/capture");
 
             // Assert
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -192,7 +189,7 @@ namespace PrintStreamer.Utils.Tests
         public async Task StreamOverlayCapture_ReturnsValidJpeg()
         {
             // Act
-            var response = await _client.GetAsync("/stream/overlay/capture");
+            var response = await Sut.CreateClient().GetAsync("/stream/overlay/capture");
 
             // Assert
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -210,7 +207,7 @@ namespace PrintStreamer.Utils.Tests
         public async Task StreamMixCapture_ReturnsValidJpeg()
         {
             // Act
-            var response = await _client.GetAsync("/stream/mix/capture");
+            var response = await Sut.CreateClient().GetAsync("/stream/mix/capture");
 
             // Assert
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -233,7 +230,7 @@ namespace PrintStreamer.Utils.Tests
             foreach (var endpoint in endpoints)
             {
                 // Act
-                var response = await _client.GetAsync(endpoint);
+                var response = await Sut.CreateClient().GetAsync(endpoint);
 
                 // Assert
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -250,7 +247,7 @@ namespace PrintStreamer.Utils.Tests
         public async Task StreamSource_ReturnsMultipartResponse()
         {
             // Act
-            var response = await _client.GetAsync("/stream/source");
+            var response = await Sut.CreateClient().GetAsync("/stream/source");
 
             // Assert
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -264,7 +261,7 @@ namespace PrintStreamer.Utils.Tests
         public async Task StreamOverlay_ReturnsMultipartResponse()
         {
             // Act
-            var response = await _client.GetAsync("/stream/overlay");
+            var response = await Sut.CreateClient().GetAsync("/stream/overlay");
 
             // Assert
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -275,7 +272,7 @@ namespace PrintStreamer.Utils.Tests
         public async Task StreamAudio_ReturnsAudioResponse()
         {
             // Act
-            var response = await _client.GetAsync("/stream/audio");
+            var response = await Sut.CreateClient().GetAsync("/stream/audio");
 
             // Assert
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -286,7 +283,7 @@ namespace PrintStreamer.Utils.Tests
         public async Task StreamMix_ReturnsVideoResponse()
         {
             // Act
-            var response = await _client.GetAsync("/stream/mix");
+            var response = await Sut.CreateClient().GetAsync("/stream/mix");
 
             // Assert
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -320,7 +317,7 @@ namespace PrintStreamer.Utils.Tests
             try
             {
                 var request = new HttpRequestMessage(HttpMethod.Get, "/stream/source/capture");
-                var response = await _client.SendAsync(request, cts.Token);
+                var response = await Sut.CreateClient().SendAsync(request, cts.Token);
 
                 // Should either succeed (if fast) or be cancelled
                 Assert.IsTrue(response.IsSuccessStatusCode || cts.IsCancellationRequested,
@@ -337,11 +334,12 @@ namespace PrintStreamer.Utils.Tests
         public async Task MultipleConcurrentCaptureRequests_Work()
         {
             // Test that multiple capture requests can run concurrently without issues
+            var client = Sut.CreateClient();
             var tasks = new[]
             {
-                _client.GetAsync("/stream/source/capture"),
-                _client.GetAsync("/stream/overlay/capture"),
-                _client.GetAsync("/stream/mix/capture")
+                client.GetAsync("/stream/source/capture"),
+                client.GetAsync("/stream/overlay/capture"),
+                client.GetAsync("/stream/mix/capture")
             };
 
             // Act
@@ -373,7 +371,7 @@ namespace PrintStreamer.Utils.Tests
             foreach (var (endpoint, expectedContentType) in pipelineTests)
             {
                 // Act
-                var response = await _client.GetAsync(endpoint);
+                var response = await Sut.CreateClient().GetAsync(endpoint);
 
                 // Assert
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode,
@@ -392,7 +390,7 @@ namespace PrintStreamer.Utils.Tests
             foreach (var endpoint in endpoints)
             {
                 // Act
-                var response = await _client.GetAsync(endpoint);
+                var response = await Sut.CreateClient().GetAsync(endpoint);
                 var content = await response.Content.ReadAsByteArrayAsync();
 
                 // Assert

@@ -2,21 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
-using PrintStreamer.Models;
 using PrintStreamer.Timelapse;
-using PrintStreamer.Services;
-using PrintStreamer.Interfaces;
 
 namespace PrintStreamer.Utils.Tests
 {
     [TestClass]
-    public class TimelapseAutoFinalizeTests : BaseTest<TimelapseManager>
+    public class TimelapseManagerAutoFinalizeTests : BaseTest<TimelapseManager>
     {
         protected string? TempTimelapseDir { get; set; }
         protected Mock<ILogger<TimelapseService>>? TimelapseServiceLoggerMock { get; set; }
