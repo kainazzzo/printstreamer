@@ -115,6 +115,42 @@
             }
         </button>
 
+        <!-- Overlay Toggle Button -->
+        <button class="btn @(OverlayEnabled ? "btn-danger" : "btn-success")" disabled="@(IsOverlayBusy)"
+            aria-busy="@(IsOverlayBusy)" @onclick="ToggleOverlay"
+            title="@(OverlayEnabled ? "Disable overlay rendering (webcam text overlay)" : "Enable overlay rendering")"
+            @onmouseover="OnOverlayMouseOver" @onmouseout="OnOverlayMouseOut">
+            @if (OverlayHover)
+            {
+                @if (IsOverlayBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">📝</span>
+                }
+                <span class="btn-label">
+                    <span class="btn-title">Overlay</span>
+                    <span class="btn-status">@(OverlayEnabled ? "Disable" : "Enable")</span>
+                </span>
+            }
+            else
+            {
+                @if (IsOverlayBusy)
+                {
+                    <span class="spinner"></span>
+                }
+                else
+                {
+                    <span class="icon">📝</span>
+                }
+                <span class="btn-label">
+                    <span class="btn-title">Overlay</span>
+                    <span class="btn-status">@(OverlayEnabled ? "ON" : "OFF")</span>
+                </span>
+            }
+        </button>
 
         <!-- Go Live / Stop Live Button -->
         <button class="btn @(IsLive ? "btn-danger" : "btn-success")" @onclick="ToggleLiveClicked"
@@ -580,6 +616,7 @@
     [Parameter] public bool EndStreamAfterSongEnabled { get; set; }
     [Parameter] public bool AudioEnabled { get; set; }
     [Parameter] public bool MixProcessingEnabled { get; set; }
+    [Parameter] public bool OverlayEnabled { get; set; }
     [Parameter] public string? BroadcastId { get; set; }
     [Parameter] public string? StatusMessage { get; set; }
     [Parameter] public string? CurrentPrivacy { get; set; }
@@ -593,6 +630,7 @@
     [Parameter] public EventCallback<bool> OnEndStreamAfterSongChanged { get; set; }
     [Parameter] public EventCallback<bool> OnAudioChanged { get; set; }
     [Parameter] public EventCallback<bool> OnMixProcessingChanged { get; set; }
+    [Parameter] public EventCallback<bool> OnOverlayChanged { get; set; }
 
     private bool CameraHover = false;
     private bool LiveHover = false;
@@ -602,6 +640,7 @@
     private bool EndStreamAfterSongHover = false;
     private bool AudioHover = false;
     private bool MixProcessingHover = false;
+    private bool OverlayHover = false;
 
     private string SelectedPrivacy = "unlisted";
     private bool IsUpdatingPrivacy = false;
@@ -614,6 +653,7 @@
     private bool IsEndAfterPrintBusy = false;
     private bool IsEndAfterSongBusy = false;
     private bool IsMixProcessingBusy = false;
+    private bool IsOverlayBusy = false;
 
     private void OnCameraMouseOver() => CameraHover = true;
     private void OnCameraMouseOut() => CameraHover = false;
@@ -631,6 +671,8 @@
     private void OnAudioMouseOut() => AudioHover = false;
     private void OnMixProcessingMouseOver() => MixProcessingHover = true;
     private void OnMixProcessingMouseOut() => MixProcessingHover = false;
+    private void OnOverlayMouseOver() => OverlayHover = true;
+    private void OnOverlayMouseOut() => OverlayHover = false;
 
     protected override void OnParametersSet()
     {
@@ -898,6 +940,29 @@
         finally
         {
             IsMixProcessingBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleOverlay()
+    {
+        if (IsOverlayBusy)
+            return;
+
+        IsOverlayBusy = true;
+        StateHasChanged();
+        try
+        {
+            var newValue = !OverlayEnabled;
+            await OnOverlayChanged.InvokeAsync(newValue);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error toggling overlay: {Message}", ex.Message);
+        }
+        finally
+        {
+            IsOverlayBusy = false;
             StateHasChanged();
         }
     }

@@ -222,7 +222,7 @@ namespace PrintStreamer.Streamers
                 $"-i \"{videoSource}\""
             };
 
-            // Audio input (always include; the /stream/audio endpoint supplies silence when disabled)
+            // Audio input (always include; when audio is disabled the stream should be stopped already)
             args.Add("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2");
             args.Add("-fflags +genpts+discardcorrupt");
             args.Add($"-i \"{audioSource}\"");
@@ -236,7 +236,7 @@ namespace PrintStreamer.Streamers
             args.Add("-pix_fmt yuv420p");
             args.Add("-g 60");  // GOP size (keyframe interval)
 
-            // Audio encoding - AAC (input may be silence when disabled)
+            // Audio encoding - AAC (when audio is disabled the stream will already be stopped)
             args.Add("-c:a aac");
             args.Add("-b:a 128k");
             args.Add("-ar 44100");

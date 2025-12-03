@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using PrintStreamer.Interfaces;
+using PrintStreamer.Services;
 using Microsoft.Extensions.Logging;
 
 namespace PrintStreamer.Streamers
@@ -17,15 +18,17 @@ namespace PrintStreamer.Streamers
         private readonly Overlay.OverlayTextService _overlayText;
         private readonly HttpContext _ctx;
         private readonly ILogger<OverlayMjpegStreamer> _logger;
+        private readonly OverlayProcessService _overlayProcessService;
         private Process? _proc;
         private TaskCompletionSource<object?> _exitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public OverlayMjpegStreamer(IConfiguration config, Overlay.OverlayTextService overlayText, HttpContext ctx, ILogger<OverlayMjpegStreamer> logger)
+        public OverlayMjpegStreamer(IConfiguration config, Overlay.OverlayTextService overlayText, HttpContext ctx, ILogger<OverlayMjpegStreamer> logger, OverlayProcessService overlayProcessService)
         {
             _config = config;
             _overlayText = overlayText;
             _ctx = ctx;
             _logger = logger;
+            _overlayProcessService = overlayProcessService;
         }
 
         public Task ExitTask => _exitTcs.Task;
@@ -134,6 +137,8 @@ _logger.LogInformation("[{ContextLabel}] FFmpeg vf: {Vf}", contextLabel, vf);
             try
             {
                 _proc.Start();
+                // Register this process so it can be terminated when overlay is disabled
+                _overlayProcessService.RegisterProcess(_proc);
                 var copyTask = _proc.StandardOutput.BaseStream.CopyToAsync(_ctx.Response.Body, 64 * 1024, _ctx.RequestAborted);
                 // Monitor stderr for critical errors (suppress benign warnings)
                 var errorCount = 0;

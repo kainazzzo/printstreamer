@@ -24,22 +24,33 @@ namespace PrintStreamer.Endpoints.Api.Audio
             if (!bool.TryParse(raw, out enabled)) enabled = raw == "1" || string.Equals(raw, "true", System.StringComparison.OrdinalIgnoreCase);
             _config["Audio:Enabled"] = enabled.ToString();
             _logger.LogInformation("Audio stream: {State}", enabled ? "enabled" : "disabled");
-            try
-            {
-                if (_streamService.IsStreaming)
-                {
-                    _logger.LogInformation("Restarting active stream to pick up audio setting change");
-                    await _streamService.StopStreamAsync();
-                    await _streamService.StartStreamAsync(null, ct);
-                }
-            }
-            catch (System.Exception ex) { _logger.LogError(ex, "Failed to restart stream after audio toggle"); }
-
+            
             try
             {
                 _broadcaster?.ApplyAudioEnabledState(enabled);
             }
             catch (System.Exception ex) { _logger.LogError(ex, "Failed to apply audio toggle to broadcaster"); }
+
+            try
+            {
+                if (_streamService.IsStreaming)
+                {
+                    if (enabled)
+                    {
+                        // Audio is being enabled - restart to pick up the new setting and include audio
+                        _logger.LogInformation("Restarting active stream to use audio feed");
+                        await _streamService.StopStreamAsync();
+                        await _streamService.StartStreamAsync(null, ct);
+                    }
+                    else
+                    {
+                        // Audio is being disabled - TERMINATE the broadcast completely (no fallback)
+                        _logger.LogInformation("Audio disabled - stopping stream completely");
+                        await _streamService.StopStreamAsync();
+                    }
+                }
+            }
+            catch (System.Exception ex) { _logger.LogError(ex, "Failed to handle stream state change after audio toggle"); }
 
             ctx.Response.StatusCode = 200;
             await ctx.Response.WriteAsJsonAsync(new { success = true, enabled }, ct);

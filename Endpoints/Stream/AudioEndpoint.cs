@@ -32,7 +32,9 @@ namespace PrintStreamer.Endpoints.Stream
             var enabled = _config.GetValue<bool?>("Audio:Enabled") ?? true;
             if (!enabled)
             {
-                await StreamHelpers.StreamSilentAudioAsync(HttpContext, _logger, ct);
+                // Audio is disabled - return 503 Service Unavailable (like mix endpoint)
+                HttpContext.Response.StatusCode = 503;
+                await HttpContext.Response.WriteAsync("Audio stream is disabled", ct);
                 return;
             }
 

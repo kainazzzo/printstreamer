@@ -158,6 +158,7 @@ webBuilder.Services.AddSingleton<AudioBroadcastService>();
 // Printer console service (skeleton)
 webBuilder.Services.AddSingleton<PrinterConsoleService>();
 webBuilder.Services.AddSingleton<OverlayTextService>();
+webBuilder.Services.AddSingleton<OverlayProcessService>();
 webBuilder.Services.AddSingleton<IMoonrakerPoller, MoonrakerPoller>();
 webBuilder.Services.AddSingleton<MixStreamHostedService>();
 

@@ -20,7 +20,8 @@
         AudioEnabled="@audioEnabled" OnAudioChanged="@OnAudioChanged"
         OnAutoBroadcastChanged="@OnAutoBroadcastChanged" OnAutoUploadChanged="@OnAutoUploadChanged" 
         OnEndStreamAfterPrintChanged="@OnEndStreamAfterPrintChanged" OnEndStreamAfterSongChanged="@OnEndStreamAfterSongChanged"
-        MixProcessingEnabled="@mixProcessingEnabled" OnMixProcessingChanged="@((bool e) => OnMixProcessingChanged(e))" />
+        MixProcessingEnabled="@mixProcessingEnabled" OnMixProcessingChanged="@((bool e) => OnMixProcessingChanged(e))"
+        OverlayEnabled="@overlayEnabled" OnOverlayChanged="@((bool e) => OnOverlayChanged(e))" />
 
     <StreamContainer>
         <MjpegFeed />
@@ -67,6 +68,7 @@
     private bool endStreamAfterSongEnabled = false;
     private bool audioEnabled = false;
     private bool mixProcessingEnabled = true;
+    private bool overlayEnabled = true;
     private List<TimelapseInfo>? timelapses = null;
     private HashSet<string> processingTimelapses = new();
     private Timer? refreshTimer;
@@ -395,6 +397,18 @@
                 }
             }
             catch { }
+            
+            // Fetch overlay state
+            try
+            {
+                using var overlayClient = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+                var overlayResponse = await overlayClient.GetFromJsonAsync<OverlayStateResponse>("api/overlay/enabled");
+                if (overlayResponse != null)
+                {
+                    overlayEnabled = overlayResponse.Enabled;
+                }
+            }
+            catch { }
         }
         catch (HttpRequestException)
         {
@@ -481,6 +495,33 @@
         {
             await SafeToast($"Error toggling mix processing: {ex.Message}", "error");
             mixProcessingEnabled = !enabled;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnOverlayChanged(bool enabled)
+    {
+        overlayEnabled = enabled;
+        StateHasChanged();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var response = await client.PostAsync($"api/overlay/enabled?enabled={enabled}", null);
+            if (response.IsSuccessStatusCode)
+            {
+                await SafeToast($"Overlay {(enabled ? "enabled" : "disabled")}", "success");
+            }
+            else
+            {
+                await SafeToast($"Failed to toggle overlay", "error");
+                overlayEnabled = !enabled;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            await SafeToast($"Error toggling overlay: {ex.Message}", "error");
+            overlayEnabled = !enabled;
             StateHasChanged();
         }
     }
@@ -734,6 +775,11 @@
     }
 
     private class MixStateResponse
+    {
+        public bool Enabled { get; set; }
+    }
+
+    private class OverlayStateResponse
     {
         public bool Enabled { get; set; }
     }
