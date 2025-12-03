@@ -33,4 +33,10 @@
     <Compile Remove="tests\**\*.cs" />
   </ItemGroup>
 
+  <!-- Exclude test bin/obj directories from publish to avoid path length issues -->
+  <ItemGroup>
+    <None Remove="tests\**\bin\**" />
+    <None Remove="tests\**\obj\**" />
+  </ItemGroup>
+
 </Project>
