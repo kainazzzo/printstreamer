@@ -397,6 +397,8 @@ public sealed class OverlayTextService : IDisposable
             displaySpeed = 0.0;
         }
 
+        var audioName = _audioProvider?.Invoke() ?? string.Empty;
+
         return new OverlayData
         {
             Nozzle = nozzle,
@@ -420,7 +422,8 @@ public sealed class OverlayTextService : IDisposable
             FilamentUsedMm = double.IsNaN(filamentUsed) ? filamentUsedMm : filamentUsed,
             FilamentTotalMm = filamentTotalMm ?? providerFilamentTotalMm,
             Slicer = providerSlicer,
-            ETA = eta
+            ETA = eta,
+            AudioName = audioName
         };
 
         static double TryDouble(JsonElement elem, string name, double defaultValue = double.NaN)
@@ -533,6 +536,10 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceStr(s, "filament_brand", d.FilamentBrand ?? string.Empty);
         s = ReplaceStr(s, "filament_color", d.FilamentColor ?? string.Empty);
         s = ReplaceStr(s, "filament_name", d.FilamentName ?? string.Empty);
+        
+        // Handle song with conditional label - only include "Song: " if audio name is not empty
+        string songStr = string.IsNullOrWhiteSpace(d.AudioName) ? string.Empty : "Song: " + d.AudioName;
+        s = ReplaceStr(s, "song", songStr);
 
         {
             var speedStr = d.Speed.HasValue ? d.Speed.Value.ToString("0") : "-";
@@ -572,16 +579,6 @@ public sealed class OverlayTextService : IDisposable
             var right = d.LayerMax.HasValue ? d.LayerMax.Value.ToString() : "-";
             s = s + $"  |  Layers: {left}/{right}";
         }
-
-        try
-        {
-            var audioName = _audioProvider?.Invoke();
-            if (!string.IsNullOrWhiteSpace(audioName))
-            {
-                s = s + "\n" + "Song: " + audioName;
-            }
-        }
-        catch { }
 
         s = s.Replace("\r", string.Empty);
         s = s.Replace("%", "%%");
@@ -648,6 +645,7 @@ public sealed class OverlayTextService : IDisposable
         public double? FilamentTotalMm { get; init; }
         public string? Slicer { get; init; }
         public DateTime? ETA { get; init; }
+        public string? AudioName { get; init; }
     }
 
     private sealed class FilamentMeta
