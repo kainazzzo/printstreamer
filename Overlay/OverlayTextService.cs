@@ -28,6 +28,7 @@ public sealed class OverlayTextService : IDisposable
     private Task? _loopTask;
     private readonly ITimelapseMetadataProvider? _tlProvider;
     private readonly Func<string?>? _audioProvider;
+    private readonly Func<bool>? _audioIsPlayingProvider;
     private readonly ILogger<OverlayTextService> _logger;
     private readonly Dictionary<string, (DateTime fetchedAt, FilamentMeta meta)> _filamentCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly int _filamentCacheSeconds;
@@ -40,6 +41,7 @@ public sealed class OverlayTextService : IDisposable
     {
         _tlProvider = timelapseProvider;
         _audioProvider = () => audioService.Current;
+        _audioIsPlayingProvider = () => audioService.IsPlaying;
         _logger = logger;
         _moonrakerClient = moonrakerClient;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
@@ -109,6 +111,40 @@ public sealed class OverlayTextService : IDisposable
     {
         if (_loopTask != null) return;
         _loopTask = Task.Run(() => RunAsync(_cts.Token));
+    }
+
+    /// <summary>
+    /// Gets the current overlay data as a serializable object for JSON responses
+    /// </summary>
+    public async Task<dynamic> GetOverlayDataAsync(CancellationToken ct)
+    {
+        var data = await QueryAsync(ct);
+        return new
+        {
+            data.Nozzle,
+            data.NozzleTarget,
+            data.Bed,
+            data.BedTarget,
+            data.State,
+            data.Progress,
+            data.Layer,
+            data.LayerMax,
+            data.Time,
+            data.Filename,
+            data.Speed,
+            data.SpeedFactor,
+            data.Flow,
+            data.Filament,
+            data.FilamentType,
+            data.FilamentBrand,
+            data.FilamentColor,
+            data.FilamentName,
+            data.FilamentUsedMm,
+            data.FilamentTotalMm,
+            data.Slicer,
+            data.ETA,
+            data.AudioName
+        };
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -398,6 +434,12 @@ public sealed class OverlayTextService : IDisposable
         }
 
         var audioName = _audioProvider?.Invoke() ?? string.Empty;
+        var isAudioPlaying = _audioIsPlayingProvider?.Invoke() ?? false;
+        // Only include audio name if audio is actually playing
+        if (!isAudioPlaying)
+        {
+            audioName = string.Empty;
+        }
 
         return new OverlayData
         {
@@ -509,7 +551,7 @@ public sealed class OverlayTextService : IDisposable
         {
             return System.Text.RegularExpressions.Regex.Replace(
                 input,
-                @"\{" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?::[^}]+)?\}",
+                @"\{" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?::[^}]*)?\}",
                 _ => value ?? string.Empty,
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
             );
