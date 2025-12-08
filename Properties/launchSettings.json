@@ -3,7 +3,9 @@
     "Poll (Local)": {
       "commandName": "Project",
       "environmentVariables": {
-        "DOTNET_ENVIRONMENT": "Local"
+        "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin",
+        "ASPNETCORE_ENVIRONMENT": "Local",
+        "DOTNET_ROOT": "/usr/share/dotnet"
       }
     }
   }

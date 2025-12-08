@@ -21,6 +21,15 @@ namespace PrintStreamer.Services
             _config = config;
             _logger = logger;
             _httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            // Initialize disabled state from configuration if provided (Stream:Camera:Disabled)
+            try
+            {
+                _disabled = _config.GetValue<bool?>("Stream:Camera:Disabled") ?? false;
+            }
+            catch
+            {
+                _disabled = false;
+            }
             
             // Load fallback_black.jpg from filesystem
             var fallbackPath = Path.Combine(Directory.GetCurrentDirectory(), "fallback_black.jpg");

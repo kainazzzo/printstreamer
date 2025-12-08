@@ -216,13 +216,10 @@ Console.CancelKeyPress += (s, e) =>
 // The application always runs the host and the hosted poller. Diagnostic/test modes were removed.
 
 // Ensure the WebApplication host is built and run in all modes so IHostedService instances start
-// Configure Kestrel only when we're serving HTTP
-if (mixEnabled)
-{
-	webBuilder.WebHost.ConfigureKestrel(options => { options.ListenAnyIP(8080); });
-	// Reduce shutdown timeout to respond faster to Ctrl+C (default is 30 seconds)
-	webBuilder.Host.ConfigureHostOptions(opts => { opts.ShutdownTimeout = TimeSpan.FromSeconds(3); });
-}
+// Configure Kestrel to listen on port 8080 so the web UI and API are reachable.
+webBuilder.WebHost.ConfigureKestrel(options => { options.ListenAnyIP(8080); });
+// Reduce shutdown timeout to respond faster to Ctrl+C (default is 30 seconds)
+webBuilder.Host.ConfigureHostOptions(opts => { opts.ShutdownTimeout = TimeSpan.FromSeconds(3); });
 
 // Application variables are now managed by hosted services
 
@@ -283,28 +280,30 @@ if (mixEnabled)
 	// Blazor pages are now served via MapRazorComponents below
 
 	// Map FastEndpoints and API controllers (printer control API, etc.)
-	app.UseFastEndpoints();
-	app.MapControllers();
-
-	app.MapRazorComponents<PrintStreamer.App>()
-		.AddInteractiveServerRenderMode();
-
-	// Application lifecycle management is now handled by ApplicationStartupHostedService
-
-	// Serve Blazor component assets (CSS, JS)
-	var componentsFolder = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Components"));
-	if (Directory.Exists(componentsFolder))
-	{
-		app.UseStaticFiles(new StaticFileOptions
-		{
-			FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(componentsFolder),
-			RequestPath = "/Components",
-			ServeUnknownFileTypes = false
-		});
-	}
+	// (Detailed mapping moved below so routes are always registered regardless of mixEnabled)
 
 	// Debug pipeline endpoint moved to FastEndpoints: Endpoints/Api/Debug/PipelineEndpoint.cs
 
+}
+
+// Register FastEndpoints, API controllers and Blazor UI so the web UI (pages like /streaming)
+// and API endpoints are always available regardless of Stream:Mix:Enabled.
+app.UseFastEndpoints();
+app.MapControllers();
+
+app.MapRazorComponents<PrintStreamer.App>()
+	.AddInteractiveServerRenderMode();
+
+// Serve Blazor component assets (CSS, JS)
+var componentsFolderAlways = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Components"));
+if (Directory.Exists(componentsFolderAlways))
+{
+	app.UseStaticFiles(new StaticFileOptions
+	{
+		FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(componentsFolderAlways),
+		RequestPath = "/Components",
+		ServeUnknownFileTypes = false
+	});
 }
 
 // Start the host so IHostedService instances are started in all modes

@@ -379,12 +379,14 @@ public sealed class OverlayTextService : IDisposable
             }
         }
 
-        DateTime? eta = null;
+        string? etaString = null;
         if (isActiveJob && progress01 > 0.01 && !double.IsNaN(printDuration) && printDuration > 0)
         {
             var estimatedTotal = printDuration / progress01;
             var remaining = estimatedTotal - printDuration;
-            eta = DateTime.UtcNow.AddSeconds(remaining);
+            var etaUtc = DateTime.UtcNow.AddSeconds(remaining);
+            var etaLocal = TimeZoneInfo.ConvertTime(etaUtc, TimeZoneInfo.Utc, _displayTimeZone);
+            etaString = etaLocal.ToString("h:mm tt"); // "2:30 PM" or "11:45 AM"
         }
 
         string? providerSlicer = null;
@@ -464,7 +466,7 @@ public sealed class OverlayTextService : IDisposable
             FilamentUsedMm = double.IsNaN(filamentUsed) ? filamentUsedMm : filamentUsed,
             FilamentTotalMm = filamentTotalMm ?? providerFilamentTotalMm,
             Slicer = providerSlicer,
-            ETA = eta,
+            ETA = etaString,
             AudioName = audioName
         };
 
@@ -606,9 +608,9 @@ public sealed class OverlayTextService : IDisposable
         s = ReplaceNum(s, "filament_used_mm", d.FilamentUsedMm.HasValue ? d.FilamentUsedMm.Value : double.NaN, "0");
         s = ReplaceNum(s, "filament_total_mm", d.FilamentTotalMm.HasValue ? d.FilamentTotalMm.Value : double.NaN, "0");
 
-        if (d.ETA.HasValue)
+        if (!string.IsNullOrEmpty(d.ETA))
         {
-            s = ReplaceDate(s, "eta", d.ETA.Value);
+            s = ReplaceStr(s, "eta", d.ETA);
         }
         else
         {
@@ -686,7 +688,7 @@ public sealed class OverlayTextService : IDisposable
         public double? FilamentUsedMm { get; init; }
         public double? FilamentTotalMm { get; init; }
         public string? Slicer { get; init; }
-        public DateTime? ETA { get; init; }
+        public string? ETA { get; init; }
         public string? AudioName { get; init; }
     }
 

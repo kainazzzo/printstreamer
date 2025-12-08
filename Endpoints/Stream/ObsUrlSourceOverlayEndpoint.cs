@@ -29,7 +29,7 @@ namespace PrintStreamer.Endpoints.Stream
                 var overlayData = await _overlayText.GetOverlayDataAsync(ct);
                 
                 // Convert dynamic to the strongly-typed response object
-                dynamic d = overlayData;
+                var d = overlayData;
                 var response = new ObsUrlSourceOverlayData
                 {
                     Nozzle = d.Nozzle,
@@ -138,7 +138,7 @@ namespace PrintStreamer.Endpoints.Stream
         public string? Slicer { get; set; }
 
         [JsonPropertyName("eta")]
-        public System.DateTime? Eta { get; set; }
+        public string? Eta { get; set; }
 
         [JsonPropertyName("audioName")]
         public string? AudioName { get; set; }
