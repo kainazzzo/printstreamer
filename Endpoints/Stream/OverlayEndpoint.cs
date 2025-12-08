@@ -3,27 +3,25 @@ using Microsoft.AspNetCore.Http;
 using System.Threading.Tasks;
 using System.Threading;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using PrintStreamer.Streamers;
-using PrintStreamer.Overlay;
 using PrintStreamer.Services;
+using System.Net.Http;
 
 namespace PrintStreamer.Endpoints.Stream
 {
     public class OverlayEndpoint : EndpointWithoutRequest<object>
     {
         private readonly IConfiguration _config;
-        private readonly Overlay.OverlayTextService _overlayText;
-        private readonly ILogger<OverlayMjpegStreamer> _overlayStreamerLogger;
-        private readonly OverlayProcessService _overlayProcessService;
+        private readonly OverlayBroadcastService _overlayBroadcastService;
+        private readonly ILogger<OverlayEndpoint> _logger;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public OverlayEndpoint(IConfiguration config, Overlay.OverlayTextService overlayText, ILogger<OverlayMjpegStreamer> overlayStreamerLogger, OverlayProcessService overlayProcessService)
+        public OverlayEndpoint(IConfiguration config, OverlayBroadcastService overlayBroadcastService, ILogger<OverlayEndpoint> logger, IHttpClientFactory httpClientFactory)
         {
             _config = config;
-            _overlayText = overlayText;
-            _overlayStreamerLogger = overlayStreamerLogger;
-            _overlayProcessService = overlayProcessService;
+            _overlayBroadcastService = overlayBroadcastService;
+            _logger = logger;
+            _httpClientFactory = httpClientFactory;
         }
         public override void Configure()
         {
@@ -44,11 +42,36 @@ namespace PrintStreamer.Endpoints.Stream
 
             try
             {
-                var streamer = new OverlayMjpegStreamer(_config, _overlayText, HttpContext, _overlayStreamerLogger, _overlayProcessService);
-                await streamer.StartAsync(ct);
+                var started = await _overlayBroadcastService.EnsureRunningAsync(ct);
+                if (!started)
+                {
+                    HttpContext.Response.StatusCode = 503;
+                    await HttpContext.Response.WriteAsync("Overlay stream unavailable", ct);
+                    return;
+                }
+
+                var client = _httpClientFactory.CreateClient(nameof(OverlayEndpoint));
+                client.Timeout = Timeout.InfiniteTimeSpan;
+
+                using var upstream = await client.GetAsync(_overlayBroadcastService.OutputUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+                if (!upstream.IsSuccessStatusCode)
+                {
+                    HttpContext.Response.StatusCode = (int)upstream.StatusCode;
+                    await HttpContext.Response.WriteAsync("Overlay upstream error", ct);
+                    return;
+                }
+
+                HttpContext.Response.StatusCode = (int)upstream.StatusCode;
+                HttpContext.Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "multipart/x-mixed-replace";
+                HttpContext.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+                HttpContext.Response.Headers["Pragma"] = "no-cache";
+
+                await using var upstreamStream = await upstream.Content.ReadAsStreamAsync(ct);
+                await upstreamStream.CopyToAsync(HttpContext.Response.Body, 64 * 1024, ct);
             }
             catch (System.Exception ex)
             {
+                _logger.LogError(ex, "[OverlayEndpoint] Error proxying overlay stream");
                 if (!HttpContext.Response.HasStarted)
                 {
                     HttpContext.Response.StatusCode = 500;

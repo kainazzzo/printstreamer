@@ -159,6 +159,7 @@ webBuilder.Services.AddSingleton<AudioBroadcastService>();
 webBuilder.Services.AddSingleton<PrinterConsoleService>();
 webBuilder.Services.AddSingleton<OverlayTextService>();
 webBuilder.Services.AddSingleton<OverlayProcessService>();
+webBuilder.Services.AddSingleton<OverlayBroadcastService>();
 webBuilder.Services.AddSingleton<IMoonrakerPoller, MoonrakerPoller>();
 webBuilder.Services.AddSingleton<MixStreamHostedService>();
 
@@ -177,6 +178,7 @@ webBuilder.Services.AddHttpClient<PrinterControlApiService>(client =>
 {
 	client.BaseAddress = new Uri("http://localhost:8080");
 });
+webBuilder.Services.AddHttpClient();
 
 // Add controller endpoints for printer control API
 webBuilder.Services.AddControllers();
