@@ -19,29 +19,29 @@ The endpoint returns a JSON object with the following properties:
 
 ```json
 {
-  "nozzle": 200.5,
-  "nozzleTarget": 210.0,
-  "bed": 60.0,
-  "bedTarget": 65.0,
+  "nozzle": "200",
+  "nozzleTarget": "210",
+  "bed": "60.0",
+  "bedTarget": "65",
   "state": "printing",
-  "progress": 45,
-  "layer": 25,
-  "layerMax": 100,
+  "progress": "45",
+  "layer": "25",
+  "layerMax": "100",
   "time": "2025-12-05T14:30:00Z",
   "filename": "benchy.gcode",
-  "speed": 50.0,
-  "speedFactor": 100.0,
-  "flow": 100.0,
-  "filament": 25.5,
+  "speed": "50",
+  "speedFactor": "100",
+  "flow": "100.00",
+  "filament": "25.500",
   "filamentType": "PLA",
   "filamentBrand": "Prusament",
   "filamentColor": "Black",
   "filamentName": "Prusament PLA Black",
-  "filamentUsedMm": 1234.5,
-  "filamentTotalMm": 5000.0,
+  "filamentUsedMm": "1234",
+  "filamentTotalMm": "5000",
   "slicer": "PrusaSlicer",
-  "eta": "2025-12-05T15:45:00Z",
-  "audioName": null
+  "eta": "2:30 PM",
+  "audioName": ""
 }
 ```
 
@@ -49,29 +49,29 @@ The endpoint returns a JSON object with the following properties:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `nozzle` | string | Current nozzle temperature as a pre-rounded string (°C) |
-| `nozzleTarget` | number | Target nozzle temperature in °C |
-| `bed` | number | Current bed temperature in °C |
-| `bedTarget` | number | Target bed temperature in °C |
-| `state` | string | Printer state (e.g., "printing", "paused", "idle") |
-| `progress` | integer | Print progress as percentage (0-100) |
-| `layer` | integer | Current layer number (null if not available) |
-| `layerMax` | integer | Total number of layers (null if not available) |
-| `time` | string | Current time in ISO 8601 format |
-| `filename` | string | Name of the currently printing file |
-| `speed` | string | Current print speed as a pre-rounded string (mm/s) |
-| `speedFactor` | number | Speed factor as percentage (null if not available) |
-| `flow` | string | Flow/extrude factor as a pre-rounded string (e.g. "7.16") |
-| `filament` | string | Total filament used in meters as a pre-rounded string (e.g. "9.367") |
-| `filamentType` | string | Type of filament (e.g., "PLA", "ABS") (null if not available) |
-| `filamentBrand` | string | Filament brand name (null if not available) |
-| `filamentColor` | string | Filament color (null if not available) |
-| `filamentName` | string | Full filament name (null if not available) |
-| `filamentUsedMm` | number | Filament used in millimeters (null if not available) |
-| `filamentTotalMm` | number | Total filament needed in millimeters (null if not available) |
-| `slicer` | string | Slicer software used (null if not available) |
-| `eta` | string | Estimated time of arrival or display string (e.g. "2:30 PM") |
-| `audioName` | string | Currently playing audio name (null if no audio is playing) |
+| `nozzle` | string | Current nozzle temperature as a pre-rounded string (°C) or empty string when unavailable |
+| `nozzleTarget` | string | Target nozzle temperature as a pre-rounded string (°C) or empty string when unavailable |
+| `bed` | string | Current bed temperature as a pre-rounded string (°C) or empty string when unavailable |
+| `bedTarget` | string | Target bed temperature as a pre-rounded string (°C) or empty string when unavailable |
+| `state` | string | Printer state (e.g., "printing", "paused", "idle") (empty string when unknown) |
+| `progress` | string | Print progress as a pre-rounded percentage string (0-100) or empty string when unavailable |
+| `layer` | string | Current layer number as string (empty when not available) |
+| `layerMax` | string | Total number of layers as string (empty when not available) |
+| `time` | string | Current time in ISO 8601 format (UTC) |
+| `filename` | string | Name of the currently printing file (empty when not available) |
+| `speed` | string | Current print speed as a pre-rounded string (mm/s) or empty string when unavailable |
+| `speedFactor` | string | Speed factor as a pre-rounded percentage string (e.g. "100") or empty string when unavailable |
+| `flow` | string | Flow/extrude factor as a pre-rounded string (e.g. "7.16") — returns "0.00" when value is missing |
+| `filament` | string | Total filament used in meters as a pre-rounded string (e.g. "9.367") or empty string when unavailable |
+| `filamentType` | string | Type of filament (e.g., "PLA", "ABS") (empty when not available) |
+| `filamentBrand` | string | Filament brand name (empty when not available) |
+| `filamentColor` | string | Filament color (empty when not available) |
+| `filamentName` | string | Full filament name (empty when not available) |
+| `filamentUsedMm` | string | Filament used in millimeters as a string (empty when not available) |
+| `filamentTotalMm` | string | Total filament needed in millimeters as a string (empty when not available) |
+| `slicer` | string | Slicer software used (empty when not available) |
+| `eta` | string | Estimated time of arrival or display string (e.g. "2:30 PM") (empty when not available) |
+| `audioName` | string | Currently playing audio name (empty when no audio is playing) |
 
 ## Using with OBS URLSource Plugin
 
