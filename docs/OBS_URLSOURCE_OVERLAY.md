@@ -4,6 +4,8 @@
 
 The `/stream/obs-urlsource/overlay` endpoint provides real-time printer overlay data in JSON format that is compatible with the [OBS URLSource plugin](https://github.com/royshil/obs-urlsource/tree/0.4.0).
 
+Note: PrintStreamer formats many overlay fields server-side so the OBS side can treat values as presentation-ready strings. Numeric values (temperatures, speed, flow, filament) are rounded and returned as strings to simplify templates in OBS 
+
 ## Endpoint
 
 - **URL**: `http://<printstreamer-host>:<port>/stream/obs-urlsource/overlay`
@@ -47,7 +49,7 @@ The endpoint returns a JSON object with the following properties:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `nozzle` | number | Current nozzle temperature in °C |
+| `nozzle` | string | Current nozzle temperature as a pre-rounded string (°C) |
 | `nozzleTarget` | number | Target nozzle temperature in °C |
 | `bed` | number | Current bed temperature in °C |
 | `bedTarget` | number | Target bed temperature in °C |
@@ -57,10 +59,10 @@ The endpoint returns a JSON object with the following properties:
 | `layerMax` | integer | Total number of layers (null if not available) |
 | `time` | string | Current time in ISO 8601 format |
 | `filename` | string | Name of the currently printing file |
-| `speed` | number | Current print speed in mm/s (null if not available) |
+| `speed` | string | Current print speed as a pre-rounded string (mm/s) |
 | `speedFactor` | number | Speed factor as percentage (null if not available) |
-| `flow` | number | Flow/extrude factor as percentage (null if not available) |
-| `filament` | number | Total filament used in meters (null if not available) |
+| `flow` | string | Flow/extrude factor as a pre-rounded string (e.g. "7.16") |
+| `filament` | string | Total filament used in meters as a pre-rounded string (e.g. "9.367") |
 | `filamentType` | string | Type of filament (e.g., "PLA", "ABS") (null if not available) |
 | `filamentBrand` | string | Filament brand name (null if not available) |
 | `filamentColor` | string | Filament color (null if not available) |
@@ -68,7 +70,7 @@ The endpoint returns a JSON object with the following properties:
 | `filamentUsedMm` | number | Filament used in millimeters (null if not available) |
 | `filamentTotalMm` | number | Total filament needed in millimeters (null if not available) |
 | `slicer` | string | Slicer software used (null if not available) |
-| `eta` | string | Estimated time of arrival in ISO 8601 format (null if not available) |
+| `eta` | string | Estimated time of arrival or display string (e.g. "2:30 PM") |
 | `audioName` | string | Currently playing audio name (null if no audio is playing) |
 
 ## Using with OBS URLSource Plugin
@@ -160,7 +162,7 @@ This will extract and format the nozzle temperature from the entire JSON respons
 
 ## Update Frequency
 
-The endpoint queries Moonraker for current printer state. Configure your preferred update frequency in the OBS URLSource plugin settings. The PrintStreamer overlay service has its own refresh interval (default 1000ms) that can be configured in `appsettings.json`:
+The endpoint queries Moonraker for current printer state. Configure your preferred update frequency in the OBS URLSource plugin settings. PrintStreamer itself has a configurable refresh interval (`Overlay:RefreshMs`) which controls how often the overlay snapshot is refreshed.
 
 ```json
 {

@@ -1,8 +1,9 @@
 using FastEndpoints;
+using PrintStreamer.Overlay;
+using System.Globalization;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using PrintStreamer.Overlay;
 
 namespace PrintStreamer.Endpoints.Stream
 {
@@ -26,35 +27,33 @@ namespace PrintStreamer.Endpoints.Stream
             try
             {
                 // Get the current overlay data
-                var overlayData = await _overlayText.GetOverlayDataAsync(ct);
-                
-                // Convert dynamic to the strongly-typed response object
-                var d = overlayData;
+                var d = await _overlayText.GetOverlayDataAsync(ct);
+
                 var response = new ObsUrlSourceOverlayData
                 {
-                    Nozzle = d.Nozzle,
-                    NozzleTarget = d.NozzleTarget,
-                    Bed = d.Bed,
-                    BedTarget = d.BedTarget,
-                    State = d.State,
-                    Progress = d.Progress,
-                    Layer = d.Layer,
-                    LayerMax = d.LayerMax,
-                    Time = d.Time,
-                    Filename = d.Filename,
-                    Speed = d.Speed,
-                    SpeedFactor = d.SpeedFactor,
-                    Flow = d.Flow,
-                    Filament = d.Filament,
-                    FilamentType = d.FilamentType,
-                    FilamentBrand = d.FilamentBrand,
-                    FilamentColor = d.FilamentColor,
-                    FilamentName = d.FilamentName,
-                    FilamentUsedMm = d.FilamentUsedMm,
-                    FilamentTotalMm = d.FilamentTotalMm,
-                    Slicer = d.Slicer,
-                    Eta = d.ETA,
-                    AudioName = d.AudioName
+                    Nozzle = FormatDouble(d.Nozzle, "0"),
+                    NozzleTarget = FormatDouble(d.NozzleTarget, "0"),
+                    Bed = FormatDouble(d.Bed, "0.0"),
+                    BedTarget = FormatDouble(d.BedTarget, "0"),
+                    State = d.State ?? string.Empty,
+                    Progress = d.Progress.ToString(CultureInfo.InvariantCulture),
+                    Layer = FormatNullableInt(d.Layer),
+                    LayerMax = FormatNullableInt(d.LayerMax),
+                    Time = d.Time.ToString("o", CultureInfo.InvariantCulture),
+                    Filename = d.Filename ?? string.Empty,
+                    Speed = FormatNullableDouble(d.Speed, "0"),
+                    SpeedFactor = FormatNullableDouble(d.SpeedFactor, "0"),
+                    Flow = FormatNullableDoubleOrZero(d.Flow, "0.00"),
+                    Filament = d.Filament.HasValue ? (d.Filament.Value / 1000.0).ToString("0.000", CultureInfo.InvariantCulture) : string.Empty,
+                    FilamentType = d.FilamentType ?? string.Empty,
+                    FilamentBrand = d.FilamentBrand ?? string.Empty,
+                    FilamentColor = d.FilamentColor ?? string.Empty,
+                    FilamentName = d.FilamentName ?? string.Empty,
+                    FilamentUsedMm = FormatNullableDouble(d.FilamentUsedMm, "0"),
+                    FilamentTotalMm = FormatNullableDouble(d.FilamentTotalMm, "0"),
+                    Slicer = d.Slicer ?? string.Empty,
+                    Eta = d.ETA ?? string.Empty,
+                    AudioName = d.AudioName ?? string.Empty
                 };
                 
                 // Use ASP.NET Core's built-in JSON serialization
@@ -67,6 +66,30 @@ namespace PrintStreamer.Endpoints.Stream
                 await HttpContext.Response.WriteAsJsonAsync(new { error = ex.Message }, ct);
             }
         }
+
+        private static string FormatDouble(double value, string format)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value)) return string.Empty;
+            return value.ToString(format, CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatNullableDouble(double? value, string format)
+        {
+            if (!value.HasValue || double.IsNaN(value.Value) || double.IsInfinity(value.Value)) return string.Empty;
+            return value.Value.ToString(format, CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatNullableDoubleOrZero(double? value, string format)
+        {
+            if (!value.HasValue || double.IsNaN(value.Value) || double.IsInfinity(value.Value))
+                return (0.0).ToString(format, CultureInfo.InvariantCulture);
+            return value.Value.ToString(format, CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatNullableInt(int? value)
+        {
+            return value.HasValue ? value.Value.ToString(CultureInfo.InvariantCulture) : string.Empty;
+        }
     }
 
     /// <summary>
@@ -75,46 +98,46 @@ namespace PrintStreamer.Endpoints.Stream
     public class ObsUrlSourceOverlayData
     {
         [JsonPropertyName("nozzle")]
-        public double Nozzle { get; set; }
+        public string? Nozzle { get; set; }
 
         [JsonPropertyName("nozzleTarget")]
-        public double NozzleTarget { get; set; }
+        public string? NozzleTarget { get; set; }
 
         [JsonPropertyName("bed")]
-        public double Bed { get; set; }
+        public string? Bed { get; set; }
 
         [JsonPropertyName("bedTarget")]
-        public double BedTarget { get; set; }
+        public string? BedTarget { get; set; }
 
         [JsonPropertyName("state")]
         public string? State { get; set; }
 
         [JsonPropertyName("progress")]
-        public int Progress { get; set; }
+        public string? Progress { get; set; }
 
         [JsonPropertyName("layer")]
-        public int? Layer { get; set; }
+        public string? Layer { get; set; }
 
         [JsonPropertyName("layerMax")]
-        public int? LayerMax { get; set; }
+        public string? LayerMax { get; set; }
 
         [JsonPropertyName("time")]
-        public System.DateTime Time { get; set; }
+        public string? Time { get; set; }
 
         [JsonPropertyName("filename")]
         public string? Filename { get; set; }
 
         [JsonPropertyName("speed")]
-        public double? Speed { get; set; }
+        public string? Speed { get; set; }
 
         [JsonPropertyName("speedFactor")]
-        public double? SpeedFactor { get; set; }
+        public string? SpeedFactor { get; set; }
 
         [JsonPropertyName("flow")]
-        public double? Flow { get; set; }
+        public string? Flow { get; set; }
 
         [JsonPropertyName("filament")]
-        public double? Filament { get; set; }
+        public string? Filament { get; set; }
 
         [JsonPropertyName("filamentType")]
         public string? FilamentType { get; set; }
@@ -129,10 +152,10 @@ namespace PrintStreamer.Endpoints.Stream
         public string? FilamentName { get; set; }
 
         [JsonPropertyName("filamentUsedMm")]
-        public double? FilamentUsedMm { get; set; }
+        public string? FilamentUsedMm { get; set; }
 
         [JsonPropertyName("filamentTotalMm")]
-        public double? FilamentTotalMm { get; set; }
+        public string? FilamentTotalMm { get; set; }
 
         [JsonPropertyName("slicer")]
         public string? Slicer { get; set; }

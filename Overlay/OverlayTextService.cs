@@ -114,37 +114,11 @@ public sealed class OverlayTextService : IDisposable
     }
 
     /// <summary>
-    /// Gets the current overlay data as a serializable object for JSON responses
+    /// Gets the current overlay data as a strongly-typed snapshot for JSON responses
     /// </summary>
-    public async Task<dynamic> GetOverlayDataAsync(CancellationToken ct)
+    public async Task<OverlayData> GetOverlayDataAsync(CancellationToken ct)
     {
-        var data = await QueryAsync(ct);
-        return new
-        {
-            data.Nozzle,
-            data.NozzleTarget,
-            data.Bed,
-            data.BedTarget,
-            data.State,
-            data.Progress,
-            data.Layer,
-            data.LayerMax,
-            data.Time,
-            data.Filename,
-            data.Speed,
-            data.SpeedFactor,
-            data.Flow,
-            data.Filament,
-            data.FilamentType,
-            data.FilamentBrand,
-            data.FilamentColor,
-            data.FilamentName,
-            data.FilamentUsedMm,
-            data.FilamentTotalMm,
-            data.Slicer,
-            data.ETA,
-            data.AudioName
-        };
+        return await QueryAsync(ct);
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -380,13 +354,17 @@ public sealed class OverlayTextService : IDisposable
         }
 
         string? etaString = null;
-        if (isActiveJob && progress01 > 0.01 && !double.IsNaN(printDuration) && printDuration > 0)
+        if (isActiveJob && progress01 > 0 && !double.IsNaN(printDuration) && printDuration > 0)
         {
-            var estimatedTotal = printDuration / progress01;
+            var progressForEta = Math.Max(progress01, 0.0001); // avoid divide-by-zero when progress is tiny
+            var estimatedTotal = printDuration / progressForEta;
             var remaining = estimatedTotal - printDuration;
-            var etaUtc = DateTime.UtcNow.AddSeconds(remaining);
-            var etaLocal = TimeZoneInfo.ConvertTime(etaUtc, TimeZoneInfo.Utc, _displayTimeZone);
-            etaString = etaLocal.ToString("h:mm tt"); // "2:30 PM" or "11:45 AM"
+            if (remaining > 0)
+            {
+                var etaUtc = DateTime.UtcNow.AddSeconds(remaining);
+                var etaLocal = TimeZoneInfo.ConvertTime(etaUtc, TimeZoneInfo.Utc, _displayTimeZone);
+                etaString = etaLocal.ToString("h:mm tt"); // "2:30 PM" or "11:45 AM"
+            }
         }
 
         string? providerSlicer = null;
@@ -665,7 +643,7 @@ public sealed class OverlayTextService : IDisposable
         _http.Dispose();
     }
 
-    private sealed class OverlayData
+    public sealed class OverlayData
     {
         public double Nozzle { get; init; }
         public double NozzleTarget { get; init; }

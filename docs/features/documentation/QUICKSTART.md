@@ -1,5 +1,7 @@
 # Quick Start Guide
 
+> Note: PrintStreamer has shifted its focus from "streaming-first" to being a reliable source provider for OBS and other ingest tools. If you use OBS, consider using the `/stream/obs-urlsource/overlay` endpoint as a source for overlay text and structured values — see [OBS URLSource Overlay docs](../../OBS_URLSOURCE_OVERLAY.md). Streaming (YouTube) remains supported but PrintStreamer now prioritizes feeding sources to OBS and similar tools.
+
 ## 🚀 Get Streaming in 5 Minutes
 
 ### Step 1: Prerequisites (1 minute)
