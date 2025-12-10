@@ -138,17 +138,57 @@ Set an appropriate update interval in the plugin settings (e.g., 1000ms for 1-se
 
 ## Example HTML Template in OBS URLSource
 
-For more advanced formatting, you can use the plugin's HTML rendering capabilities:
+For more advanced formatting, you can use the plugin's HTML rendering capabilities. Below is a production-tested example with a clean table layout.
+
+### Complete Example: Table with Labels and Values
+
+**HTML Template** (paste into the "Output Template" section):
 
 ```html
-<div style="font-family: Arial; color: white; background-color: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px;">
-  <div><b>Printer Status</b></div>
-  <div>State: {{output1}}</div>
-  <div>Progress: {{output2}}%</div>
-  <div>Nozzle: {{output3}}°C / {{output4}}°C</div>
-  <div>Bed: {{output5}}°C / {{output6}}°C</div>
-</div>
+<table>
+  <tr>
+    <td style="padding:0 8px;text-align:right;">Nozzle:</td>
+    <td style="padding:0 8px;">{{body.nozzle}}/{{body.nozzleTarget}}°C</td>
+    <td style="padding:0 8px;text-align:right;">Bed:</td>
+    <td style="padding:0 8px;">{{body.bed}}/{{body.bedTarget}}°C</td>
+    <td style="padding:0 8px;text-align:right;">ETA:</td>
+    <td style="padding:0 8px;">{{body.eta}} ({{body.progress}}%)</td>
+  </tr>
+
+  <tr>
+    <td style="padding:0 8px;text-align:right;">Layer:</td>
+    <td style="padding:0 8px;">{{body.layer}}/{{body.layerMax}}</td>
+    <td style="padding:0 8px;text-align:right;">Speed:</td>
+    <td style="padding:0 8px;">{{body.speed}}mm/s</td>
+    <td style="padding:0 8px;text-align:right;">Flow:</td>
+    <td style="padding:0 8px;">{{body.flow}} mm/s³</td>
+  </tr>
+
+  <tr>
+    <td style="padding:0 8px;text-align:right;">Filament:</td>
+    <td style="padding:0 8px;">{{body.filamentBrand}} {{body.filamentColor}}</td>
+    <td style="padding:0 8px;text-align:right;">Used:</td>
+    <td style="padding:0 8px;">{{body.filament}}m</td>
+    <td style="padding:0 8px;">&nbsp;</td>
+    <td style="padding:0 8px;">&nbsp;</td>
+  </tr>
+</table>
 ```
+
+**CSS** (paste into the "CSS" section of the Output Mapping window):
+
+```css
+color: #FFFFFF;
+font-size: 55px;
+font-weight: bold;
+font-family: Arial;
+```
+
+This example provides:
+- Clean label/value column pairs (labels right-aligned, values left-aligned)
+- Three rows of printer information (temperatures, layer/speed/flow, filament details)
+- Server-side pre-rounded values so no additional formatting needed in OBS
+- Minimal padding and whitespace handling to prevent layout bounce
 
 ## Example JSON Extraction with Inja Templates
 
