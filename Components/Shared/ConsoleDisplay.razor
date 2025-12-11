@@ -63,7 +63,11 @@
         // Log computed flexDirection after watch registration for debugging
         try { var computed = await JS.InvokeAsync<string?>("getComputedStylePropertyById", ContainerId, "flexDirection"); try { Logger.LogDebug("ConsoleDisplay.RefreshWatchAsync: computed flexDirection={FlexDir} (flip={Flip})", computed, FlipLayout); } catch { } } catch { }
         try { await JS.InvokeVoidAsync("psUpdateWatch", ContainerId, AutoScroll, FlipLayout); } catch { }
-        try { await JS.InvokeVoidAsync("psForceScroll", ContainerId, FlipLayout ? "top" : "bottom", 120); } catch { }
+        // Only force a scroll when auto-scroll is enabled
+        if (AutoScroll)
+        {
+            try { await JS.InvokeVoidAsync("psForceScroll", ContainerId, FlipLayout ? "top" : "bottom", 120); } catch { }
+        }
     }
 
     protected override async Task OnParametersSetAsync()

@@ -362,9 +362,11 @@ window.psWatchConsole = function(elementId, autoScroll = true, flipLayout = fals
         state.observer = observer;
         window._psWatchers[elementId] = state;
 
-        // Do an initial sync scroll
-        const initialPos = state.flipLayout ? 'top' : 'bottom';
-        window.psScrollToPositionWithRetry(elementId, initialPos, 6, 40);
+        // Do an initial sync scroll only when auto-scroll is enabled
+        if (state.autoScroll) {
+            const initialPos = state.flipLayout ? 'top' : 'bottom';
+            window.psScrollToPositionWithRetry(elementId, initialPos, 6, 40);
+        }
 
         console.debug('[psWatch] watching', { elementId, children: el.children.length, flexDirection: state.flexDirection, flipLayout: state.flipLayout });
     } catch (e) {
