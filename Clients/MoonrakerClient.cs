@@ -136,6 +136,7 @@ public class MoonrakerClient
                             await MergeFilamentFromMetadataAsync(info, baseUri, apiKey, authHeader, cancellationToken);
                         }
 
+                        await TryPopulateTemperaturesAsync(info, http, cancellationToken);
                         return info;
                     }
                 }
@@ -161,6 +162,7 @@ public class MoonrakerClient
                     var p = TryFindDouble(node, new[] { "progress" });
                     if (p.HasValue) info.ProgressPercent = p.Value <= 1.0 ? p.Value * 100.0 : p.Value;
                     // No layers in these endpoints typically
+                    await TryPopulateTemperaturesAsync(info, http, cancellationToken);
                     return info;
                 }
                 catch { }
@@ -168,6 +170,47 @@ public class MoonrakerClient
         }
         catch { }
         return null;
+    }
+
+    /// <summary>
+    /// Best-effort fetch of current tool and bed temperatures from Moonraker.
+    /// Populates the supplied info object when values are present.
+    /// </summary>
+    private async Task TryPopulateTemperaturesAsync(MoonrakerPrintInfo info, HttpClient http, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var resp = await http.GetAsync("/printer/objects/query?extruder&heater_bed", cancellationToken);
+            if (!resp.IsSuccessStatusCode) return;
+
+            var txt = await resp.Content.ReadAsStringAsync(cancellationToken);
+            var root = JsonNode.Parse(txt);
+            var status = root?["result"]?["status"] as JsonObject;
+            if (status == null) return;
+
+            var extruder = status["extruder"] as JsonObject;
+            var heaterBed = status["heater_bed"] as JsonObject;
+
+            var toolActual = TryGetDouble(extruder?["temperature"]);
+            var toolTarget = TryGetDouble(extruder?["target"]);
+            if (toolActual.HasValue || toolTarget.HasValue)
+            {
+                info.Tool0Temp = new MoonrakerPrintInfo.ToolTemp
+                {
+                    Actual = toolActual,
+                    Target = toolTarget
+                };
+            }
+
+            var bedActual = TryGetDouble(heaterBed?["temperature"]);
+            var bedTarget = TryGetDouble(heaterBed?["target"]);
+            if (bedActual.HasValue) info.BedTempActual = bedActual;
+            if (bedTarget.HasValue) info.BedTempTarget = bedTarget;
+        }
+        catch
+        {
+            _logger.LogDebug("[Moonraker] Temperature fetch failed (objects.query)");
+        }
     }
 
     /// <summary>
