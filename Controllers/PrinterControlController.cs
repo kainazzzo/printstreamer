@@ -29,6 +29,36 @@ namespace PrintStreamer.Controllers
             _moonrakerClient = moonrakerClient;
         }
 
+        // Helper to resolve macro/command names from configuration with a sensible default.
+        private string ResolveMacro(string key, string defaultCommand) =>
+            _config.GetValue<string>($"Macros:{key}") ?? defaultCommand;
+
+        // Helper to execute a macro/command through the console service and wrap the response.
+        private async Task<IActionResult> RunMacroAsync(string macroKey, string defaultCommand, string actionLabel)
+        {
+            try
+            {
+                var cmd = ResolveMacro(macroKey, defaultCommand);
+                if (string.IsNullOrWhiteSpace(cmd))
+                {
+                    return BadRequest(new { success = false, error = $"Macro not configured: {macroKey}" });
+                }
+
+                var result = await _console.SendCommandAsync(cmd);
+                if (result.Ok)
+                {
+                    return Ok(new { success = true, message = $"{actionLabel} command sent", command = cmd });
+                }
+
+                return BadRequest(new { success = false, error = result.Message ?? $"Failed to {actionLabel.ToLowerInvariant()}" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error running macro {MacroKey}", macroKey);
+                return StatusCode(500, new { success = false, error = ex.Message });
+            }
+        }
+
         /// <summary>
         /// Get current printer temperature constraints and configuration
         /// </summary>
@@ -194,6 +224,44 @@ namespace PrintStreamer.Controllers
                 _logger.LogError(ex, "Error applying preset");
                 return StatusCode(500, new { error = ex.Message });
             }
+        }
+
+        /// <summary>
+        /// Resume the current print (uses configured macro, defaults to RESUME)
+        /// </summary>
+        [HttpPost("macro/resume")]
+        public async Task<IActionResult> ResumePrint()
+        {
+            // Default to Klipper RESUME; users can override via Macros:ResumePrint or set to M24 for Marlin.
+            return await RunMacroAsync("ResumePrint", "RESUME", "Resume");
+        }
+
+        /// <summary>
+        /// Load filament (uses configured macro, defaults to LOAD_FILAMENT)
+        /// </summary>
+        [HttpPost("macro/load-filament")]
+        public async Task<IActionResult> LoadFilament()
+        {
+            return await RunMacroAsync("LoadFilament", "LOAD_FILAMENT", "Load filament");
+        }
+
+        /// <summary>
+        /// Unload filament (uses configured macro, defaults to UNLOAD_FILAMENT)
+        /// </summary>
+        [HttpPost("macro/unload-filament")]
+        public async Task<IActionResult> UnloadFilament()
+        {
+            return await RunMacroAsync("UnloadFilament", "UNLOAD_FILAMENT", "Unload filament");
+        }
+
+        /// <summary>
+        /// Purge nozzle (uses configured macro, defaults to PURGE)
+        /// </summary>
+        [HttpPost("macro/purge")]
+        public async Task<IActionResult> Purge()
+        {
+            // Default macro name kept generic; users can override to e.g., PURGE_LINE or PRIME_LINE.
+            return await RunMacroAsync("Purge", "PURGE", "Purge");
         }
 
         /// <summary>
@@ -401,9 +469,10 @@ namespace PrintStreamer.Controllers
                 var isPrinting = current?.IsActivelyPrinting ?? false;
                 var inProgress = current?.IsActivelyPrintingInProgress ?? false;
                 var isError = string.Equals(current?.State, "error", StringComparison.OrdinalIgnoreCase);
+                var isPaused = string.Equals(current?.State, "paused", StringComparison.OrdinalIgnoreCase);
                 var lastCompleted = MoonrakerPoller.LastCompletedFilename;
                 var currentFilename = current?.Filename;
-                return Ok(new { isPrinting, isPrintingInProgress = inProgress, isError, lastCompletedFilename = lastCompleted, currentFilename });
+                return Ok(new { isPrinting, isPrintingInProgress = inProgress, isError, isPaused, lastCompletedFilename = lastCompleted, currentFilename });
             }
             catch (Exception ex)
             {

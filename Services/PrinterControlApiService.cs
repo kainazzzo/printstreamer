@@ -18,6 +18,74 @@ namespace PrintStreamer.Services
         }
 
         /// <summary>
+        /// Resume current print (macro-driven)
+        /// </summary>
+        public async Task<ApiResponse?> ResumePrintAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var response = await _http.PostAsync("/api/printer/macro/resume", null, ct);
+                return await response.Content.ReadFromJsonAsync<ApiResponse>(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending resume macro");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Load filament (macro-driven)
+        /// </summary>
+        public async Task<ApiResponse?> LoadFilamentAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var response = await _http.PostAsync("/api/printer/macro/load-filament", null, ct);
+                return await response.Content.ReadFromJsonAsync<ApiResponse>(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending load filament macro");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Unload filament (macro-driven)
+        /// </summary>
+        public async Task<ApiResponse?> UnloadFilamentAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var response = await _http.PostAsync("/api/printer/macro/unload-filament", null, ct);
+                return await response.Content.ReadFromJsonAsync<ApiResponse>(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending unload filament macro");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Purge nozzle (macro-driven)
+        /// </summary>
+        public async Task<ApiResponse?> PurgeAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var response = await _http.PostAsync("/api/printer/macro/purge", null, ct);
+                return await response.Content.ReadFromJsonAsync<ApiResponse>(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending purge macro");
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Get printer configuration (max temps, rate limits, etc.)
         /// </summary>
         public async Task<PrinterConfigResponse?> GetConfigAsync(CancellationToken ct = default)
@@ -333,5 +401,7 @@ namespace PrintStreamer.Services
         public bool IsPrintingInProgress { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("isError")]
         public bool IsError { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("isPaused")]
+        public bool IsPaused { get; set; }
     }
 }

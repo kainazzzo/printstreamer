@@ -429,6 +429,12 @@
                     <div style="display:flex;gap:6px;flex-direction:column;align-items:stretch;">
                         <button class="cancel-btn" @onclick="ConfirmCancel" title="Cancel current print">🛑 Cancel Print</button>
                         <button class="cancel-btn" @onclick="ReprintLast" disabled="@(!_isErrorState || string.IsNullOrWhiteSpace(_reprintLastFileName) || _isReprintBusy)" title="Reprint last completed job">🔁 Reprint</button>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                            <button class="preset-btn" @onclick="ResumePrint" disabled="@(!_isPaused)">▶️ Resume</button>
+                            <button class="preset-btn" @onclick="LoadFilament">⬆️ Load</button>
+                            <button class="preset-btn" @onclick="UnloadFilament">⬇️ Unload</button>
+                            <button class="preset-btn" @onclick="Purge">🧵 Purge</button>
+                        </div>
                         @if (!string.IsNullOrWhiteSpace(_reprintLastFileName))
                         {
                             <div style="font-size:12px;color:#ccc;margin-top:6px;">Last/Current: @_reprintLastFileName</div>
@@ -481,6 +487,7 @@
     private bool _isPrinting = false;
     private bool _isPrintingInProgress = false;
     private bool _isErrorState = false;
+    private bool _isPaused = false;
     private bool _isReprintBusy = false;
     // removed _consoleContainer ElementReference - ConsoleDisplay manages container by id
     private ElementReference _gcodeInputRef;
@@ -570,6 +577,7 @@
                             _isPrinting = info.IsPrinting;
                             _isPrintingInProgress = info.IsPrintingInProgress;
                             _isErrorState = info.IsError;
+                            _isPaused = info.IsPaused;
                         }
                     }
                 }
@@ -625,6 +633,7 @@
                         _isPrinting = info.IsPrinting;
                         _isPrintingInProgress = info.IsPrintingInProgress;
                         _isErrorState = info.IsError;
+                        _isPaused = info.IsPaused;
                         await InvokeAsync(StateHasChanged);
                     }
                 }
@@ -844,6 +853,26 @@
         }
     }
 
+    private async Task ResumePrint()
+    {
+        await ExecuteMacroAsync(() => PrinterApi.ResumePrintAsync(), "Resume");
+    }
+
+    private async Task LoadFilament()
+    {
+        await ExecuteMacroAsync(() => PrinterApi.LoadFilamentAsync(), "Load filament");
+    }
+
+    private async Task UnloadFilament()
+    {
+        await ExecuteMacroAsync(() => PrinterApi.UnloadFilamentAsync(), "Unload filament");
+    }
+
+    private async Task Purge()
+    {
+        await ExecuteMacroAsync(() => PrinterApi.PurgeAsync(), "Purge");
+    }
+
     private async Task ReprintLast()
     {
         if (string.IsNullOrWhiteSpace(_reprintLastFileName))
@@ -953,6 +982,32 @@
             await JS.InvokeVoidAsync("showToast", message, type);
         }
         catch { }
+    }
+
+    private async Task ExecuteMacroAsync(Func<Task<ApiResponse?>> macroCall, string actionLabel)
+    {
+        if (PrinterApi == null)
+        {
+            await ShowToastAsync($"{actionLabel} unavailable (API not ready)", "error");
+            return;
+        }
+
+        try
+        {
+            var res = await macroCall();
+            if (res?.Success ?? false)
+            {
+                await ShowToastAsync($"{actionLabel} command sent", "success");
+            }
+            else
+            {
+                await ShowToastAsync(res?.Error ?? res?.Message ?? $"Failed to {actionLabel.ToLowerInvariant()}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "error");
+        }
     }
 
     async ValueTask IAsyncDisposable.DisposeAsync()
